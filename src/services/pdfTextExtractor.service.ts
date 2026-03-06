@@ -1,4 +1,4 @@
-﻿import { pdf } from "pdf-parse";
+import { PDFParse } from "pdf-parse";
 
 export class PdfTextExtractorService {
   async extractTextFromPdf(buffer: Buffer): Promise<string> {
@@ -16,8 +16,14 @@ export class PdfTextExtractorService {
   }
 
   private async extractTextDirectly(buffer: Buffer): Promise<string> {
-    const parsed = await pdf(buffer);
-    return this.cleanText(parsed.text ?? "");
+    const parser = new PDFParse({ data: buffer });
+
+    try {
+      const parsed = await parser.getText();
+      return this.cleanText(parsed.text ?? "");
+    } finally {
+      await parser.destroy();
+    }
   }
 
   private cleanText(text: string): string {
