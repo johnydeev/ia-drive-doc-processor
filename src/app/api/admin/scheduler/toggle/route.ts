@@ -15,11 +15,11 @@ export async function POST(request: Request) {
     return auth.error;
   }
 
-  if (auth.session.role === "ADMIN") {
+  if (auth.session.role !== "CLIENT") {
     return NextResponse.json(
       {
         ok: false,
-        error: "Admin cannot change scheduler state",
+        error: "Only CLIENT role can change scheduler state",
       },
       { status: 403 }
     );

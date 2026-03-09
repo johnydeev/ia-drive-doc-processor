@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import styles from "./page.module.css";
 import { SchedulerRuntimeState } from "@/types/scheduler.types";
 
-type AuthRole = "ADMIN" | "CLIENT";
+type AuthRole = "ADMIN" | "CLIENT" | "VIEWER";
 type ThemeMode = "dark" | "light";
 const THEME_STORAGE_KEY = "dpp_admin_theme";
 
@@ -133,6 +133,8 @@ export default function AdminPage() {
   const [createForm, setCreateForm] = useState<CreateClientForm>(INITIAL_CREATE_CLIENT_FORM);
   const [isCreateClientOpen, setIsCreateClientOpen] = useState(false);
   const [theme, setTheme] = useState<ThemeMode>("dark");
+  const isAdmin = authRole === "ADMIN";
+  const canControlScheduler = authRole === "CLIENT";
 
   useEffect(() => {
     try {
@@ -222,7 +224,7 @@ export default function AdminPage() {
   }, [fetchStatus]);
 
   useEffect(() => {
-    if (authRole !== "ADMIN") {
+    if (!isAdmin) {
       setClientMetrics([]);
       setMetricsError(null);
       return;
@@ -234,10 +236,10 @@ export default function AdminPage() {
     }, 30000);
 
     return () => clearInterval(metricsTimer);
-  }, [authRole, fetchClientMetrics]);
+  }, [isAdmin, fetchClientMetrics]);
 
   const handleToggle = async () => {
-    if (!state || authRole === "ADMIN") {
+    if (!state || !canControlScheduler) {
       return;
     }
 
@@ -273,7 +275,7 @@ export default function AdminPage() {
   };
 
   const handleRunNow = async () => {
-    if (authRole === "ADMIN") {
+    if (!canControlScheduler) {
       return;
     }
 
@@ -331,7 +333,7 @@ export default function AdminPage() {
       setCreateForm(INITIAL_CREATE_CLIENT_FORM);
       setInfo(`Cliente creado correctamente (ID: ${data.client.id}).`);
       await fetchStatus();
-      if (authRole === "ADMIN") {
+      if (isAdmin) {
         await fetchClientMetrics();
       }
     } catch (err) {
@@ -374,7 +376,7 @@ export default function AdminPage() {
           </div>
 
           <div className={styles.actions}>
-            {authRole !== "ADMIN" && (
+            {canControlScheduler && (
               <>
                 <button
                   type="button"
@@ -431,7 +433,7 @@ export default function AdminPage() {
           </p>
         </section>
 
-        {authRole === "ADMIN" && (
+        {isAdmin && (
           <section className={styles.auditBlock}>
             <h2>Metricas por cliente</h2>
             <div className={styles.auditBody}>
@@ -524,7 +526,7 @@ export default function AdminPage() {
           </section>
         )}
 
-        {authRole === "ADMIN" && (
+        {isAdmin && (
           <section className={styles.tokenBox}>
             <button
               type="button"
@@ -662,7 +664,7 @@ export default function AdminPage() {
         {info && <p className={styles.info}>{info}</p>}
 
         <section className={styles.cards}>
-          <article className={`${styles.card} ${authRole === "ADMIN" ? styles.cardFull : ""}`}>
+          <article className={`${styles.card} ${isAdmin ? styles.cardFull : ""}`}>
             <h2>Estado actual</h2>
             <ul>
               <li>
@@ -708,7 +710,7 @@ export default function AdminPage() {
             </ul>
           </article>
 
-          {authRole !== "ADMIN" && (
+          {!isAdmin && (
             <article className={styles.card}>
               <h2>Totales acumulados</h2>
               <ul>
@@ -731,7 +733,7 @@ export default function AdminPage() {
             </article>
           )}
 
-          {authRole !== "ADMIN" && (
+          {!isAdmin && (
             <article className={styles.card}>
               <h2>Tokens usados</h2>
               <ul>
@@ -754,7 +756,7 @@ export default function AdminPage() {
             </article>
           )}
 
-          {authRole !== "ADMIN" && (
+          {!isAdmin && (
             <article className={styles.card}>
               <h2>Cuota estimada</h2>
               <ul>

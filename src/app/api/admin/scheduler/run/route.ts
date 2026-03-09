@@ -8,11 +8,11 @@ export async function POST(request: Request) {
     return auth.error;
   }
 
-  if (auth.session.role === "ADMIN") {
+  if (auth.session.role !== "CLIENT") {
     return NextResponse.json(
       {
         ok: false,
-        error: "Admin cannot execute scheduler runs",
+        error: "Only CLIENT role can execute scheduler runs",
       },
       { status: 403 }
     );

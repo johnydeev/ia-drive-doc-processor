@@ -54,7 +54,7 @@ export function verifySessionToken(token: string, secret: string): AuthSessionPa
       return null;
     }
 
-    if (payload.role !== "ADMIN" && payload.role !== "CLIENT") {
+    if (payload.role !== "ADMIN" && payload.role !== "CLIENT" && payload.role !== "VIEWER") {
       return null;
     }
 
