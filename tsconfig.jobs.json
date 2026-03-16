@@ -1,0 +1,25 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "module": "commonjs",
+    "moduleResolution": "node",
+    "outDir": "dist",
+    "rootDir": "src",
+    "target": "ES2019",
+    "lib": ["es2020"],
+    "sourceMap": false,
+    "declaration": false,
+    "isolatedModules": false
+  },
+  "include": [
+    "src/jobs/**/*.ts",
+    "src/services/**/*.ts",
+    "src/lib/**/*.ts",
+    "src/config/**/*.ts",
+    "src/types/**/*.ts",
+    "src/repositories/**/*.ts",
+    "src/utils/**/*.ts"
+  ],
+  "exclude": ["node_modules"]
+}

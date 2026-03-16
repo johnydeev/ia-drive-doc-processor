@@ -16,7 +16,7 @@ RUN apt-get update && \
 ENV SKIP_ENV_VALIDATION=1
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
-RUN npx prisma generate && npm run build
+RUN npx prisma generate && npm run build && npx tsc -p tsconfig.jobs.json
 
 # Runtime stage
 FROM node:20-bookworm-slim AS runner
@@ -38,10 +38,11 @@ COPY --from=builder /app/.next ./.next
 COPY --from=builder /app/public ./public
 COPY --from=builder /app/src ./src
 COPY --from=builder /app/prisma ./prisma
+COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/package*.json ./
 COPY --from=builder /app/tsconfig.json ./tsconfig.json
 COPY --from=builder /app/next.config.ts ./next.config.ts
 
 EXPOSE 3000
 
-CMD ["sh", "-c", "npm run prisma:migrate:deploy && (npm run schedule &) && npm run start"]
+CMD ["npm","run","start"]

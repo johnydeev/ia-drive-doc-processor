@@ -5,8 +5,13 @@ import { SchedulerControlService } from "@/services/schedulerControl.service";
 import { ProcessingPersistenceService } from "@/services/processingPersistence.service";
 import { ProcessJobSummary } from "@/types/process.types";
 import { SchedulerTrigger } from "@/types/scheduler.types";
-import { ClientGoogleConfig, ProcessingClient } from "@/types/client.types";
-import { SheetsRowMapping } from "@/services/googleSheets.service";
+import {
+  resolveAiConfig,
+  resolveGoogleConfig,
+  resolveMapping,
+  resolveSheetName,
+  validateClientProcessingConfig,
+} from "@/lib/clientProcessingConfig";
 
 export interface RunProcessingCycleOptions {
   ignoreEnabled?: boolean;
@@ -185,142 +190,5 @@ function addSummary(target: ProcessJobSummary, incoming: ProcessJobSummary): voi
 
   for (const [model, total] of Object.entries(incoming.tokenUsage.byModel)) {
     target.tokenUsage.byModel[model] = (target.tokenUsage.byModel[model] ?? 0) + total;
-  }
-}
-
-function resolveSheetName(client: ProcessingClient): string {
-  const fromConfig = client.extractionConfigJson?.sheetName;
-  if (typeof fromConfig === "string" && fromConfig.trim().length > 0) {
-    return fromConfig.trim();
-  }
-
-  return env.GOOGLE_SHEETS_SHEET_NAME;
-}
-
-function resolveMapping(client: ProcessingClient): SheetsRowMapping | undefined {
-  const raw = client.extractionConfigJson?.columnMapping;
-  if (!raw || typeof raw !== "object") {
-    return undefined;
-  }
-
-  const requiredKeys: Array<keyof SheetsRowMapping> = [
-    "boletaNumber",
-    "provider",
-    "consortium",
-    "providerTaxId",
-    "detail",
-    "observation",
-    "dueDate",
-    "amount",
-    "alias",
-    "sourceFileUrl",
-    "isDuplicate",
-  ];
-
-  const parsed = raw as Record<string, unknown>;
-  for (const key of requiredKeys) {
-    if (typeof parsed[key] !== "string" || parsed[key].trim().length === 0) {
-      return undefined;
-    }
-  }
-
-  return parsed as unknown as SheetsRowMapping;
-}
-
-function resolveGoogleConfig(client: ProcessingClient): ClientGoogleConfig | null {
-  const raw = client.googleConfigJson;
-  if (!raw || typeof raw !== "object") {
-    return null;
-  }
-
-  const projectId = asRequiredString(raw.projectId);
-  const clientEmail = asRequiredString(raw.clientEmail);
-  const privateKey = asRequiredString(raw.privateKey);
-  const sheetsId = asRequiredString(raw.sheetsId);
-
-  if (!projectId || !clientEmail || !privateKey || !sheetsId) {
-    return null;
-  }
-
-  return {
-    projectId,
-    clientEmail,
-    privateKey,
-    sheetsId,
-  };
-}
-
-function resolveAiConfig(client: ProcessingClient): {
-  geminiApiKey?: string;
-  geminiModel?: string;
-  openaiApiKey?: string;
-  openaiModel?: string;
-} | null {
-  const raw = client.extractionConfigJson;
-  if (!raw || typeof raw !== "object") {
-    return null;
-  }
-
-  const geminiApiKey = asOptionalString(raw.geminiApiKey);
-  const geminiModel = asOptionalString(raw.geminiModel);
-  const openaiApiKey = asOptionalString(raw.openaiApiKey);
-  const openaiModel = asOptionalString(raw.openaiModel);
-
-  if (!geminiApiKey && !openaiApiKey && !geminiModel && !openaiModel) {
-    return null;
-  }
-
-  return {
-    geminiApiKey,
-    geminiModel,
-    openaiApiKey,
-    openaiModel,
-  };
-}
-
-function asRequiredString(value: unknown): string | null {
-  if (typeof value !== "string") {
-    return null;
-  }
-
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : null;
-}
-
-function asOptionalString(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
-}
-
-function validateClientProcessingConfig(
-  client: ProcessingClient,
-  sheetName: string,
-  googleConfig: ClientGoogleConfig | null
-): void {
-  const pendingFolderId = client.driveFolderPending.trim();
-  const scannedFolderId = client.driveFolderProcessed.trim();
-
-  if (!pendingFolderId) {
-    throw new Error("Missing required client config: driveFolderPending");
-  }
-
-  if (!scannedFolderId) {
-    throw new Error("Missing required client config: driveFolderProcessed");
-  }
-
-  if (pendingFolderId === scannedFolderId) {
-    throw new Error("Invalid client config: pending and scanned folders must be different");
-  }
-
-  if (!sheetName.trim()) {
-    throw new Error("Missing required client config: sheetName");
-  }
-
-  if (!googleConfig) {
-    throw new Error("Missing required client config: google credentials (projectId/clientEmail/privateKey/sheetsId)");
   }
 }

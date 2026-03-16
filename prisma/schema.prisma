@@ -16,6 +16,13 @@ enum ClientRole {
   VIEWER
 }
 
+enum JobStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
 model Client {
   id                   String           @id @default(cuid())
   name                 String
@@ -31,11 +38,35 @@ model Client {
   updatedAt            DateTime         @updatedAt
   invoices             Invoice[]
   processingLogs       ProcessingLog[]
+  processingJobs       ProcessingJob[]
   schedulerStates      SchedulerState[]
   tokenUsages          TokenUsage[]
 
   @@index([isActive])
   @@index([role, isActive])
+}
+
+model ProcessingJob {
+  id            String    @id @default(cuid())
+  clientId      String
+  driveFileId   String
+  driveFileName String?
+
+  status        JobStatus @default(PENDING)
+
+  attempts      Int       @default(0)
+  maxAttempts   Int       @default(3)
+
+  errorMessage  String?
+
+  createdAt     DateTime  @default(now())
+  startedAt     DateTime?
+  finishedAt    DateTime?
+
+  client        Client    @relation(fields: [clientId], references: [id])
+
+  @@index([clientId])
+  @@index([status])
 }
 
 model Invoice {

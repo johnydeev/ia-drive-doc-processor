@@ -4,7 +4,9 @@ Backend multi-tenant en `Next.js + TypeScript` para procesar comprobantes PDF de
 
 ## Estado actual del sistema
 - Multi-tenant por cliente (`Client`) con roles `ADMIN`, `CLIENT`, `VIEWER`.
-- Scheduler automatico por cliente (solo `CLIENT` activos), con control `ON/OFF` por cliente desde el dashboard.
+- Scheduler automatico por cliente (solo `CLIENT` activos) que encola trabajos en `ProcessingJob`.
+- Workers procesan la cola de trabajos y ejecutan el pipeline de PDFs.
+- Control `ON/OFF` por cliente desde el dashboard.
 - Dashboard admin con:
   - alta de clientes (rol `CLIENT`),
   - metricas por cliente,
@@ -19,25 +21,28 @@ Backend multi-tenant en `Next.js + TypeScript` para procesar comprobantes PDF de
 - Deteccion de duplicados por hash y clave de negocio.
 
 ## Flujo de procesamiento (por cliente)
-1. Lista PDFs en carpeta `Pendientes` de Google Drive.
-2. Descarga PDF.
-3. Extrae texto:
+1. Scheduler escanea la carpeta `Pendientes` y crea `ProcessingJob` por PDF.
+2. Worker toma un job pendiente.
+3. Descarga PDF.
+4. Extrae texto:
   - texto embebido directo (pdf-parse),
   - fallback OCR con `tesseract.js` + `pdfjs-dist` si no hay texto.
-4. Extrae JSON estructurado con IA:
+5. Extrae JSON estructurado con IA:
   - intenta Gemini (config cliente o global),
   - luego OpenAI (config cliente o global),
   - si fallan ambos => `OCR_ONLY`.
-5. Detecta duplicado:
+6. Detecta duplicado:
   - por `documentHash` (sha256),
   - por clave de negocio normalizada.
-6. Inserta fila en Google Sheets.
-7. Mueve archivo a carpeta `Escaneados`.
-8. Registra logs, totales y tokens en DB.
+7. Inserta fila en Google Sheets.
+8. Mueve archivo a carpeta `Escaneados`.
+9. Registra logs, totales y tokens en DB.
 
 ## Arquitectura resumida
 - API/UI: Next.js App Router (`src/app`).
-- Worker scheduler: proceso separado (`src/jobs/scheduler.ts`).
+- Scheduler (job creator): proceso separado (`src/jobs/scheduler.ts`) que encola en `ProcessingJob`.
+- Worker (job processor): proceso separado (`src/jobs/jobWorkerMain.ts`) que consume la cola.
+- Flujo: Drive scan -> `ProcessingJob` queue -> Workers -> pipeline de procesamiento.
 - Persistencia: Prisma + PostgreSQL (`prisma/schema.prisma`).
 - Servicios:
   - Drive: `src/services/googleDrive.service.ts`
@@ -50,6 +55,7 @@ Backend multi-tenant en `Next.js + TypeScript` para procesar comprobantes PDF de
 ## Modelos principales (Prisma)
 - `Client`: usuario/tenant con config de Drive/Sheets e IA.
 - `Invoice`: factura procesada + metadatos + deduplicacion.
+- `ProcessingJob`: cola persistente de procesamiento.
 - `ProcessingLog`: historial de ejecuciones.
 - `SchedulerState`: estado runtime y acumulados por cliente.
 - `TokenUsage`: consumo de tokens por corrida/proveedor/modelo.
@@ -76,6 +82,7 @@ Estas son opcionales porque el modo recomendado es usar credenciales por cliente
 - `GEMINI_MODEL`
 - `OPENAI_API_KEY`
 - `OPENAI_MODEL`
+- `GOOGLE_CREDENTIALS_ENCRYPTION_KEY` (si no esta, se usa `SESSION_SECRET` para cifrar)
 
 ## Configuracion local
 1. Instalar dependencias:
@@ -97,16 +104,21 @@ npm run prisma:migrate:deploy
 ```
 
 ## Ejecutar en desarrollo
-Necesitas 2 procesos:
+Necesitas 3 procesos:
 
 1. Web/API:
 ```bash
 npm run dev
 ```
 
-2. Scheduler:
+2. Scheduler (crea jobs):
 ```bash
 npm run schedule
+```
+
+3. Worker (procesa jobs):
+```bash
+npm run worker
 ```
 
 Si solo ejecutas `npm run dev`, no hay procesamiento automatico.
@@ -184,8 +196,8 @@ Si falta algo, se registra error explicito por cliente en la corrida.
 
 ### Compose recomendado prod
 - `docker-compose.prod.yml`:
-  - `web` (Next/API)
-  - `worker` (scheduler)
+  - `web` (Next/API + scheduler)
+  - `worker` (job worker)
 
 Levantar:
 ```bash
@@ -213,6 +225,7 @@ docker compose -f docker-compose.prod.yml logs -f worker
 ### Scheduler y worker
 - Levantar `web` y `worker` (no solo `web`).
 - Verificar en logs que aparezca: `[scheduler] starting. Interval: ...`.
+- Verificar en logs del worker: `[job-worker] starting`.
 - Confirmar que cada cliente con rol `CLIENT` puede activar/desactivar su scheduler.
 
 ### Integraciones por cliente
@@ -241,9 +254,13 @@ docker compose -f docker-compose.prod.yml logs -f worker
 - Revisar logs del server para identificar variable/config faltante.
 
 ### Scheduler no corre automatico
-- Verificar que `npm run schedule` este activo (o servicio `worker` en Docker).
+- Verificar que `npm run schedule` este activo (o proceso scheduler en `web` en Docker).
 - Verificar `PROCESS_INTERVAL_MINUTES`.
 - Verificar que el cliente tenga scheduler en `ON`.
+
+### Worker no procesa jobs
+- Verificar que el servicio `worker` este activo.
+- Verificar `GOOGLE_CREDENTIALS_ENCRYPTION_KEY` en el entorno del worker.
 
 ---
 Si agregamos funcionalidades nuevas, este README debe actualizarse en la misma PR para mantener trazabilidad del producto.

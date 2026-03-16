@@ -5,6 +5,8 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
+    "prebuild:check": "prisma generate && tsc -p tsconfig.json --noEmit && prisma validate",
+    "worker": "tsx src/jobs/jobWorkerMain.ts",
     "start": "next start",
     "schedule": "tsx src/jobs/scheduler.ts",
     "diagnose": "tsx src/jobs/diagnose-drive.ts",

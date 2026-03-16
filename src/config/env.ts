@@ -13,6 +13,7 @@ export interface EnvConfig {
   GEMINI_MODEL?: string;
   SESSION_SECRET: string;
   DATABASE_URL: string;
+  GOOGLE_CREDENTIALS_ENCRYPTION_KEY?: string;
 }
 
 const shouldSkipEnvValidation = process.env.SKIP_ENV_VALIDATION === "1";
@@ -53,4 +54,5 @@ export const env: EnvConfig = {
   GEMINI_MODEL: optionalEnv("GEMINI_MODEL"),
   SESSION_SECRET: requireEnv("SESSION_SECRET"),
   DATABASE_URL: requireEnv("DATABASE_URL"),
+  GOOGLE_CREDENTIALS_ENCRYPTION_KEY: optionalEnv("GOOGLE_CREDENTIALS_ENCRYPTION_KEY"),
 };

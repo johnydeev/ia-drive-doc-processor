@@ -28,6 +28,31 @@ export interface ProcessJobConfig {
   } | null;
 }
 
+export interface ProcessDriveFileInput {
+  id: string;
+  name: string;
+  webViewLink?: string | null;
+}
+
+type GeminiModule = typeof import("@/services/geminiExtractor.service");
+type OpenAiModule = typeof import("@/services/aiExtractor.service");
+
+type ProcessingContext = {
+  resolvedConfig: ProcessJobConfig;
+  resolvedMapping: SheetsRowMapping;
+  driveService: GoogleDriveService;
+  pdfExtractor: PdfTextExtractorService;
+  sheetsService: GoogleSheetsService;
+  invoiceRepository: InvoiceRepository;
+  geminiModule: GeminiModule | null;
+  openAiModule: OpenAiModule | null;
+  geminiApiKey?: string;
+  openaiApiKey?: string;
+  geminiModel?: string;
+  openaiModel?: string;
+  existingDuplicateKeys: Set<string>;
+};
+
 const DEFAULT_MAPPING: SheetsRowMapping = {
   boletaNumber: "A",
   provider: "B",
@@ -41,6 +66,67 @@ const DEFAULT_MAPPING: SheetsRowMapping = {
   sourceFileUrl: "J",
   isDuplicate: "K",
 };
+
+function createBaseSummary(totalFound: number): ProcessJobSummary {
+  return {
+    clientId: "",
+    clientName: "",
+    totalFound,
+    processed: 0,
+    skipped: 0,
+    failed: 0,
+    duplicatesDetected: 0,
+    errors: [],
+    tokenUsage: createEmptyTokenUsageSummary(),
+  };
+}
+
+function buildDriveFileUrl(fileId: string, webViewLink?: string | null): string {
+  return webViewLink?.trim() || `https://drive.google.com/file/d/${fileId}/view`;
+}
+
+async function createProcessingContext(
+  config: ProcessJobConfig,
+  mapping: SheetsRowMapping
+): Promise<ProcessingContext> {
+  const driveService = new GoogleDriveService(config.googleConfig);
+  const pdfExtractor = new PdfTextExtractorService();
+  const sheetsService = new GoogleSheetsService(config.googleConfig);
+  const invoiceRepository = new InvoiceRepository();
+  const geminiApiKey = config.aiConfig?.geminiApiKey?.trim() || env.GEMINI_API_KEY?.trim();
+  const openaiApiKey = config.aiConfig?.openaiApiKey?.trim() || env.OPENAI_API_KEY?.trim();
+  const geminiModel = config.aiConfig?.geminiModel?.trim() || env.GEMINI_MODEL;
+  const openaiModel = config.aiConfig?.openaiModel?.trim() || env.OPENAI_MODEL;
+  const geminiModule = geminiApiKey ? await import("@/services/geminiExtractor.service") : null;
+  const openAiModule = openaiApiKey ? await import("@/services/aiExtractor.service") : null;
+
+  let existingDuplicateKeys = new Set<string>();
+  try {
+    existingDuplicateKeys = await sheetsService.getExistingDuplicateKeys(config.sheetName, mapping);
+  } catch (error) {
+    console.warn(
+      `[job:${config.clientId}] duplicate detection bootstrap failed: ${
+        error instanceof Error ? error.message : "Unknown error"
+      }`
+    );
+  }
+
+  return {
+    resolvedConfig: config,
+    resolvedMapping: mapping,
+    driveService,
+    pdfExtractor,
+    sheetsService,
+    invoiceRepository,
+    geminiModule,
+    openAiModule,
+    geminiApiKey,
+    openaiApiKey,
+    geminiModel,
+    openaiModel,
+    existingDuplicateKeys,
+  };
+}
 
 function toStoredExtraction(
   data: ExtractedDocumentData
@@ -74,6 +160,184 @@ function toExtractedDocumentData(
   };
 }
 
+function buildOcrOnlyPayload(): ExtractedDocumentData {
+  return {
+    boletaNumber: null,
+    provider: null,
+    consortium: null,
+    providerTaxId: null,
+    detail: null,
+    observation: "OCR_ONLY",
+    dueDate: null,
+    amount: null,
+    alias: null,
+  };
+}
+
+async function processDriveFile(
+  file: ProcessDriveFileInput,
+  context: ProcessingContext,
+  summary: ProcessJobSummary
+): Promise<void> {
+  const {
+    resolvedConfig,
+    resolvedMapping,
+    driveService,
+    pdfExtractor,
+    sheetsService,
+    invoiceRepository,
+    geminiModule,
+    openAiModule,
+    geminiApiKey,
+    openaiApiKey,
+    geminiModel,
+    openaiModel,
+    existingDuplicateKeys,
+  } = context;
+
+  const runStep = async <T>(label: string, fn: () => Promise<T>): Promise<T> => {
+    try {
+      return await fn();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unknown error";
+      throw new Error(`${label} failed: ${message}`);
+    }
+  };
+
+  try {
+    console.log(`[job:${resolvedConfig.clientId}] processing fileId=${file.id} name="${file.name}"`);
+    const sourceFileUrl = buildDriveFileUrl(file.id, file.webViewLink);
+    const buffer = await runStep("download", () => driveService.downloadFile(file.id));
+
+    const fileHash = invoiceRepository.computeDocumentHash(buffer);
+    const existingByHash = await runStep("dedup-hash-check", () =>
+      invoiceRepository.findDuplicateByHash(resolvedConfig.clientId, fileHash)
+    );
+    console.log(
+      `[job:${resolvedConfig.clientId}] hash=${fileHash.slice(0, 8)}... duplicateByHash=${Boolean(
+        existingByHash
+      )}`
+    );
+
+    let extracted: ExtractedDocumentData | null = null;
+    let isDuplicate = Boolean(existingByHash);
+
+    if (existingByHash?.extraction) {
+      extracted = toExtractedDocumentData(existingByHash.extraction);
+      const text = await runStep("extract-text", () => pdfExtractor.extractTextFromPdf(buffer));
+      extracted = refineExtractionWithRawText(extracted, text);
+    } else {
+      const text = await runStep("extract-text", () => pdfExtractor.extractTextFromPdf(buffer));
+      const providerErrors: string[] = [];
+
+      if (geminiModule) {
+        try {
+          const extractor = new geminiModule.GeminiExtractorService({
+            apiKey: geminiApiKey,
+            model: geminiModel,
+          });
+          extracted = await runStep("gemini-extract", () => extractor.extractStructuredData(text));
+          accumulateTokenUsage(summary.tokenUsage, extractor.getLastUsage?.());
+        } catch (error) {
+          providerErrors.push(error instanceof Error ? error.message : "Gemini unknown error");
+        }
+      }
+
+      if (!extracted && openAiModule) {
+        try {
+          const extractor = new openAiModule.AiExtractorService({
+            apiKey: openaiApiKey,
+            model: openaiModel,
+          });
+          extracted = await runStep("openai-extract", () => extractor.extractStructuredData(text));
+          accumulateTokenUsage(summary.tokenUsage, extractor.getLastUsage?.());
+        } catch (error) {
+          providerErrors.push(error instanceof Error ? error.message : "OpenAI unknown error");
+        }
+      }
+
+      if (!extracted) {
+        if (providerErrors.length > 0) {
+          console.warn(
+            `[job:${resolvedConfig.clientId}] AI fallback to OCR_ONLY for file ${file.id} (${file.name}): ${providerErrors.join(" | ")}`
+          );
+        }
+
+        extracted = buildOcrOnlyPayload();
+      }
+    }
+
+    if (!isDuplicate) {
+      const duplicateByBusinessKey = await runStep("dedup-business-check", () =>
+        invoiceRepository.findDuplicateByBusinessKey(resolvedConfig.clientId, extracted)
+      );
+
+      isDuplicate = Boolean(duplicateByBusinessKey);
+      console.log(
+        `[job:${resolvedConfig.clientId}] duplicateByBusinessKey=${Boolean(duplicateByBusinessKey)}`
+      );
+    }
+
+    const duplicateKey = invoiceRepository.buildBusinessKeyFromData(extracted);
+    if (!isDuplicate && duplicateKey) {
+      isDuplicate = existingDuplicateKeys.has(duplicateKey);
+    }
+
+    extracted.sourceFileUrl = sourceFileUrl;
+    extracted.isDuplicate = isDuplicate ? "YES" : "NO";
+
+    await runStep("sheets-insert", () =>
+      sheetsService.insertRow(resolvedConfig.sheetName, extracted, resolvedMapping)
+    );
+    await runStep("move-to-scanned", () =>
+      driveService.moveFileToScanned(
+        file.id,
+        resolvedConfig.drivePendingFolderId,
+        resolvedConfig.driveScannedFolderId
+      )
+    );
+    console.log(
+      `[job:${resolvedConfig.clientId}] moved fileId=${file.id} to scannedFolder=${resolvedConfig.driveScannedFolderId}`
+    );
+
+    await runStep("invoice-save", () =>
+      invoiceRepository.saveProcessedInvoice({
+        clientId: resolvedConfig.clientId,
+        documentHash: fileHash,
+        fileId: file.id,
+        sourceFileUrl,
+        extraction: toStoredExtraction(extracted),
+        isDuplicate,
+      })
+    );
+
+    if (duplicateKey) {
+      existingDuplicateKeys.add(duplicateKey);
+    }
+
+    if (isDuplicate) {
+      summary.duplicatesDetected += 1;
+    }
+
+    summary.processed += 1;
+    console.log(
+      `[job:${resolvedConfig.clientId}] done fileId=${file.id} duplicate=${isDuplicate} processed=${summary.processed} failed=${summary.failed}`
+    );
+  } catch (error) {
+    summary.failed += 1;
+    summary.errors.push({
+      fileId: file.id,
+      fileName: file.name,
+      error: error instanceof Error ? error.message : "Unknown error",
+    });
+    console.error(
+      `[job:${resolvedConfig.clientId}] failed fileId=${file.id} name="${file.name}" error=${
+        error instanceof Error ? error.message : "Unknown error"
+      }`
+    );
+  }
+}
+
 function buildLegacyConfig(sheetName: string, mapping?: SheetsRowMapping): ProcessJobConfig {
   return {
     clientId: "default-env-client",
@@ -105,19 +369,9 @@ export async function processPendingDocumentsJob(
 ): Promise<ProcessJobSummary> {
   const resolvedConfig = normalizeConfig(config, mapping);
   const resolvedMapping = resolvedConfig.mapping ?? DEFAULT_MAPPING;
+  const context = await createProcessingContext(resolvedConfig, resolvedMapping);
 
-  const driveService = new GoogleDriveService(resolvedConfig.googleConfig);
-  const pdfExtractor = new PdfTextExtractorService();
-  const sheetsService = new GoogleSheetsService(resolvedConfig.googleConfig);
-  const invoiceRepository = new InvoiceRepository();
-  const geminiApiKey = resolvedConfig.aiConfig?.geminiApiKey?.trim() || env.GEMINI_API_KEY?.trim();
-  const openaiApiKey = resolvedConfig.aiConfig?.openaiApiKey?.trim() || env.OPENAI_API_KEY?.trim();
-  const geminiModel = resolvedConfig.aiConfig?.geminiModel?.trim() || env.GEMINI_MODEL;
-  const openaiModel = resolvedConfig.aiConfig?.openaiModel?.trim() || env.OPENAI_MODEL;
-  const geminiModule = geminiApiKey ? await import("@/services/geminiExtractor.service") : null;
-  const openAiModule = openaiApiKey ? await import("@/services/aiExtractor.service") : null;
-
-  const files = await driveService.listPendingPdfFiles(resolvedConfig.drivePendingFolderId);
+  const files = await context.driveService.listPendingPdfFiles(resolvedConfig.drivePendingFolderId);
   const processedIds = new Set<string>();
 
   if (resolvedConfig.drivePendingFolderId === resolvedConfig.driveScannedFolderId) {
@@ -130,58 +384,14 @@ export async function processPendingDocumentsJob(
     `[job:${resolvedConfig.clientId}] start client="${resolvedConfig.clientName}" sheet="${resolvedConfig.sheetName}" pendingFolder=${resolvedConfig.drivePendingFolderId} scannedFolder=${resolvedConfig.driveScannedFolderId}`
   );
 
-  const summary: ProcessJobSummary = {
-    clientId: resolvedConfig.clientId,
-    clientName: resolvedConfig.clientName,
-    totalFound: files.length,
-    processed: 0,
-    skipped: 0,
-    failed: 0,
-    duplicatesDetected: 0,
-    errors: [],
-    tokenUsage: createEmptyTokenUsageSummary(),
-  };
-
-  const runStep = async <T>(label: string, fn: () => Promise<T>): Promise<T> => {
-    try {
-      return await fn();
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Unknown error";
-      throw new Error(`${label} failed: ${message}`);
-    }
-  };
-
-  const buildOcrOnlyPayload = (): ExtractedDocumentData => ({
-    boletaNumber: null,
-    provider: null,
-    consortium: null,
-    providerTaxId: null,
-    detail: null,
-    observation: "OCR_ONLY",
-    dueDate: null,
-    amount: null,
-    alias: null,
-  });
-
-  const buildDriveFileUrl = (fileId: string, webViewLink?: string | null): string => {
-    return webViewLink?.trim() || `https://drive.google.com/file/d/${fileId}/view`;
-  };
-
-  let existingDuplicateKeys = new Set<string>();
-  try {
-    existingDuplicateKeys = await runStep("duplicates-load", () =>
-      sheetsService.getExistingDuplicateKeys(resolvedConfig.sheetName, resolvedMapping)
-    );
-  } catch (error) {
-    console.warn(
-      `[job:${resolvedConfig.clientId}] duplicate detection bootstrap failed: ${
-        error instanceof Error ? error.message : "Unknown error"
-      }`
-    );
-  }
+  const summary = createBaseSummary(files.length);
+  summary.clientId = resolvedConfig.clientId;
+  summary.clientName = resolvedConfig.clientName;
 
   if (files.length === 0) {
-    const allFiles = await driveService.listAllFilesInPending(resolvedConfig.drivePendingFolderId);
+    const allFiles = await context.driveService.listAllFilesInPending(
+      resolvedConfig.drivePendingFolderId
+    );
     console.log(`[job:${resolvedConfig.clientId}] no PDFs found. Files in folder:`, allFiles);
   }
 
@@ -192,144 +402,34 @@ export async function processPendingDocumentsJob(
     }
 
     processedIds.add(file.id);
-
-    try {
-      console.log(`[job:${resolvedConfig.clientId}] processing fileId=${file.id} name="${file.name}"`);
-      const sourceFileUrl = buildDriveFileUrl(file.id, file.webViewLink);
-      const buffer = await runStep("download", () => driveService.downloadFile(file.id));
-
-      const fileHash = invoiceRepository.computeDocumentHash(buffer);
-      const existingByHash = await runStep("dedup-hash-check", () =>
-        invoiceRepository.findDuplicateByHash(resolvedConfig.clientId, fileHash)
-      );
-      console.log(
-        `[job:${resolvedConfig.clientId}] hash=${fileHash.slice(0, 8)}... duplicateByHash=${Boolean(
-          existingByHash
-        )}`
-      );
-
-      let extracted: ExtractedDocumentData | null = null;
-      let isDuplicate = Boolean(existingByHash);
-
-      if (existingByHash?.extraction) {
-        extracted = toExtractedDocumentData(existingByHash.extraction);
-        const text = await runStep("extract-text", () => pdfExtractor.extractTextFromPdf(buffer));
-        extracted = refineExtractionWithRawText(extracted, text);
-      } else {
-        const text = await runStep("extract-text", () => pdfExtractor.extractTextFromPdf(buffer));
-        const providerErrors: string[] = [];
-
-        if (geminiModule) {
-          try {
-            const extractor = new geminiModule.GeminiExtractorService({
-              apiKey: geminiApiKey,
-              model: geminiModel,
-            });
-            extracted = await runStep("gemini-extract", () => extractor.extractStructuredData(text));
-            accumulateTokenUsage(summary.tokenUsage, extractor.getLastUsage?.());
-          } catch (error) {
-            providerErrors.push(error instanceof Error ? error.message : "Gemini unknown error");
-          }
-        }
-
-        if (!extracted && openAiModule) {
-          try {
-            const extractor = new openAiModule.AiExtractorService({
-              apiKey: openaiApiKey,
-              model: openaiModel,
-            });
-            extracted = await runStep("openai-extract", () => extractor.extractStructuredData(text));
-            accumulateTokenUsage(summary.tokenUsage, extractor.getLastUsage?.());
-          } catch (error) {
-            providerErrors.push(error instanceof Error ? error.message : "OpenAI unknown error");
-          }
-        }
-
-        if (!extracted) {
-          if (providerErrors.length > 0) {
-            console.warn(
-              `[job:${resolvedConfig.clientId}] AI fallback to OCR_ONLY for file ${file.id} (${file.name}): ${providerErrors.join(" | ")}`
-            );
-          }
-
-          extracted = buildOcrOnlyPayload();
-        }
-      }
-
-      if (!isDuplicate) {
-        const duplicateByBusinessKey = await runStep("dedup-business-check", () =>
-          invoiceRepository.findDuplicateByBusinessKey(resolvedConfig.clientId, extracted)
-        );
-
-        isDuplicate = Boolean(duplicateByBusinessKey);
-        console.log(
-          `[job:${resolvedConfig.clientId}] duplicateByBusinessKey=${Boolean(duplicateByBusinessKey)}`
-        );
-      }
-
-      const duplicateKey = invoiceRepository.buildBusinessKeyFromData(extracted);
-      if (!isDuplicate && duplicateKey) {
-        isDuplicate = existingDuplicateKeys.has(duplicateKey);
-      }
-
-      extracted.sourceFileUrl = sourceFileUrl;
-      extracted.isDuplicate = isDuplicate ? "YES" : "NO";
-
-      await runStep("sheets-insert", () =>
-        sheetsService.insertRow(resolvedConfig.sheetName, extracted, resolvedMapping)
-      );
-      await runStep("move-to-scanned", () =>
-        driveService.moveFileToScanned(
-          file.id,
-          resolvedConfig.drivePendingFolderId,
-          resolvedConfig.driveScannedFolderId
-        )
-      );
-      console.log(
-        `[job:${resolvedConfig.clientId}] moved fileId=${file.id} to scannedFolder=${resolvedConfig.driveScannedFolderId}`
-      );
-
-      await runStep("invoice-save", () =>
-        invoiceRepository.saveProcessedInvoice({
-          clientId: resolvedConfig.clientId,
-          documentHash: fileHash,
-          fileId: file.id,
-          sourceFileUrl,
-          extraction: toStoredExtraction(extracted),
-          isDuplicate,
-        })
-      );
-
-      if (duplicateKey) {
-        existingDuplicateKeys.add(duplicateKey);
-      }
-
-      if (isDuplicate) {
-        summary.duplicatesDetected += 1;
-      }
-
-      summary.processed += 1;
-      console.log(
-        `[job:${resolvedConfig.clientId}] done fileId=${file.id} duplicate=${isDuplicate} processed=${summary.processed} failed=${summary.failed}`
-      );
-    } catch (error) {
-      summary.failed += 1;
-      summary.errors.push({
-        fileId: file.id,
-        fileName: file.name,
-        error: error instanceof Error ? error.message : "Unknown error",
-      });
-      console.error(
-        `[job:${resolvedConfig.clientId}] failed fileId=${file.id} name="${file.name}" error=${
-          error instanceof Error ? error.message : "Unknown error"
-        }`
-      );
-    }
+    await processDriveFile(
+      { id: file.id, name: file.name, webViewLink: file.webViewLink },
+      context,
+      summary
+    );
   }
 
   console.log(
     `[job:${resolvedConfig.clientId}] summary totalFound=${summary.totalFound} processed=${summary.processed} failed=${summary.failed} duplicates=${summary.duplicatesDetected}`
   );
+
+  return summary;
+}
+
+export async function processSingleDriveFileJob(
+  config: ProcessJobConfig,
+  file: ProcessDriveFileInput,
+  mapping?: SheetsRowMapping
+): Promise<ProcessJobSummary> {
+  const resolvedConfig = normalizeConfig(config, mapping);
+  const resolvedMapping = resolvedConfig.mapping ?? DEFAULT_MAPPING;
+  const context = await createProcessingContext(resolvedConfig, resolvedMapping);
+
+  const summary = createBaseSummary(1);
+  summary.clientId = resolvedConfig.clientId;
+  summary.clientName = resolvedConfig.clientName;
+
+  await processDriveFile(file, context, summary);
 
   return summary;
 }

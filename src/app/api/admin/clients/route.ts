@@ -6,6 +6,7 @@ import { requireAdminSession } from "@/lib/adminAuth";
 import { hashPassword } from "@/lib/password";
 import { getPrismaClient } from "@/lib/prisma";
 import { parseProcessIntervalMinutes } from "@/jobs/runProcessingCycle";
+import { encrypt } from "@/utils/encryption.util";
 
 const bodySchema = z
   .object({
@@ -89,7 +90,7 @@ export async function POST(request: Request) {
           googleConfigJson: {
             projectId: googleProjectId,
             clientEmail: googleClientEmail,
-            privateKey: googlePrivateKey,
+            privateKey: encrypt(googlePrivateKey),
             sheetsId: body.sheetsId,
           } as Prisma.InputJsonValue,
           extractionConfigJson: {

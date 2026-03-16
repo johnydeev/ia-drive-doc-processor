@@ -1,244 +1,135 @@
-﻿import dotenv from "dotenv";
+import dotenv from "dotenv";
+import { env } from "@/config/env";
+import { parseProcessIntervalMinutes } from "@/jobs/runProcessingCycle";
+import { ClientRepository } from "@/repositories/client.repository";
+import { GoogleDriveService } from "@/services/googleDrive.service";
+import { SchedulerControlService } from "@/services/schedulerControl.service";
+import { getPrismaClient } from "@/lib/prisma";
+import {
+  resolveGoogleConfig,
+  resolveSheetName,
+  validateClientProcessingConfig,
+} from "@/lib/clientProcessingConfig";
+import { ProcessingClient } from "@/types/client.types";
 
-type EnvShape = {
-  PROCESS_INTERVAL_MINUTES: string;
-};
+async function enqueueJobsForClient(
+  client: ProcessingClient,
+  intervalMinutes: number,
+  controlService: SchedulerControlService
+): Promise<void> {
+  const prisma = getPrismaClient();
 
-type ParseIntervalFn = (value: string) => number;
-type RunCycleFn = (trigger: "schedule", options?: { clientId?: string }) => Promise<unknown>;
-type ControlCtor = new () => {
-  getState: (intervalMinutes: number, clientId?: string) => Promise<{ enabled: boolean }>;
-  touchHeartbeat: (intervalMinutes: number, clientId?: string) => Promise<unknown>;
-};
-type ClientRepositoryCtor = new () => {
-  listActiveClients: () => Promise<Array<{ id: string; name: string }>>;
-};
-
-function resolveEnvModule(module: unknown): EnvShape {
-  const candidate = module as {
-    env?: EnvShape;
-    default?: { env?: EnvShape };
-    "module.exports"?: { env?: EnvShape };
-  };
-
-  const resolved = candidate.env ?? candidate.default?.env ?? candidate["module.exports"]?.env;
-  if (!resolved) {
-    throw new Error("Failed to resolve env export from @/config/env");
-  }
-
-  return resolved;
-}
-
-function resolveRunHelpers(module: unknown): { parseInterval: ParseIntervalFn; runCycle: RunCycleFn } {
-  const candidate = module as {
-    parseProcessIntervalMinutes?: ParseIntervalFn;
-    runProcessingCycle?: RunCycleFn;
-    default?: {
-      parseProcessIntervalMinutes?: ParseIntervalFn;
-      runProcessingCycle?: RunCycleFn;
-    };
-    "module.exports"?: {
-      parseProcessIntervalMinutes?: ParseIntervalFn;
-      runProcessingCycle?: RunCycleFn;
-    };
-  };
-
-  const parseInterval =
-    candidate.parseProcessIntervalMinutes ??
-    candidate.default?.parseProcessIntervalMinutes ??
-    candidate["module.exports"]?.parseProcessIntervalMinutes;
-
-  const runCycle =
-    candidate.runProcessingCycle ??
-    candidate.default?.runProcessingCycle ??
-    candidate["module.exports"]?.runProcessingCycle;
-
-  if (!parseInterval || !runCycle) {
-    throw new Error("Failed to resolve scheduler helpers from @/jobs/runProcessingCycle");
-  }
-
-  return { parseInterval, runCycle };
-}
-
-function resolveControlService(module: unknown): ControlCtor {
-  const candidate = module as {
-    SchedulerControlService?: ControlCtor;
-    default?: { SchedulerControlService?: ControlCtor };
-    "module.exports"?: { SchedulerControlService?: ControlCtor };
-  };
-
-  const ctor =
-    candidate.SchedulerControlService ??
-    candidate.default?.SchedulerControlService ??
-    candidate["module.exports"]?.SchedulerControlService;
-
-  if (!ctor) {
-    throw new Error("Failed to resolve SchedulerControlService export");
-  }
-
-  return ctor;
-}
-
-function resolveClientRepository(module: unknown): ClientRepositoryCtor {
-  const candidate = module as {
-    ClientRepository?: ClientRepositoryCtor;
-    default?: { ClientRepository?: ClientRepositoryCtor };
-    "module.exports"?: { ClientRepository?: ClientRepositoryCtor };
-  };
-
-  const ctor =
-    candidate.ClientRepository ??
-    candidate.default?.ClientRepository ??
-    candidate["module.exports"]?.ClientRepository;
-
-  if (!ctor) {
-    throw new Error("Failed to resolve ClientRepository export");
-  }
-
-  return ctor;
-}
-
-type AggregateSummary = {
-  totalFound: number;
-  processed: number;
-  skipped: number;
-  failed: number;
-  duplicatesDetected: number;
-  errors: Array<{ fileId: string; fileName: string; error: string }>;
-};
-
-function createAggregateSummary(): AggregateSummary {
-  return {
-    totalFound: 0,
-    processed: 0,
-    skipped: 0,
-    failed: 0,
-    duplicatesDetected: 0,
-    errors: [],
-  };
-}
-
-function addSummary(aggregate: AggregateSummary, input: unknown): void {
-  if (!input || typeof input !== "object") {
+  await controlService.touchHeartbeat(intervalMinutes, client.id);
+  const state = await controlService.getState(intervalMinutes, client.id);
+  if (!state.enabled) {
+    console.log(`[scheduler] client paused clientId=${client.id} name="${client.name}"`);
     return;
   }
 
-  const source = input as Record<string, unknown>;
+  const sheetName = resolveSheetName(client);
+  const googleConfig = resolveGoogleConfig(client);
+  validateClientProcessingConfig(client, sheetName, googleConfig);
 
-  const totalFound = Number(source.totalFound);
-  const processed = Number(source.processed);
-  const skipped = Number(source.skipped);
-  const failed = Number(source.failed);
-  const duplicatesDetected = Number(source.duplicatesDetected);
+  const driveService = new GoogleDriveService(googleConfig);
+  const files = await driveService.listPendingPdfFiles(client.driveFolderPending);
+  if (files.length === 0) {
+    return;
+  }
 
-  aggregate.totalFound += Number.isFinite(totalFound) ? totalFound : 0;
-  aggregate.processed += Number.isFinite(processed) ? processed : 0;
-  aggregate.skipped += Number.isFinite(skipped) ? skipped : 0;
-  aggregate.failed += Number.isFinite(failed) ? failed : 0;
-  aggregate.duplicatesDetected += Number.isFinite(duplicatesDetected) ? duplicatesDetected : 0;
+  let created = 0;
+  for (const file of files) {
+    const existingInvoice = await prisma.invoice.findFirst({
+      where: {
+        clientId: client.id,
+        driveFileId: file.id,
+      },
+      select: { id: true },
+    });
 
-  if (Array.isArray(source.errors)) {
-    for (const errorItem of source.errors) {
-      if (!errorItem || typeof errorItem !== "object") {
-        continue;
-      }
-
-      const row = errorItem as Record<string, unknown>;
-      aggregate.errors.push({
-        fileId: typeof row.fileId === "string" ? row.fileId : "unknown",
-        fileName: typeof row.fileName === "string" ? row.fileName : "unknown",
-        error: typeof row.error === "string" ? row.error : "Unknown error",
-      });
+    if (existingInvoice) {
+      continue;
     }
+
+    const existing = await prisma.processingJob.findFirst({
+      where: {
+        clientId: client.id,
+        driveFileId: file.id,
+      },
+      select: { id: true },
+    });
+
+    if (existing) {
+      continue;
+    }
+
+    await prisma.processingJob.create({
+      data: {
+        clientId: client.id,
+        driveFileId: file.id,
+        driveFileName: file.name,
+        status: "PENDING",
+      },
+    });
+
+    created += 1;
+  }
+
+  if (created > 0) {
+    console.log(
+      `[scheduler] queued ${created} job(s) for clientId=${client.id} name="${client.name}"`
+    );
   }
 }
 
-async function runScheduler() {
+async function runScheduler(): Promise<void> {
   dotenv.config({ path: [".env.local", ".env"] });
 
-  try {
-    const [envModule, cycleModule, controlModule, clientRepositoryModule] = await Promise.all([
-      import("@/config/env"),
-      import("@/jobs/runProcessingCycle"),
-      import("@/services/schedulerControl.service"),
-      import("@/repositories/client.repository"),
-    ]);
+  const clientRepository = new ClientRepository();
+  const controlService = new SchedulerControlService();
+  const minutes = parseProcessIntervalMinutes(env.PROCESS_INTERVAL_MINUTES);
+  const intervalMs = minutes * 60 * 1000;
 
-    const env = resolveEnvModule(envModule);
-    const { parseInterval, runCycle } = resolveRunHelpers(cycleModule);
-    const SchedulerControlService = resolveControlService(controlModule);
-    const ClientRepository = resolveClientRepository(clientRepositoryModule);
-    const controlService = new SchedulerControlService();
-    const clientRepository = new ClientRepository();
+  let localRunning = false;
 
-    const minutes = parseInterval(env.PROCESS_INTERVAL_MINUTES);
-    const intervalMs = minutes * 60 * 1000;
+  const runOnce = async () => {
+    if (localRunning) {
+      return;
+    }
 
-    let localRunning = false;
+    localRunning = true;
 
-    const runOnce = async () => {
-      if (localRunning) {
+    try {
+      const clients = await clientRepository.listActiveClients();
+      if (clients.length === 0) {
+        console.log("[scheduler] no active clients to process");
         return;
       }
 
-      localRunning = true;
-
-      try {
-        const clients = await clientRepository.listActiveClients();
-        if (clients.length === 0) {
-          console.log("[scheduler] no active clients to process");
-          return;
+      for (const client of clients) {
+        try {
+          await enqueueJobsForClient(client, minutes, controlService);
+        } catch (error) {
+          console.error(
+            `[scheduler] job enqueue failed clientId=${client.id} name="${client.name}" error=${
+              error instanceof Error ? error.message : "Unknown error"
+            }`
+          );
         }
-
-        const aggregate = createAggregateSummary();
-
-        for (const client of clients) {
-          await controlService.touchHeartbeat(minutes, client.id);
-          const clientState = await controlService.getState(minutes, client.id);
-
-          if (!clientState.enabled) {
-            console.log(`[scheduler] client paused clientId=${client.id} name="${client.name}"`);
-            continue;
-          }
-
-          try {
-            const clientSummary = await runCycle("schedule", { clientId: client.id });
-            addSummary(aggregate, clientSummary);
-          } catch (error) {
-            const message = error instanceof Error ? error.message : "Unknown error";
-            console.error(
-              `[scheduler] client failed clientId=${client.id} name="${client.name}" error=${message}`
-            );
-            aggregate.failed += 1;
-            aggregate.errors.push({
-              fileId: `client:${client.id}`,
-              fileName: client.name,
-              error: message,
-            });
-          }
-        }
-
-        console.log("[scheduler] completed", aggregate);
-      } catch (error) {
-        console.error(
-          "[scheduler] failed",
-          error instanceof Error ? error.message : "Unknown error"
-        );
-      } finally {
-        localRunning = false;
       }
-    };
+    } catch (error) {
+      console.error(
+        "[scheduler] failed",
+        error instanceof Error ? error.message : "Unknown error"
+      );
+    } finally {
+      localRunning = false;
+    }
+  };
 
-    console.log(`[scheduler] starting. Interval: ${minutes} minutes`);
-    await runOnce();
-    setInterval(runOnce, intervalMs);
-  } catch (error) {
-    console.error(
-      "[scheduler] bootstrap failed",
-      error instanceof Error ? error.message : "Unknown error"
-    );
-    process.exit(1);
-  }
+  console.log(`[scheduler] starting. Interval: ${minutes} minutes`);
+  await runOnce();
+
+  setInterval(runOnce, intervalMs);
 }
 
 void runScheduler();
