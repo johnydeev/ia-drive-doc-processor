@@ -6,6 +6,8 @@ Backend multi-tenant en `Next.js + TypeScript` para procesar comprobantes PDF de
 - Multi-tenant por cliente (`Client`) con roles `ADMIN`, `CLIENT`, `VIEWER`.
 - Scheduler automatico por cliente (solo `CLIENT` activos) que encola trabajos en `ProcessingJob`.
 - Workers procesan la cola de trabajos y ejecutan el pipeline de PDFs.
+- Asignacion de consorcio/proveedor/periodo a partir de la extraccion (auto-creacion si aplica).
+- Gestión de consorcios con cierre de períodos.
 - Control `ON/OFF` por cliente desde el dashboard.
 - Dashboard admin con:
   - alta de clientes (rol `CLIENT`),
@@ -34,9 +36,10 @@ Backend multi-tenant en `Next.js + TypeScript` para procesar comprobantes PDF de
 6. Detecta duplicado:
   - por `documentHash` (sha256),
   - por clave de negocio normalizada.
-7. Inserta fila en Google Sheets.
-8. Mueve archivo a carpeta `Escaneados`.
-9. Registra logs, totales y tokens en DB.
+7. Asigna consorcio/proveedor/periodo si hay datos extraidos.
+8. Inserta fila en Google Sheets.
+9. Mueve archivo a carpeta `Escaneados`.
+10. Registra logs, totales y tokens en DB.
 
 ## Arquitectura resumida
 - API/UI: Next.js App Router (`src/app`).
@@ -59,6 +62,10 @@ Backend multi-tenant en `Next.js + TypeScript` para procesar comprobantes PDF de
 - `ProcessingLog`: historial de ejecuciones.
 - `SchedulerState`: estado runtime y acumulados por cliente.
 - `TokenUsage`: consumo de tokens por corrida/proveedor/modelo.
+- `Consortium`: consorcios por cliente (nombre normalizado + nombre original).
+- `Provider`: proveedores por cliente.
+- `ConsortiumProvider`: relacion many-to-many entre consorcios y proveedores.
+- `Period`: periodos por consorcio (status `ACTIVE`/`CLOSED`).
 
 ## Variables de entorno
 ### Requeridas
@@ -122,12 +129,18 @@ npm run worker
 ```
 
 Si solo ejecutas `npm run dev`, no hay procesamiento automatico.
+Si queres levantar todo en paralelo:
+```bash
+powershell -ExecutionPolicy Bypass -File scripts/run-local.ps1
+```
 
 ## Scripts utiles
 - `npm run dev`: levanta Next en desarrollo.
 - `npm run schedule`: levanta loop automatico.
+- `npm run worker`: procesa jobs pendientes.
 - `npm run build`: build de produccion.
 - `npm run start`: servidor de produccion.
+- `npm run prebuild:check`: prisma generate + tsc + prisma validate.
 - `npm run diagnose -- <fileId>`: diagnostico Drive por archivo.
 - `npm run diagnose:gemini`: test de extraccion Gemini.
 - `npm run diagnose:db`: diagnostico de conexion DB.
@@ -149,6 +162,12 @@ Si solo ejecutas `npm run dev`, no hay procesamiento automatico.
 - `POST /api/admin/scheduler/run` (solo rol `CLIENT`)
 - `GET /api/admin/audit/clients` (solo rol `ADMIN`)
 - `POST /api/admin/clients` (solo rol `ADMIN`)
+
+### Consorcios (cliente)
+- `GET /api/client/consortiums`
+- `POST /api/client/consortiums`
+- `GET /api/client/consortiums/:id`
+- `POST /api/client/consortiums/:id/close-period`
 
 ### Documentacion API
 - Swagger UI: `GET /api-docs`
@@ -191,23 +210,20 @@ Si falta algo, se registra error explicito por cliente en la corrida.
   - `amountNorm`
 
 ## Docker
-### Compose simple (actual)
-- `docker-compose.yml`: app en un servicio.
-
-### Compose recomendado prod
-- `docker-compose.prod.yml`:
+### Compose (actual)
+- `docker-compose.yml`:
   - `web` (Next/API + scheduler)
   - `worker` (job worker)
 
 Levantar:
 ```bash
-docker compose -f docker-compose.prod.yml up -d --build
+docker compose up -d --build
 ```
 
 Logs:
 ```bash
-docker compose -f docker-compose.prod.yml logs -f web
-docker compose -f docker-compose.prod.yml logs -f worker
+docker compose logs -f web
+docker compose logs -f worker
 ```
 
 ## Checklist de produccion
