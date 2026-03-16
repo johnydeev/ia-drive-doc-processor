@@ -3,16 +3,17 @@
 Backend multi-tenant en `Next.js + TypeScript` para procesar comprobantes PDF desde Google Drive, extraer datos con IA/OCR, cargar resultados en Google Sheets y mantener trazabilidad en PostgreSQL.
 
 ## Estado actual del sistema
-- Multi-tenant por cliente (`Client` con rol `ADMIN` o `CLIENT`).
-- Scheduler automatico con control `ON/OFF` por cliente.
+- Multi-tenant por cliente (`Client`) con roles `ADMIN`, `CLIENT`, `VIEWER`.
+- Scheduler automatico por cliente (solo `CLIENT` activos), con control `ON/OFF` por cliente desde el dashboard.
 - Dashboard admin con:
-  - alta de clientes,
+  - alta de clientes (rol `CLIENT`),
   - metricas por cliente,
-  - estado de scheduler por cliente.
+  - estado agregado del scheduler y consumo de tokens.
 - Dashboard cliente con:
   - control de su propio scheduler,
   - ejecucion manual,
-  - resumen de ultima corrida.
+  - resumen de ultima corrida, tokens y cuota estimada.
+- Dashboard viewer: acceso de solo lectura (sin controles).
 - Autenticacion por cookie httpOnly con expiracion de token a 24h.
 - Persistencia en PostgreSQL (Prisma).
 - Deteccion de duplicados por hash y clave de negocio.
@@ -21,10 +22,12 @@ Backend multi-tenant en `Next.js + TypeScript` para procesar comprobantes PDF de
 1. Lista PDFs en carpeta `Pendientes` de Google Drive.
 2. Descarga PDF.
 3. Extrae texto:
-  - texto embebido directo,
-  - fallback OCR con Tesseract si no hay texto.
+  - texto embebido directo (pdf-parse),
+  - fallback OCR con `tesseract.js` + `pdfjs-dist` si no hay texto.
 4. Extrae JSON estructurado con IA:
-  - prioridad: Gemini del cliente -> OpenAI del cliente -> Gemini global -> OpenAI global -> OCR_ONLY.
+  - intenta Gemini (config cliente o global),
+  - luego OpenAI (config cliente o global),
+  - si fallan ambos => `OCR_ONLY`.
 5. Detecta duplicado:
   - por `documentHash` (sha256),
   - por clave de negocio normalizada.
@@ -54,9 +57,11 @@ Backend multi-tenant en `Next.js + TypeScript` para procesar comprobantes PDF de
 ## Variables de entorno
 ### Requeridas
 - `DATABASE_URL`
-- `DIRECT_URL` (para migraciones Prisma)
 - `PROCESS_INTERVAL_MINUTES`
 - `SESSION_SECRET`
+
+### Requeridas para migraciones Prisma
+- `DIRECT_URL`
 
 ### Opcionales (fallback global)
 Estas son opcionales porque el modo recomendado es usar credenciales por cliente en DB:
@@ -79,9 +84,7 @@ npm install
 ```
 
 2. Crear/ajustar entorno:
-```bash
-cp .env.example .env.local
-```
+Crear `.env.local` con las variables requeridas.
 
 3. Generar cliente Prisma:
 ```bash
@@ -126,14 +129,14 @@ Si solo ejecutas `npm run dev`, no hay procesamiento automatico.
 - `POST /api/auth/register` -> deshabilitado (retorna 403)
 
 ### Procesamiento
-- `POST /api/process` -> ejecuta corrida manual (global o segun sesion).
+- `POST /api/process` -> ejecuta corrida manual global (sin autenticacion).
 
 ### Admin / Scheduler
-- `GET /api/admin/scheduler/status`
-- `POST /api/admin/scheduler/toggle`
-- `POST /api/admin/scheduler/run`
-- `GET /api/admin/audit/clients` (metricas por cliente)
-- `POST /api/admin/clients` (alta de cliente)
+- `GET /api/admin/scheduler/status` (admin ve agregado, cliente ve su propio estado)
+- `POST /api/admin/scheduler/toggle` (solo rol `CLIENT`)
+- `POST /api/admin/scheduler/run` (solo rol `CLIENT`)
+- `GET /api/admin/audit/clients` (solo rol `ADMIN`)
+- `POST /api/admin/clients` (solo rol `ADMIN`)
 
 ### Documentacion API
 - Swagger UI: `GET /api-docs`
@@ -149,7 +152,7 @@ Se guarda en DB:
 - Sheets:
   - `sheetsId`
   - `sheetName`
-- Service account Google:
+- Service account Google (en JSON o campos sueltos):
   - `projectId`
   - `clientEmail`
   - `privateKey`
@@ -172,7 +175,6 @@ Si falta algo, se registra error explicito por cliente en la corrida.
 - clave de negocio normalizada por cliente:
   - `boletaNumberNorm`
   - `providerTaxIdNorm`
-  - `consortiumNorm`
   - `dueDateNorm`
   - `amountNorm`
 
@@ -211,7 +213,7 @@ docker compose -f docker-compose.prod.yml logs -f worker
 ### Scheduler y worker
 - Levantar `web` y `worker` (no solo `web`).
 - Verificar en logs que aparezca: `[scheduler] starting. Interval: ...`.
-- Confirmar que cada cliente puede activar/desactivar su scheduler de forma independiente.
+- Confirmar que cada cliente con rol `CLIENT` puede activar/desactivar su scheduler.
 
 ### Integraciones por cliente
 - Validar `driveFolderPending` y `driveFolderProcessed` (distintos).
