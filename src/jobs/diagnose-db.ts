@@ -1,7 +1,7 @@
-import dotenv from "dotenv";
+import { loadEnv } from "@/lib/loadEnv";
 import { getPrismaClient, isDatabaseConfigured } from "@/lib/prisma";
 
-dotenv.config({ path: [".env.local", ".env"] });
+loadEnv();
 
 async function run() {
   if (!isDatabaseConfigured()) {

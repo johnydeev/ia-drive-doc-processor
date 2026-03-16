@@ -1,13 +1,14 @@
 ﻿import { env } from "@/config/env";
+import { normalizeConsortiumName } from "@/lib/consortiumNormalizer";
 import { refineExtractionWithRawText } from "@/lib/extraction";
-import {
-  accumulateTokenUsage,
-} from "@/types/aiUsage.types";
+import { accumulateTokenUsage } from "@/types/aiUsage.types";
 import { createEmptyTokenUsageSummary } from "@/types/createEmptyTokenUsageSummary";
 import { ExtractedDocumentData } from "@/types/extractedDocument.types";
 import { ProcessJobSummary } from "@/types/process.types";
 import { ClientGoogleConfig } from "@/types/client.types";
+import { ConsortiumRepository } from "@/repositories/consortium.repository";
 import { InvoiceRepository } from "@/repositories/invoice.repository";
+import { ProviderRepository } from "@/repositories/provider.repository";
 import { GoogleDriveService } from "@/services/googleDrive.service";
 import { GoogleSheetsService, SheetsRowMapping } from "@/services/googleSheets.service";
 import { PdfTextExtractorService } from "@/services/pdfTextExtractor.service";
@@ -195,6 +196,10 @@ async function processDriveFile(
     existingDuplicateKeys,
   } = context;
 
+  let consortiumId: string | undefined;
+  let providerId: string | undefined;
+  let periodId: string | undefined;
+
   const runStep = async <T>(label: string, fn: () => Promise<T>): Promise<T> => {
     try {
       return await fn();
@@ -286,6 +291,58 @@ async function processDriveFile(
     extracted.sourceFileUrl = sourceFileUrl;
     extracted.isDuplicate = isDuplicate ? "YES" : "NO";
 
+    // Asignar consorcio y período
+    if (extracted.consortium) {
+      try {
+        const canonicalName = normalizeConsortiumName(extracted.consortium);
+        const consortiumRepo = new ConsortiumRepository();
+        const { consortium } = await consortiumRepo.findOrCreateByCanonicalName(
+          resolvedConfig.clientId,
+          canonicalName,
+          extracted.consortium
+        );
+        consortiumId = consortium.id;
+
+        const activePeriod = await consortiumRepo.findActivePeriod(consortium.id);
+        if (activePeriod) {
+          periodId = activePeriod.id;
+        } else {
+          console.warn(
+            `[job:${resolvedConfig.clientId}] no active period for consortiumId=${consortium.id}`
+          );
+        }
+      } catch (error) {
+        console.warn(
+          `[job:${resolvedConfig.clientId}] consortium assignment failed: ${
+            error instanceof Error ? error.message : "Unknown error"
+          }`
+        );
+      }
+    }
+
+    // Asignar proveedor
+    if (extracted.providerTaxId) {
+      try {
+        const providerRepo = new ProviderRepository();
+        const { provider } = await providerRepo.findOrCreateByCuit(
+          resolvedConfig.clientId,
+          extracted.providerTaxId,
+          extracted.provider ?? undefined
+        );
+        providerId = provider.id;
+
+        if (consortiumId) {
+          await providerRepo.linkToConsortium(provider.id, consortiumId);
+        }
+      } catch (error) {
+        console.warn(
+          `[job:${resolvedConfig.clientId}] provider assignment failed: ${
+            error instanceof Error ? error.message : "Unknown error"
+          }`
+        );
+      }
+    }
+
     await runStep("sheets-insert", () =>
       sheetsService.insertRow(resolvedConfig.sheetName, extracted, resolvedMapping)
     );
@@ -308,6 +365,9 @@ async function processDriveFile(
         sourceFileUrl,
         extraction: toStoredExtraction(extracted),
         isDuplicate,
+        consortiumId,
+        providerId,
+        periodId,
       })
     );
 

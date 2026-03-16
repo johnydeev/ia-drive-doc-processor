@@ -1,6 +1,6 @@
-﻿import dotenv from "dotenv";
+import { loadEnv } from "@/lib/loadEnv";
 
-dotenv.config({ path: [".env.local", ".env"] });
+loadEnv();
 
 async function run() {
   const sampleText =

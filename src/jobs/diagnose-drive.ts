@@ -1,7 +1,7 @@
-﻿import dotenv from "dotenv";
+import { loadEnv } from "@/lib/loadEnv";
 
 // Load environment variables before importing services that read env.
-dotenv.config({ path: [".env.local", ".env"] });
+loadEnv();
 
 async function run() {
   const fileId = process.argv[2];

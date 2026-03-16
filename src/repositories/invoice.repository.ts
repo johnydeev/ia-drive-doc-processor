@@ -22,6 +22,9 @@ export interface SaveInvoiceInput {
   sourceFileUrl?: string;
   extraction: Omit<ExtractedDocumentData, "sourceFileUrl" | "isDuplicate">;
   isDuplicate: boolean;
+  consortiumId?: string;
+  providerId?: string;
+  periodId?: string;
 }
 
 export class InvoiceRepository {
@@ -89,6 +92,22 @@ export class InvoiceRepository {
     return this.mapInvoiceDuplicate(invoice);
   }
 
+  async findByPeriod(periodId: string): Promise<Invoice[]> {
+    const prisma = getPrismaClient();
+    return prisma.invoice.findMany({
+      where: { periodId },
+      orderBy: { createdAt: "desc" },
+    });
+  }
+
+  async findByConsortium(consortiumId: string, clientId: string): Promise<Invoice[]> {
+    const prisma = getPrismaClient();
+    return prisma.invoice.findMany({
+      where: { consortiumId, clientId },
+      orderBy: { createdAt: "desc" },
+    });
+  }
+
   async saveProcessedInvoice(input: SaveInvoiceInput): Promise<void> {
     const parts = ensurePersistableBusinessKeyParts(
       buildBusinessKeyParts(input.extraction),
@@ -107,6 +126,7 @@ export class InvoiceRepository {
         },
         create: {
           clientId: input.clientId,
+          consortiumId: input.consortiumId ?? null,
           documentHash: input.documentHash,
           driveFileId: input.fileId,
           sourceFileUrl: input.sourceFileUrl,
@@ -114,10 +134,12 @@ export class InvoiceRepository {
           boletaNumber: input.extraction.boletaNumber,
           provider: input.extraction.provider,
           consortium: input.extraction.consortium,
+          providerId: input.providerId ?? null,
           providerTaxId: input.extraction.providerTaxId,
           detail: input.extraction.detail,
           observation: input.extraction.observation,
           dueDate: parseDueDate(input.extraction.dueDate),
+          periodId: input.periodId ?? null,
           amount: input.extraction.amount,
           alias: input.extraction.alias,
           boletaNumberNorm: parts.boletaNumberNorm,
@@ -132,10 +154,13 @@ export class InvoiceRepository {
           boletaNumber: input.extraction.boletaNumber,
           provider: input.extraction.provider,
           consortium: input.extraction.consortium,
+          consortiumId: input.consortiumId ?? null,
+          providerId: input.providerId ?? null,
           providerTaxId: input.extraction.providerTaxId,
           detail: input.extraction.detail,
           observation: input.extraction.observation,
           dueDate: parseDueDate(input.extraction.dueDate),
+          periodId: input.periodId ?? null,
           amount: input.extraction.amount,
           alias: input.extraction.alias,
           boletaNumberNorm: parts.boletaNumberNorm,

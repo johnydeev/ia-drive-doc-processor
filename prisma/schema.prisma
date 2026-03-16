@@ -23,6 +23,11 @@ enum JobStatus {
   FAILED
 }
 
+enum PeriodStatus {
+  ACTIVE
+  CLOSED
+}
+
 model Client {
   id                   String           @id @default(cuid())
   name                 String
@@ -36,7 +41,10 @@ model Client {
   extractionConfigJson Json?
   createdAt            DateTime         @default(now())
   updatedAt            DateTime         @updatedAt
+  consortiums          Consortium[]
   invoices             Invoice[]
+  periods              Period[]
+  providers            Provider[]
   processingLogs       ProcessingLog[]
   processingJobs       ProcessingJob[]
   schedulerStates      SchedulerState[]
@@ -72,14 +80,17 @@ model ProcessingJob {
 model Invoice {
   id                String    @id @default(cuid())
   clientId          String
+  consortiumId      String?
   documentHash      String
   boletaNumber      String?
   provider          String?
   consortium        String?
+  providerId        String?
   providerTaxId     String?
   detail            String?
   observation       String?
   dueDate           DateTime?
+  periodId          String?
   amount            Decimal?  @db.Decimal(14, 2)
   alias             String?
   driveFileId       String?
@@ -92,6 +103,9 @@ model Invoice {
   createdAt         DateTime  @default(now())
   updatedAt         DateTime  @updatedAt
   client            Client    @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  consortiumRef     Consortium? @relation(fields: [consortiumId], references: [id], onDelete: SetNull)
+  providerRef       Provider?   @relation(fields: [providerId], references: [id], onDelete: SetNull)
+  periodRef         Period?     @relation(fields: [periodId], references: [id], onDelete: SetNull)
 
   @@unique([clientId, documentHash], map: "uq_invoice_document_hash")
   @@unique([clientId, boletaNumberNorm, providerTaxIdNorm, dueDateNorm, amountNorm], map: "uq_invoice_business_key")
@@ -161,4 +175,70 @@ model TokenUsage {
 
   @@index([clientId, runAt])
   @@index([provider])
+}
+
+model Consortium {
+  id                   String               @id @default(cuid())
+  clientId             String
+  canonicalName        String
+  rawName              String
+  cuit                 String?
+  cutoffDay            Int                  @default(5)
+  driveFolderProcessedId String?
+  isAutoCreated        Boolean              @default(false)
+  createdAt            DateTime             @default(now())
+  updatedAt            DateTime             @updatedAt
+  client               Client               @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  periods              Period[]
+  consortiumProviders  ConsortiumProvider[]
+  invoices             Invoice[]
+
+  @@unique([clientId, canonicalName])
+  @@index([clientId])
+}
+
+model Provider {
+  id                   String               @id @default(cuid())
+  clientId             String
+  canonicalName        String
+  cuit                 String?
+  isAutoCreated        Boolean              @default(false)
+  createdAt            DateTime             @default(now())
+  updatedAt            DateTime             @updatedAt
+  client               Client               @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  consortiumProviders  ConsortiumProvider[]
+  invoices             Invoice[]
+
+  @@index([clientId, cuit])
+  @@index([clientId])
+}
+
+model ConsortiumProvider {
+  id            String     @id @default(cuid())
+  consortiumId  String
+  providerId    String
+  createdAt     DateTime   @default(now())
+  consortium    Consortium @relation(fields: [consortiumId], references: [id], onDelete: Cascade)
+  provider      Provider   @relation(fields: [providerId], references: [id], onDelete: Cascade)
+
+  @@unique([consortiumId, providerId])
+}
+
+model Period {
+  id            String       @id @default(cuid())
+  clientId      String
+  consortiumId  String
+  year          Int
+  month         Int
+  status        PeriodStatus @default(ACTIVE)
+  driveFolderId String?
+  closedAt      DateTime?
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+  client        Client       @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  consortium    Consortium   @relation(fields: [consortiumId], references: [id], onDelete: Cascade)
+  invoices      Invoice[]
+
+  @@unique([consortiumId, year, month])
+  @@index([consortiumId, status])
 }
