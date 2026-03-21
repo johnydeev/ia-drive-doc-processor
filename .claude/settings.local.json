@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(node -e \"const m = require\\(''pdf-parse''\\); const pdf = m.default || m; const fs = require\\(''fs''\\); const path = ''C:/Users/jony/Downloads/IMPRESO EDESUR 706.pdf''; pdf\\(fs.readFileSync\\(path\\)\\).then\\(d => console.log\\(d.text.slice\\(0, 4000\\)\\)\\).catch\\(e => console.error\\(e.message\\)\\)\")",
+      "Bash(node -e \"const m = require\\(''pdf-parse''\\); console.log\\(Object.keys\\(m\\)\\)\")",
+      "Bash(node -e \":*)",
+      "Bash(npx tsx -e \":*)"
+    ]
+  }
+}

@@ -1,6 +1,6 @@
 import { env } from "@/config/env";
 import { SheetsRowMapping } from "@/services/googleSheets.service";
-import { ClientGoogleConfig, ProcessingClient } from "@/types/client.types";
+import { ClientDriveFolders, ClientGoogleConfig, ProcessingClient } from "@/types/client.types";
 import { decrypt } from "@/utils/encryption.util";
 
 export function resolveSheetName(client: ProcessingClient): string {
@@ -76,20 +76,39 @@ export function resolveAiConfig(client: ProcessingClient): {
     return null;
   }
 
-  const geminiApiKey = asOptionalString(raw.geminiApiKey);
+  // Las API keys se guardan cifradas — hay que descifrarlas antes de usarlas
+  const geminiApiKeyRaw = asOptionalString(raw.geminiApiKey);
+  const openaiApiKeyRaw = asOptionalString(raw.openaiApiKey);
   const geminiModel = asOptionalString(raw.geminiModel);
-  const openaiApiKey = asOptionalString(raw.openaiApiKey);
   const openaiModel = asOptionalString(raw.openaiModel);
+
+  const geminiApiKey = geminiApiKeyRaw ? decrypt(geminiApiKeyRaw) : undefined;
+  const openaiApiKey = openaiApiKeyRaw ? decrypt(openaiApiKeyRaw) : undefined;
 
   if (!geminiApiKey && !openaiApiKey && !geminiModel && !openaiModel) {
     return null;
   }
 
+  return { geminiApiKey, geminiModel, openaiApiKey, openaiModel };
+}
+
+export interface ResolvedFolders {
+  pending: string;
+  scanned: string;
+  unassigned: string | null;
+  failed: string | null;
+  receipts: string | null;
+}
+
+export function resolveFolders(client: ProcessingClient): ResolvedFolders {
+  const f = client.driveFoldersJson as ClientDriveFolders | null | undefined;
+
   return {
-    geminiApiKey,
-    geminiModel,
-    openaiApiKey,
-    openaiModel,
+    pending:    f?.pending?.trim()    || env.GOOGLE_DRIVE_PENDING_FOLDER_ID  || "",
+    scanned:    f?.scanned?.trim()    || env.GOOGLE_DRIVE_SCANNED_FOLDER_ID  || "",
+    unassigned: f?.unassigned?.trim() || null,
+    failed:     f?.failed?.trim()     || null,
+    receipts:   f?.receipts?.trim()   || null,
   };
 }
 
@@ -98,18 +117,17 @@ export function validateClientProcessingConfig(
   sheetName: string,
   googleConfig: ClientGoogleConfig | null
 ): void {
-  const pendingFolderId = client.driveFolderPending.trim();
-  const scannedFolderId = client.driveFolderProcessed.trim();
+  const folders = resolveFolders(client);
 
-  if (!pendingFolderId) {
-    throw new Error("Missing required client config: driveFolderPending");
+  if (!folders.pending) {
+    throw new Error("Missing required client config: driveFoldersJson.pending");
   }
 
-  if (!scannedFolderId) {
-    throw new Error("Missing required client config: driveFolderProcessed");
+  if (!folders.scanned) {
+    throw new Error("Missing required client config: driveFoldersJson.scanned");
   }
 
-  if (pendingFolderId === scannedFolderId) {
+  if (folders.pending === folders.scanned) {
     throw new Error("Invalid client config: pending and scanned folders must be different");
   }
 
@@ -123,19 +141,13 @@ export function validateClientProcessingConfig(
 }
 
 function asRequiredString(value: unknown): string | null {
-  if (typeof value !== "string") {
-    return null;
-  }
-
+  if (typeof value !== "string") return null;
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : null;
 }
 
 function asOptionalString(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-
+  if (typeof value !== "string") return undefined;
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : undefined;
 }

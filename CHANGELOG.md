@@ -1,5 +1,24 @@
 # Changelog
 
+## 2026-03-20
+
+Highlights
+- Implementada feature de sincronización de directorio desde archivo Google Sheets ALTA (Sheets → DB).
+- Nuevo endpoint `POST /api/client/sync-directory`: lee 4 hojas del archivo ALTA y upserta Consorcios, Proveedores, Rubros y Coeficientes en DB.
+- Auto-creación de hojas `_Consorcios`, `_Proveedores`, `_Rubros`, `_Coeficientes` con encabezados si no existen.
+- Tablas Rubro y Coeficiente movidas a nivel cliente (no por consorcio).
+- Nuevo campo `lastDirectorySyncAt` en `SchedulerState` para registrar la última sincronización.
+- Nuevo campo `altaSheetsId` en `googleConfigJson` del cliente para apuntar al archivo ALTA separado.
+- UI: botón "Sincronizar directorio" en el panel admin (solo rol CLIENT).
+- UI: badge "Última sync directorio" en card de estado del panel.
+- UI: botón "Editar" por cliente en tabla de métricas → nueva página `/admin/clients/[id]`.
+- Nueva página de edición de configuración de cliente (`/admin/clients/[id]`) con secciones: General, Sheets, Drive, Credenciales Google, Claves IA.
+- Nuevo endpoint `GET /PATCH /api/admin/clients/[id]` — campos sensibles enmascarados en GET, encriptados en PATCH.
+- CRUD endpoints para Rubros (`/api/client/rubros`) y Coeficientes (`/api/client/coeficientes`).
+- Comando `npm run local` como atajo para levantar los 3 procesos con PowerShell.
+- Migración `20260320000100_rubro_coeficiente_to_client_level` (pendiente de aplicar).
+- Resuelto bug: private key encriptada pasada directamente a GoogleSheetsService → usar siempre `resolveGoogleConfig(client)`.
+
 ## 2026-03-16
 
 Highlights

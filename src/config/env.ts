@@ -1,3 +1,12 @@
+import dotenv from "dotenv";
+
+// Carga el .env antes de leer process.env.
+// En Next.js esto es un no-op porque las variables ya están cargadas.
+// En los scripts de Node (scheduler, worker) esto garantiza que el .env
+// esté disponible sin depender del orden de imports del llamador.
+dotenv.config({ path: ".env.local" });
+dotenv.config({ path: ".env" });
+
 export interface EnvConfig {
   GOOGLE_PROJECT_ID: string;
   GOOGLE_CLIENT_EMAIL: string;
@@ -38,8 +47,6 @@ function optionalEnv(name: keyof EnvConfig): string | undefined {
 }
 
 export const env: EnvConfig = {
-  // Global Google vars are optional in multi-tenant mode.
-  // Client-specific credentials/config are loaded from DB.
   GOOGLE_PROJECT_ID: optionalEnv("GOOGLE_PROJECT_ID") ?? "",
   GOOGLE_CLIENT_EMAIL: optionalEnv("GOOGLE_CLIENT_EMAIL") ?? "",
   GOOGLE_PRIVATE_KEY: optionalEnv("GOOGLE_PRIVATE_KEY") ?? "",

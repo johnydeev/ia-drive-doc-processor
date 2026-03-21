@@ -1,5 +1,4 @@
 
-
 generator client {
   provider = "prisma-client-js"
 }
@@ -28,6 +27,12 @@ enum PeriodStatus {
   CLOSED
 }
 
+enum TipoGasto {
+  ORDINARIO
+  EXTRAORDINARIO
+  PARTICULAR
+}
+
 model Client {
   id                   String           @id @default(cuid())
   name                 String
@@ -35,8 +40,7 @@ model Client {
   passwordHash         String
   role                 ClientRole       @default(CLIENT)
   isActive             Boolean          @default(true)
-  driveFolderPending   String?
-  driveFolderProcessed String?
+  driveFoldersJson     Json?
   googleConfigJson     Json?
   extractionConfigJson Json?
   createdAt            DateTime         @default(now())
@@ -45,6 +49,9 @@ model Client {
   invoices             Invoice[]
   periods              Period[]
   providers            Provider[]
+  receipts             Receipt[]
+  coeficientes         Coeficiente[]
+  rubros               Rubro[]
   processingLogs       ProcessingLog[]
   processingJobs       ProcessingJob[]
   schedulerStates      SchedulerState[]
@@ -59,18 +66,13 @@ model ProcessingJob {
   clientId      String
   driveFileId   String
   driveFileName String?
-
   status        JobStatus @default(PENDING)
-
   attempts      Int       @default(0)
   maxAttempts   Int       @default(3)
-
   errorMessage  String?
-
   createdAt     DateTime  @default(now())
   startedAt     DateTime?
   finishedAt    DateTime?
-
   client        Client    @relation(fields: [clientId], references: [id])
 
   @@index([clientId])
@@ -78,38 +80,106 @@ model ProcessingJob {
 }
 
 model Invoice {
-  id                String    @id @default(cuid())
-  clientId          String
-  consortiumId      String?
-  documentHash      String
-  boletaNumber      String?
-  provider          String?
-  consortium        String?
-  providerId        String?
-  providerTaxId     String?
-  detail            String?
-  observation       String?
-  dueDate           DateTime?
-  periodId          String?
-  amount            Decimal?  @db.Decimal(14, 2)
-  alias             String?
-  driveFileId       String?
-  sourceFileUrl     String?
-  isDuplicate       Boolean   @default(false)
-  boletaNumberNorm  String    @default("")
-  providerTaxIdNorm String    @default("")
-  dueDateNorm       String    @default("")
-  amountNorm        String    @default("")
-  createdAt         DateTime  @default(now())
-  updatedAt         DateTime  @updatedAt
-  client            Client    @relation(fields: [clientId], references: [id], onDelete: Cascade)
-  consortiumRef     Consortium? @relation(fields: [consortiumId], references: [id], onDelete: SetNull)
-  providerRef       Provider?   @relation(fields: [providerId], references: [id], onDelete: SetNull)
-  periodRef         Period?     @relation(fields: [periodId], references: [id], onDelete: SetNull)
+  id                  String       @id @default(cuid())
+  clientId            String
+  consortiumId        String?
+  documentHash        String
+  boletaNumber        String?
+  provider            String?
+  consortium          String?
+  providerId          String?
+  providerTaxId       String?
+  detail              String?
+  observation         String?
+  issueDate           DateTime?
+  dueDate             DateTime?
+  periodId            String?
+  amount              Decimal?     @db.Decimal(14, 2)
+  alias               String?
+  coeficienteId       String?
+  rubroId             String?
+  tipoGasto           TipoGasto    @default(ORDINARIO)
+  tipoComprobante     String?
+  driveFileId         String?
+  sourceFileUrl       String?
+  isDuplicate         Boolean      @default(false)
+  isManual            Boolean      @default(false)
+  boletaNumberNorm    String       @default("")
+  providerTaxIdNorm   String       @default("")
+  dueDateNorm         String       @default("")
+  amountNorm          String       @default("")
+  receiptDriveFileId  String?
+  receiptDriveFileUrl String?
+  createdAt           DateTime     @default(now())
+  updatedAt           DateTime     @updatedAt
+  client              Client       @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  consortiumRef       Consortium?  @relation(fields: [consortiumId], references: [id], onDelete: SetNull)
+  providerRef         Provider?    @relation(fields: [providerId], references: [id], onDelete: SetNull)
+  periodRef           Period?      @relation(fields: [periodId], references: [id], onDelete: SetNull)
+  coeficienteRef      Coeficiente? @relation(fields: [coeficienteId], references: [id], onDelete: SetNull)
+  rubroRef            Rubro?       @relation(fields: [rubroId], references: [id], onDelete: SetNull)
+  receipt             Receipt?     @relation("InvoiceReceipt")
 
   @@unique([clientId, documentHash], map: "uq_invoice_document_hash")
   @@unique([clientId, boletaNumberNorm, providerTaxIdNorm, dueDateNorm, amountNorm], map: "uq_invoice_business_key")
   @@index([clientId, createdAt])
+  @@index([consortiumId, periodId])
+}
+
+model Coeficiente {
+  id          String    @id @default(cuid())
+  clientId    String
+  code        String
+  name        String
+  value       Decimal?  @db.Decimal(10, 6)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  client      Client    @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  invoices    Invoice[]
+
+  @@unique([clientId, code])
+  @@index([clientId])
+}
+
+model Rubro {
+  id          String    @id @default(cuid())
+  clientId    String
+  name        String
+  description String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  client      Client    @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  invoices    Invoice[]
+
+  @@unique([clientId, name])
+  @@index([clientId])
+}
+
+model Receipt {
+  id            String     @id @default(cuid())
+  clientId      String
+  consortiumId  String
+  providerId    String
+  periodId      String
+  invoiceId     String?    @unique
+  driveFileId   String
+  driveFileName String?
+  driveFileUrl  String?
+  amount        Decimal?   @db.Decimal(14, 2)
+  paymentDate   DateTime?
+  observation   String?
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+  client        Client     @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  consortium    Consortium @relation(fields: [consortiumId], references: [id], onDelete: Cascade)
+  provider      Provider   @relation(fields: [providerId], references: [id], onDelete: Cascade)
+  period        Period     @relation(fields: [periodId], references: [id], onDelete: Cascade)
+  invoice       Invoice?   @relation("InvoiceReceipt", fields: [invoiceId], references: [id], onDelete: SetNull)
+
+  @@index([clientId])
+  @@index([consortiumId, periodId])
+  @@index([providerId])
+  @@index([invoiceId])
 }
 
 model ProcessingLog {
@@ -151,9 +221,10 @@ model SchedulerState {
   totalTokens       Int       @default(0)
   quotaOpenAiStatus String    @default("unknown")
   quotaOpenAiNote   String?
-  quotaGeminiStatus String    @default("unknown")
-  quotaGeminiNote   String?
-  createdAt         DateTime  @default(now())
+  quotaGeminiStatus    String    @default("unknown")
+  quotaGeminiNote      String?
+  lastDirectorySyncAt  DateTime?
+  createdAt            DateTime  @default(now())
   updatedAt         DateTime  @updatedAt
   client            Client    @relation(fields: [clientId], references: [id], onDelete: Cascade)
 
@@ -178,48 +249,53 @@ model TokenUsage {
 }
 
 model Consortium {
-  id                   String               @id @default(cuid())
-  clientId             String
-  canonicalName        String
-  rawName              String
-  cuit                 String?
-  cutoffDay            Int                  @default(5)
+  id                     String               @id @default(cuid())
+  clientId               String
+  canonicalName          String
+  rawName                String
+  cuit                   String?
+  cutoffDay              Int                  @default(5)
   driveFolderProcessedId String?
-  isAutoCreated        Boolean              @default(false)
-  createdAt            DateTime             @default(now())
-  updatedAt            DateTime             @updatedAt
-  client               Client               @relation(fields: [clientId], references: [id], onDelete: Cascade)
-  periods              Period[]
-  consortiumProviders  ConsortiumProvider[]
-  invoices             Invoice[]
+  /// Nombres alternativos separados por | para matching con facturas de servicios.
+  /// Ej: "BROWN ALMTE AV 708|ALMTE BROWN 706" permite que Edesur encuentre
+  /// el consorcio aunque use una dirección distinta a la canónica.
+  aliases                String?
+  createdAt              DateTime             @default(now())
+  updatedAt              DateTime             @updatedAt
+  client                 Client               @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  periods                Period[]
+  consortiumProviders    ConsortiumProvider[]
+  invoices               Invoice[]
+  receipts               Receipt[]
 
   @@unique([clientId, canonicalName])
   @@index([clientId])
 }
 
 model Provider {
-  id                   String               @id @default(cuid())
-  clientId             String
-  canonicalName        String
-  cuit                 String?
-  isAutoCreated        Boolean              @default(false)
-  createdAt            DateTime             @default(now())
-  updatedAt            DateTime             @updatedAt
-  client               Client               @relation(fields: [clientId], references: [id], onDelete: Cascade)
-  consortiumProviders  ConsortiumProvider[]
-  invoices             Invoice[]
+  id                  String               @id @default(cuid())
+  clientId            String
+  canonicalName       String
+  cuit                String?
+  alias               String?
+  createdAt           DateTime             @default(now())
+  updatedAt           DateTime             @updatedAt
+  client              Client               @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  consortiumProviders ConsortiumProvider[]
+  invoices            Invoice[]
+  receipts            Receipt[]
 
   @@index([clientId, cuit])
   @@index([clientId])
 }
 
 model ConsortiumProvider {
-  id            String     @id @default(cuid())
-  consortiumId  String
-  providerId    String
-  createdAt     DateTime   @default(now())
-  consortium    Consortium @relation(fields: [consortiumId], references: [id], onDelete: Cascade)
-  provider      Provider   @relation(fields: [providerId], references: [id], onDelete: Cascade)
+  id           String     @id @default(cuid())
+  consortiumId String
+  providerId   String
+  createdAt    DateTime   @default(now())
+  consortium   Consortium @relation(fields: [consortiumId], references: [id], onDelete: Cascade)
+  provider     Provider   @relation(fields: [providerId], references: [id], onDelete: Cascade)
 
   @@unique([consortiumId, providerId])
 }
@@ -238,6 +314,7 @@ model Period {
   client        Client       @relation(fields: [clientId], references: [id], onDelete: Cascade)
   consortium    Consortium   @relation(fields: [consortiumId], references: [id], onDelete: Cascade)
   invoices      Invoice[]
+  receipts      Receipt[]
 
   @@unique([consortiumId, year, month])
   @@index([consortiumId, status])

@@ -28,6 +28,11 @@ export interface DriveFileDiagnostics {
   driveId?: string | null;
 }
 
+export interface DriveUploadedFile {
+  id: string;
+  webViewLink: string | null;
+}
+
 export class GoogleDriveService {
   private drive: drive_v3.Drive;
 
@@ -108,18 +113,117 @@ export class GoogleDriveService {
     return Buffer.from(response.data as ArrayBuffer);
   }
 
+  /**
+   * Sube un archivo a Drive en la carpeta indicada.
+   * Retorna el id y webViewLink del archivo creado.
+   */
+  async uploadFile(
+    buffer: Buffer,
+    fileName: string,
+    mimeType: string,
+    parentFolderId: string
+  ): Promise<DriveUploadedFile> {
+    const { Readable } = await import("stream");
+    const stream = Readable.from(buffer);
+
+    const response = await this.drive.files.create({
+      requestBody: {
+        name: fileName,
+        parents: [parentFolderId],
+      },
+      media: {
+        mimeType,
+        body: stream,
+      },
+      fields: "id,webViewLink",
+      supportsAllDrives: true,
+    });
+
+    return {
+      id: response.data.id ?? "",
+      webViewLink: response.data.webViewLink ?? null,
+    };
+  }
+
+  /**
+   * Busca una subcarpeta por nombre dentro de un padre.
+   * Si no existe, la crea. Retorna el ID de la carpeta.
+   */
+  async getOrCreateFolder(folderName: string, parentFolderId: string): Promise<string> {
+    // Buscar carpeta existente
+    const q = [
+      `'${parentFolderId}' in parents`,
+      `name = '${folderName.replace(/'/g, "\\'")}'`,
+      "mimeType = 'application/vnd.google-apps.folder'",
+      "trashed = false",
+    ].join(" and ");
+
+    const existing = await this.listFiles({
+      q,
+      fields: "nextPageToken,files(id,name)",
+    });
+
+    if (existing.length > 0 && existing[0].id) {
+      return existing[0].id;
+    }
+
+    // Crear si no existe
+    const created = await this.drive.files.create({
+      requestBody: {
+        name: folderName,
+        mimeType: "application/vnd.google-apps.folder",
+        parents: [parentFolderId],
+      },
+      fields: "id",
+      supportsAllDrives: true,
+    });
+
+    if (!created.data.id) {
+      throw new Error(`No se pudo crear la carpeta "${folderName}" en Drive`);
+    }
+
+    return created.data.id;
+  }
+
+  /**
+   * Moves a file from one folder to another.
+   */
+  async moveFileToFolder(
+    fileId: string,
+    fromFolderId: string,
+    toFolderId: string
+  ): Promise<void> {
+    await this.drive.files.update({
+      fileId,
+      addParents: toFolderId,
+      removeParents: fromFolderId,
+      fields: "id, parents",
+      supportsAllDrives: true,
+    });
+  }
+
   async moveFileToScanned(
     fileId: string,
     pendingFolderId: string = env.GOOGLE_DRIVE_PENDING_FOLDER_ID,
     scannedFolderId: string = env.GOOGLE_DRIVE_SCANNED_FOLDER_ID
   ): Promise<void> {
-    await this.drive.files.update({
-      fileId,
-      addParents: scannedFolderId,
-      removeParents: pendingFolderId,
-      fields: "id, parents",
-      supportsAllDrives: true,
-    });
+    await this.moveFileToFolder(fileId, pendingFolderId, scannedFolderId);
+  }
+
+  async moveFileToUnassigned(
+    fileId: string,
+    pendingFolderId: string,
+    unassignedFolderId: string
+  ): Promise<void> {
+    await this.moveFileToFolder(fileId, pendingFolderId, unassignedFolderId);
+  }
+
+  async moveFileToFailed(
+    fileId: string,
+    pendingFolderId: string,
+    failedFolderId: string
+  ): Promise<void> {
+    await this.moveFileToFolder(fileId, pendingFolderId, failedFolderId);
   }
 
   async getFileDiagnostics(fileId: string): Promise<DriveFileDiagnostics> {

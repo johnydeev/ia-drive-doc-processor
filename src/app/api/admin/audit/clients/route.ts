@@ -4,19 +4,13 @@ import { getPrismaClient } from "@/lib/prisma";
 
 export async function GET(request: Request) {
   const auth = requireAdminSession(request);
-  if (auth.error) {
-    return auth.error;
-  }
+  if (auth.error) return auth.error;
 
   try {
     const prisma = getPrismaClient();
     const clients = await prisma.client.findMany({
-      where: {
-        role: "CLIENT",
-      },
-      orderBy: {
-        createdAt: "asc",
-      },
+      where: { role: "CLIENT" },
+      orderBy: { createdAt: "asc" },
       select: {
         id: true,
         name: true,
@@ -34,6 +28,9 @@ export async function GET(request: Request) {
             quotaGeminiStatus: true,
             quotaOpenAiStatus: true,
           },
+        },
+        _count: {
+          select: { consortiums: true },
         },
       },
     });
@@ -61,15 +58,13 @@ export async function GET(request: Request) {
             gemini: state?.quotaGeminiStatus ?? "unknown",
             openai: state?.quotaOpenAiStatus ?? "unknown",
           },
+          consortiumCount: client._count.consortiums,
         };
       }),
     });
   } catch (error) {
     return NextResponse.json(
-      {
-        ok: false,
-        error: error instanceof Error ? error.message : "Unknown error",
-      },
+      { ok: false, error: error instanceof Error ? error.message : "Unknown error" },
       { status: 500 }
     );
   }

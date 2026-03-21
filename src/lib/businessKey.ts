@@ -15,19 +15,53 @@ export function normalizeBusinessText(value: unknown): string {
   return String(value).trim().toLowerCase();
 }
 
+/**
+ * Normaliza un monto a string numérico con 2 decimales para comparación.
+ *
+ * Soporta todos los formatos que puede recibir:
+ *   - número: 118000 → "118000.00"
+ *   - es-AR texto: "$ 118.000,00" → "118000.00"
+ *   - plano: "118000" → "118000.00"
+ *   - en-US: "$ 118,000.00" → "118000.00"
+ */
 export function normalizeBusinessAmount(value: unknown): string {
   if (value === null || value === undefined) {
     return "";
   }
 
-  const numeric = String(value).replace(/[^\d.,-]/g, "").replace(/,/g, ".").trim();
-  const parsed = Number.parseFloat(numeric);
-
-  if (!Number.isFinite(parsed)) {
-    return normalizeBusinessText(value);
+  // Si ya es número, formatear directo
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value.toFixed(2) : "";
   }
 
-  return parsed.toFixed(2);
+  const raw = String(value).trim();
+  if (!raw) return "";
+
+  // Quitar símbolo de moneda y espacios
+  const stripped = raw.replace(/\$/g, "").trim();
+
+  // Detectar formato es-AR: tiene punto como separador de miles y coma como decimal
+  // Ejemplo: "118.000,00" o "1.550.550,00"
+  const esArPattern = /^[\d.]+,\d{1,2}$/;
+  if (esArPattern.test(stripped)) {
+    // Quitar puntos de miles, reemplazar coma decimal por punto
+    const normalized = stripped.replace(/\./g, "").replace(",", ".");
+    const parsed = Number.parseFloat(normalized);
+    return Number.isFinite(parsed) ? parsed.toFixed(2) : "";
+  }
+
+  // Detectar formato en-US: tiene coma como separador de miles y punto como decimal
+  // Ejemplo: "118,000.00"
+  const enUsPattern = /^[\d,]+\.\d{1,2}$/;
+  if (enUsPattern.test(stripped)) {
+    const normalized = stripped.replace(/,/g, "");
+    const parsed = Number.parseFloat(normalized);
+    return Number.isFinite(parsed) ? parsed.toFixed(2) : "";
+  }
+
+  // Formato plano sin separadores: "118000" o "118000.50"
+  const parsed = Number.parseFloat(stripped.replace(/,/g, ""));
+  return Number.isFinite(parsed) ? parsed.toFixed(2) : normalizeBusinessText(value);
 }
 
 export function normalizeBusinessDueDate(value: unknown): string {

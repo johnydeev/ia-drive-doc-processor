@@ -1,223 +1,176 @@
-import { loadEnv } from "@/lib/loadEnv";
-import type { ProcessingClient } from "@/types/client.types";
+import { env } from "@/config/env";
+import { parseProcessIntervalMinutes } from "@/jobs/runProcessingCycle";
+import { processSingleDriveFileJob } from "@/jobs/processPendingDocuments.job";
+import { getPrismaClient } from "@/lib/prisma";
+import {
+  resolveAiConfig,
+  resolveGoogleConfig,
+  resolveMapping,
+  resolveSheetName,
+  resolveFolders,
+  validateClientProcessingConfig,
+} from "@/lib/clientProcessingConfig";
+import { ProcessingPersistenceService } from "@/services/processingPersistence.service";
+import type { ClientDriveFolders, ProcessingClient } from "@/types/client.types";
 import type { ProcessJobSummary } from "@/types/process.types";
 
 const POLL_INTERVAL_MS = 2000;
+const intervalMinutes = parseProcessIntervalMinutes(env.PROCESS_INTERVAL_MINUTES);
+const persistence = new ProcessingPersistenceService();
 
 async function sleep(ms: number): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function runWorker(): Promise<void> {
-  loadEnv();
+function mapClient(row: {
+  id: string;
+  name: string;
+  isActive: boolean;
+  driveFoldersJson: unknown;
+  googleConfigJson: unknown;
+  extractionConfigJson: unknown;
+}): ProcessingClient {
+  return {
+    id: row.id,
+    name: row.name,
+    isActive: row.isActive,
+    driveFoldersJson: (row.driveFoldersJson as ClientDriveFolders | null | undefined) ?? null,
+    googleConfigJson: (row.googleConfigJson as ProcessingClient["googleConfigJson"]) ?? null,
+    extractionConfigJson:
+      (row.extractionConfigJson as ProcessingClient["extractionConfigJson"]) ?? null,
+  };
+}
 
-  const [
-    envModule,
-    runCycleModule,
-    processPendingModule,
-    prismaModule,
-    processingConfigModule,
-    persistenceModule,
-  ] = await Promise.all([
-    import("@/config/env"),
-    import("@/jobs/runProcessingCycle"),
-    import("@/jobs/processPendingDocuments.job"),
-    import("@/lib/prisma"),
-    import("@/lib/clientProcessingConfig"),
-    import("@/services/processingPersistence.service"),
-  ]);
+async function claimNextJob() {
+  const prisma = getPrismaClient();
+  const job = await prisma.processingJob.findFirst({
+    where: { status: "PENDING" },
+    orderBy: { createdAt: "asc" },
+  });
 
-  const { env } = envModule as typeof import("@/config/env");
-  const { parseProcessIntervalMinutes } = runCycleModule as typeof import("@/jobs/runProcessingCycle");
-  const { processSingleDriveFileJob } =
-    processPendingModule as typeof import("@/jobs/processPendingDocuments.job");
-  const { getPrismaClient } = prismaModule as typeof import("@/lib/prisma");
-  const {
-    resolveAiConfig,
-    resolveGoogleConfig,
-    resolveMapping,
-    resolveSheetName,
-    validateClientProcessingConfig,
-  } = processingConfigModule as typeof import("@/lib/clientProcessingConfig");
-  const { ProcessingPersistenceService } =
-    persistenceModule as typeof import("@/services/processingPersistence.service");
+  if (!job) return null;
 
-  const persistence = new ProcessingPersistenceService();
+  const now = new Date();
+  const updated = await prisma.processingJob.updateMany({
+    where: { id: job.id, status: "PENDING" },
+    data: { status: "PROCESSING", startedAt: now },
+  });
 
-  function mapClient(row: {
-    id: string;
-    name: string;
-    isActive: boolean;
-    driveFolderPending: string | null;
-    driveFolderProcessed: string | null;
-    googleConfigJson: unknown;
-    extractionConfigJson: unknown;
-  }): ProcessingClient {
-    return {
-      id: row.id,
-      name: row.name,
-      isActive: row.isActive,
-      driveFolderPending: row.driveFolderPending ?? "",
-      driveFolderProcessed: row.driveFolderProcessed ?? "",
-      googleConfigJson: (row.googleConfigJson as ProcessingClient["googleConfigJson"]) ?? null,
-      extractionConfigJson:
-        (row.extractionConfigJson as Record<string, unknown> | null | undefined) ?? null,
-    };
+  if (updated.count === 0) return null;
+
+  return { ...job, status: "PROCESSING", startedAt: now };
+}
+
+async function finalizeJob(
+  jobId: string,
+  attempts: number,
+  maxAttempts: number,
+  startedAt: Date | null,
+  success: boolean,
+  errorMessage?: string
+): Promise<void> {
+  const prisma = getPrismaClient();
+  const now = new Date();
+
+  if (success) {
+    await prisma.processingJob.update({
+      where: { id: jobId },
+      data: { status: "COMPLETED", finishedAt: now, errorMessage: null },
+    });
+    return;
   }
 
-  async function claimNextJob() {
-    const prisma = getPrismaClient();
-    const job = await prisma.processingJob.findFirst({
-      where: { status: "PENDING" },
-      orderBy: { createdAt: "asc" },
-    });
+  const nextAttempts = attempts + 1;
+  const shouldFail = nextAttempts >= maxAttempts;
 
-    if (!job) {
-      return null;
-    }
+  await prisma.processingJob.update({
+    where: { id: jobId },
+    data: {
+      status: shouldFail ? "FAILED" : "PENDING",
+      attempts: nextAttempts,
+      errorMessage: errorMessage ?? "Unknown error",
+      finishedAt: shouldFail ? now : null,
+      startedAt: shouldFail ? startedAt : null,
+    },
+  });
+}
 
-    const now = new Date();
-    const updated = await prisma.processingJob.updateMany({
-      where: { id: job.id, status: "PENDING" },
-      data: { status: "PROCESSING", startedAt: now },
-    });
+async function handleJob(job: {
+  id: string;
+  clientId: string;
+  driveFileId: string;
+  driveFileName: string | null;
+  attempts: number;
+  maxAttempts: number;
+  startedAt: Date | null;
+}): Promise<void> {
+  const prisma = getPrismaClient();
 
-    if (updated.count === 0) {
-      return null;
-    }
+  const clientRow = await prisma.client.findUnique({
+    where: { id: job.clientId },
+    select: {
+      id: true,
+      name: true,
+      isActive: true,
+      driveFoldersJson: true,
+      googleConfigJson: true,
+      extractionConfigJson: true,
+    },
+  });
 
-    return { ...job, status: "PROCESSING", startedAt: now };
+  if (!clientRow) {
+    await finalizeJob(job.id, job.attempts, job.maxAttempts, job.startedAt, false, "Client not found");
+    return;
   }
 
-  async function handleJob(job: {
-    id: string;
-    clientId: string;
-    driveFileId: string;
-    driveFileName: string | null;
-    attempts: number;
-    maxAttempts: number;
-    startedAt: Date | null;
-  }) {
-    const prisma = getPrismaClient();
+  const client = mapClient(clientRow);
 
-    const clientRow = await prisma.client.findUnique({
-      where: { id: job.clientId },
-      select: {
-        id: true,
-        name: true,
-        isActive: true,
-        driveFolderPending: true,
-        driveFolderProcessed: true,
-        googleConfigJson: true,
-        extractionConfigJson: true,
+  if (!client.isActive) {
+    await finalizeJob(job.id, job.attempts, job.maxAttempts, job.startedAt, false, "Client inactive");
+    return;
+  }
+
+  let errorMessage: string | undefined;
+  let summary: ProcessJobSummary | null = null;
+
+  try {
+    const sheetName = resolveSheetName(client);
+    const mapping = resolveMapping(client);
+    const googleConfig = resolveGoogleConfig(client);
+    const folders = resolveFolders(client);
+    validateClientProcessingConfig(client, sheetName, googleConfig);
+
+    summary = await processSingleDriveFileJob(
+      {
+        clientId: client.id,
+        clientName: client.name,
+        sheetName,
+        mapping,
+        drivePendingFolderId: folders.pending,
+        driveScannedFolderId: folders.scanned,
+        driveUnassignedFolderId: folders.unassigned,
+        driveFailedFolderId: folders.failed,
+        googleConfig,
+        aiConfig: resolveAiConfig(client),
       },
-    });
-
-    if (!clientRow) {
-      await prisma.processingJob.update({
-        where: { id: job.id },
-        data: {
-          status: "FAILED",
-          finishedAt: new Date(),
-          errorMessage: "Client not found",
-        },
-      });
-      return;
-    }
-
-    const client = mapClient(clientRow);
-    if (!client.isActive) {
-      await prisma.processingJob.update({
-        where: { id: job.id },
-        data: {
-          status: "FAILED",
-          finishedAt: new Date(),
-          errorMessage: "Client inactive",
-        },
-      });
-      return;
-    }
-
-    let errorMessage: string | undefined;
-    let summary: ProcessJobSummary | null = null;
-
-    try {
-      const sheetName = resolveSheetName(client);
-      const mapping = resolveMapping(client);
-      const googleConfig = resolveGoogleConfig(client);
-      validateClientProcessingConfig(client, sheetName, googleConfig);
-
-      summary = await processSingleDriveFileJob(
-        {
-          clientId: client.id,
-          clientName: client.name,
-          sheetName,
-          mapping,
-          drivePendingFolderId: client.driveFolderPending,
-          driveScannedFolderId: client.driveFolderProcessed,
-          googleConfig,
-          aiConfig: resolveAiConfig(client),
-        },
-        {
-          id: job.driveFileId,
-          name: job.driveFileName ?? job.driveFileId,
-        }
-      );
-
-      if (summary.failed > 0) {
-        errorMessage = summary.errors[0]?.error ?? "Job failed";
+      {
+        id: job.driveFileId,
+        name: job.driveFileName ?? job.driveFileId,
       }
-    } catch (error) {
-      errorMessage = error instanceof Error ? error.message : "Unknown error";
-    }
+    );
 
+    if (summary.failed > 0) {
+      errorMessage = summary.errors[0]?.error ?? "Job failed";
+    }
+  } catch (error) {
+    errorMessage = error instanceof Error ? error.message : "Unknown error";
+  }
+
+  const success = summary !== null && summary.failed === 0;
+  await finalizeJob(job.id, job.attempts, job.maxAttempts, job.startedAt, success, errorMessage);
+
+  if (summary) {
     const now = new Date();
-    const intervalMinutes = parseProcessIntervalMinutes(env.PROCESS_INTERVAL_MINUTES);
-
-    if (!summary) {
-      const nextAttempts = job.attempts + 1;
-      const shouldFail = nextAttempts >= job.maxAttempts;
-
-      await prisma.processingJob.update({
-        where: { id: job.id },
-        data: {
-          status: shouldFail ? "FAILED" : "PENDING",
-          attempts: nextAttempts,
-          errorMessage: errorMessage ?? "Unknown error",
-          finishedAt: shouldFail ? now : null,
-          startedAt: shouldFail ? job.startedAt : null,
-        },
-      });
-
-      return;
-    }
-
-    const success = summary.failed === 0;
-    if (success) {
-      await prisma.processingJob.update({
-        where: { id: job.id },
-        data: {
-          status: "COMPLETED",
-          finishedAt: now,
-          errorMessage: null,
-        },
-      });
-    } else {
-      const nextAttempts = job.attempts + 1;
-      const shouldFail = nextAttempts >= job.maxAttempts;
-
-      await prisma.processingJob.update({
-        where: { id: job.id },
-        data: {
-          status: shouldFail ? "FAILED" : "PENDING",
-          attempts: nextAttempts,
-          errorMessage: errorMessage ?? "Job failed",
-          finishedAt: shouldFail ? now : null,
-          startedAt: shouldFail ? job.startedAt : null,
-        },
-      });
-    }
-
     await persistence.recordClientRun({
       clientId: client.id,
       trigger: "schedule",
@@ -229,7 +182,9 @@ async function runWorker(): Promise<void> {
       errorMessage: success ? undefined : errorMessage,
     });
   }
+}
 
+async function runWorker(): Promise<void> {
   console.log("[job-worker] starting");
 
   while (true) {

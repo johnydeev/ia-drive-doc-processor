@@ -2,7 +2,7 @@ import { Prisma, SchedulerState } from "@prisma/client";
 import {
   type TokenUsageSummary,
 } from "@/types/aiUsage.types";
-import { createEmptyTokenUsageSummary } from "@/types/createEmptyTokenUsageSummary";
+import { createEmptyTokenUsageSummary } from "@/lib/createEmptyTokenUsageSummary";
 import { ProcessJobErrorEntry, ProcessJobSummary } from "@/types/process.types";
 import {
   ProviderQuotaState,
@@ -202,10 +202,7 @@ export class SchedulerControlService {
     byModel: Record<string, number>;
   }> {
     if (clientIds.length === 0) {
-      return {
-        byProvider: {},
-        byModel: {},
-      };
+      return { byProvider: {}, byModel: {} };
     }
 
     const prisma = getPrismaClient();
@@ -213,22 +210,13 @@ export class SchedulerControlService {
     const [providerRows, modelRows] = await Promise.all([
       prisma.tokenUsage.groupBy({
         by: ["provider"],
-        where: {
-          clientId: { in: clientIds },
-        },
-        _sum: {
-          totalTokens: true,
-        },
+        where: { clientId: { in: clientIds } },
+        _sum: { totalTokens: true },
       }),
       prisma.tokenUsage.groupBy({
         by: ["model"],
-        where: {
-          clientId: { in: clientIds },
-          model: { not: null },
-        },
-        _sum: {
-          totalTokens: true,
-        },
+        where: { clientId: { in: clientIds }, model: { not: null } },
+        _sum: { totalTokens: true },
       }),
     ]);
 
@@ -240,9 +228,7 @@ export class SchedulerControlService {
     const byModel: Record<string, number> = {};
     for (const row of modelRows) {
       const model = row.model;
-      if (!model) {
-        continue;
-      }
+      if (!model) continue;
       byModel[model] = Number(row._sum.totalTokens ?? 0);
     }
 
@@ -287,10 +273,7 @@ export class SchedulerControlService {
     }
 
     const latestState = states.reduce((latest, current) => {
-      if (!latest) {
-        return current;
-      }
-
+      if (!latest) return current;
       return current.updatedAt > latest.updatedAt ? current : latest;
     }, states[0] as SchedulerState);
 
@@ -304,6 +287,7 @@ export class SchedulerControlService {
       lastHeartbeatAt: maxDate(states.map((state) => state.lastHeartbeatAt)),
       lastError: latestError(states),
       lastSummary: aggregateLastSummary(states),
+      lastDirectorySyncAt: maxDate(states.map((s) => s.lastDirectorySyncAt)),
       totals,
       quota: {
         openai: combineQuota(states, "quotaOpenAiStatus", "quotaOpenAiNote"),
@@ -331,9 +315,7 @@ export class SchedulerControlService {
 
     for (const item of summary.errors) {
       const lowerError = item.error.toLowerCase();
-      if (!isQuotaLikeError(lowerError)) {
-        continue;
-      }
+      if (!isQuotaLikeError(lowerError)) continue;
 
       if (lowerError.includes("gemini") || lowerError.includes("generativelanguage")) {
         patch.quotaGeminiStatus = "limited";
@@ -390,6 +372,7 @@ function createDefaultState(intervalMinutes: number): SchedulerRuntimeState {
     lastHeartbeatAt: null,
     lastError: null,
     lastSummary: null,
+    lastDirectorySyncAt: null,
     totals: {
       runs: 0,
       totalFound: 0,
@@ -400,26 +383,15 @@ function createDefaultState(intervalMinutes: number): SchedulerRuntimeState {
       tokenUsage: createEmptyTokenUsageSummary(),
     },
     quota: {
-      openai: {
-        status: "unknown",
-        note: DEFAULT_QUOTA_NOTE,
-        lastUpdatedAt: null,
-      },
-      gemini: {
-        status: "unknown",
-        note: DEFAULT_QUOTA_NOTE,
-        lastUpdatedAt: null,
-      },
+      openai: { status: "unknown", note: DEFAULT_QUOTA_NOTE, lastUpdatedAt: null },
+      gemini: { status: "unknown", note: DEFAULT_QUOTA_NOTE, lastUpdatedAt: null },
     },
     updatedAt: now,
   };
 }
 
 function toTrigger(value: string | null): SchedulerTrigger | null {
-  if (value === "manual" || value === "schedule") {
-    return value;
-  }
-
+  if (value === "manual" || value === "schedule") return value;
   return null;
 }
 
@@ -427,13 +399,8 @@ function maxDate(values: Array<Date | null>): string | null {
   let current: Date | null = null;
 
   for (const value of values) {
-    if (!value) {
-      continue;
-    }
-
-    if (!current || value > current) {
-      current = value;
-    }
+    if (!value) continue;
+    if (!current || value > current) current = value;
   }
 
   return current ? current.toISOString() : null;
@@ -441,9 +408,7 @@ function maxDate(values: Array<Date | null>): string | null {
 
 function latestError(states: SchedulerState[]): string | null {
   const withError = states.filter((state) => Boolean(state.lastError));
-  if (withError.length === 0) {
-    return null;
-  }
+  if (withError.length === 0) return null;
 
   const latest = withError.reduce((acc, current) => {
     return current.updatedAt > acc.updatedAt ? current : acc;
@@ -470,10 +435,7 @@ function combineQuota(
       return typeof note === "string" && note.trim().length > 0;
     })
     .reduce<SchedulerState | null>((acc, current) => {
-      if (!acc) {
-        return current;
-      }
-
+      if (!acc) return current;
       return current.updatedAt > acc.updatedAt ? current : acc;
     }, null);
 
@@ -485,10 +447,7 @@ function combineQuota(
 }
 
 function normalizeQuotaStatus(value: string | null): QuotaStatus {
-  if (value === "ok" || value === "limited" || value === "unknown") {
-    return value;
-  }
-
+  if (value === "ok" || value === "limited" || value === "unknown") return value;
   return "unknown";
 }
 
@@ -497,15 +456,15 @@ function aggregateLastSummary(states: SchedulerState[]): ProcessJobSummary | nul
     .map((state) => toSummary(state.lastSummaryJson))
     .filter((summary): summary is ProcessJobSummary => Boolean(summary));
 
-  if (summaries.length === 0) {
-    return null;
-  }
+  if (summaries.length === 0) return null;
 
+  // FIX: agregado campo unassigned requerido por ProcessJobSummary
   const aggregate: ProcessJobSummary = {
     totalFound: 0,
     processed: 0,
     skipped: 0,
     failed: 0,
+    unassigned: 0,
     duplicatesDetected: 0,
     errors: [],
     tokenUsage: createEmptyTokenUsageSummary(),
@@ -517,6 +476,7 @@ function aggregateLastSummary(states: SchedulerState[]): ProcessJobSummary | nul
     aggregate.processed += summary.processed;
     aggregate.skipped += summary.skipped;
     aggregate.failed += summary.failed;
+    aggregate.unassigned += summary.unassigned;
     aggregate.duplicatesDetected += summary.duplicatesDetected;
     aggregate.errors.push(...summary.errors);
     aggregate.tokenUsage.inputTokens += summary.tokenUsage.inputTokens;
@@ -539,9 +499,7 @@ function aggregateLastSummary(states: SchedulerState[]): ProcessJobSummary | nul
 }
 
 function toSummary(value: Prisma.JsonValue | null): ProcessJobSummary | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return null;
-  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
 
   const source = value as Record<string, unknown>;
   const tokenUsageSource =
@@ -549,6 +507,7 @@ function toSummary(value: Prisma.JsonValue | null): ProcessJobSummary | null {
       ? (source.tokenUsage as Record<string, unknown>)
       : {};
 
+  // FIX: agregado campo unassigned requerido por ProcessJobSummary
   return {
     clientId: asString(source.clientId),
     clientName: asString(source.clientName),
@@ -556,6 +515,7 @@ function toSummary(value: Prisma.JsonValue | null): ProcessJobSummary | null {
     processed: asNumber(source.processed),
     skipped: asNumber(source.skipped),
     failed: asNumber(source.failed),
+    unassigned: asNumber(source.unassigned),
     duplicatesDetected: asNumber(source.duplicatesDetected),
     errors: asErrorArray(source.errors),
     tokenUsage: {
@@ -578,16 +538,11 @@ function asNumber(value: unknown): number {
 }
 
 function asErrorArray(value: unknown): ProcessJobErrorEntry[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
+  if (!Array.isArray(value)) return [];
 
   return value
     .map((item) => {
-      if (!item || typeof item !== "object") {
-        return null;
-      }
-
+      if (!item || typeof item !== "object") return null;
       const row = item as Record<string, unknown>;
       return {
         fileId: typeof row.fileId === "string" ? row.fileId : "unknown",
@@ -599,9 +554,7 @@ function asErrorArray(value: unknown): ProcessJobErrorEntry[] {
 }
 
 function asNumberRecord(value: unknown): Record<string, number> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return {};
-  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
 
   const source = value as Record<string, unknown>;
   const result: Record<string, number> = {};

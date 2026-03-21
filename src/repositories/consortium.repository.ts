@@ -1,15 +1,18 @@
-import { Prisma, Consortium, Period } from "@prisma/client";
+import { Consortium, Period } from "@prisma/client";
 import { getPrismaClient } from "@/lib/prisma";
 
 export class ConsortiumRepository {
-  async findOrCreateByCanonicalName(
+  /**
+   * Busca un consorcio por nombre canónico. Solo lectura — nunca crea.
+   * Retorna null si no existe.
+   */
+  async findByCanonicalName(
     clientId: string,
-    canonicalName: string,
-    rawName: string
-  ): Promise<{ consortium: Consortium & { periods: Period[] }; created: boolean }> {
+    canonicalName: string
+  ): Promise<(Consortium & { periods: Period[] }) | null> {
     const prisma = getPrismaClient();
 
-    const existing = await prisma.consortium.findUnique({
+    return prisma.consortium.findUnique({
       where: {
         clientId_canonicalName: {
           clientId,
@@ -18,46 +21,6 @@ export class ConsortiumRepository {
       },
       include: { periods: true },
     });
-
-    if (existing) {
-      return { consortium: existing, created: false };
-    }
-
-    const now = new Date();
-    const year = now.getFullYear();
-    const month = now.getMonth() + 1;
-
-    const created = await prisma.$transaction(async (tx) => {
-      const consortium = await tx.consortium.create({
-        data: {
-          clientId,
-          canonicalName,
-          rawName,
-          isAutoCreated: true,
-        },
-      });
-
-      await tx.period.create({
-        data: {
-          clientId,
-          consortiumId: consortium.id,
-          year,
-          month,
-          status: "ACTIVE",
-        },
-      });
-
-      return tx.consortium.findUnique({
-        where: { id: consortium.id },
-        include: { periods: true },
-      });
-    });
-
-    if (!created) {
-      throw new Error("Failed to create consortium");
-    }
-
-    return { consortium: created, created: true };
   }
 
   async findActivePeriod(consortiumId: string): Promise<Period | null> {
@@ -156,7 +119,6 @@ export class ConsortiumRepository {
           cuit: input.cuit ?? null,
           cutoffDay: input.cutoffDay ?? 5,
           driveFolderProcessedId: input.driveFolderProcessedId ?? null,
-          isAutoCreated: false,
         },
       });
 

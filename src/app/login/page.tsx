@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import { FormEvent, Suspense, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -15,12 +15,11 @@ function LoginForm() {
 
   const redirectTo = useMemo(() => {
     const next = searchParams.get("next");
-    if (!next || !next.startsWith("/")) {
-      return "/admin";
-    }
-
+    if (!next || !next.startsWith("/")) return "/admin";
     return next;
   }, [searchParams]);
+
+  const sessionExpired = searchParams.get("reason") === "session_expired";
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -30,13 +29,8 @@ function LoginForm() {
     try {
       const response = await fetch("/api/auth/login", {
         method: "POST",
-        headers: {
-          "content-type": "application/json",
-        },
-        body: JSON.stringify({
-          email,
-          password,
-        }),
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ email, password }),
       });
 
       const data = (await response.json()) as { ok?: boolean; error?: string };
@@ -59,13 +53,19 @@ function LoginForm() {
         <h1>Iniciar sesion</h1>
         <p className={styles.subtitle}>Ingresa con el usuario creado en Prisma.</p>
 
+        {sessionExpired && (
+          <p className={styles.sessionMsg}>
+            Tu sesión expiró. Volvé a ingresar para continuar.
+          </p>
+        )}
+
         <form className={styles.form} onSubmit={handleSubmit}>
           <label htmlFor="email">Email</label>
           <input
             id="email"
             type="email"
             value={email}
-            onChange={(event) => setEmail(event.target.value)}
+            onChange={(e) => setEmail(e.target.value)}
             required
           />
 
@@ -74,7 +74,7 @@ function LoginForm() {
             id="password"
             type="password"
             value={password}
-            onChange={(event) => setPassword(event.target.value)}
+            onChange={(e) => setPassword(e.target.value)}
             required
           />
 
@@ -96,4 +96,3 @@ export default function LoginPage() {
     </Suspense>
   );
 }
-

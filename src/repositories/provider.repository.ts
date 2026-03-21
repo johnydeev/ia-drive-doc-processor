@@ -2,34 +2,29 @@ import { Provider } from "@prisma/client";
 import { getPrismaClient } from "@/lib/prisma";
 
 export class ProviderRepository {
-  async findOrCreateByCuit(
+  /**
+   * Busca un proveedor por CUIT verificando que esté vinculado al consorcio indicado.
+   * Solo lectura — nunca crea. Retorna null si no existe o no está asignado.
+   */
+  async findByCuitInConsortium(
     clientId: string,
     cuit: string,
-    canonicalName?: string
-  ): Promise<{ provider: Provider; created: boolean }> {
+    consortiumId: string
+  ): Promise<Provider | null> {
     const prisma = getPrismaClient();
 
-    const existing = await prisma.provider.findFirst({
+    const link = await prisma.consortiumProvider.findFirst({
       where: {
-        clientId,
-        cuit,
+        consortiumId,
+        provider: {
+          clientId,
+          cuit,
+        },
       },
+      include: { provider: true },
     });
 
-    if (existing) {
-      return { provider: existing, created: false };
-    }
-
-    const created = await prisma.provider.create({
-      data: {
-        clientId,
-        cuit,
-        canonicalName: canonicalName?.trim() || cuit,
-        isAutoCreated: true,
-      },
-    });
-
-    return { provider: created, created: true };
+    return link?.provider ?? null;
   }
 
   async linkToConsortium(providerId: string, consortiumId: string): Promise<void> {

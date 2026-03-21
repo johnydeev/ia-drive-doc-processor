@@ -3,6 +3,7 @@ export interface ClientGoogleConfig {
   clientEmail: string;
   privateKey: string;
   sheetsId: string;
+  altaSheetsId?: string;
 }
 
 export interface ClientExtractionConfig {
@@ -15,12 +16,19 @@ export interface ClientExtractionConfig {
   [key: string]: unknown;
 }
 
+export interface ClientDriveFolders {
+  pending?: string | null;
+  scanned?: string | null;
+  unassigned?: string | null;
+  failed?: string | null;
+  receipts?: string | null;
+}
+
 export interface ProcessingClient {
   id: string;
   name: string;
   isActive: boolean;
-  driveFolderPending: string;
-  driveFolderProcessed: string;
+  driveFoldersJson?: ClientDriveFolders | null;
   googleConfigJson?: ClientGoogleConfig | null;
   extractionConfigJson?: ClientExtractionConfig | null;
 }

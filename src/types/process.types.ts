@@ -1,4 +1,4 @@
-﻿import { TokenUsageSummary } from "@/types/aiUsage.types";
+import { TokenUsageSummary } from "@/types/aiUsage.types";
 
 export interface ProcessJobErrorEntry {
   fileId: string;
@@ -13,6 +13,7 @@ export interface ProcessJobSummary {
   processed: number;
   skipped: number;
   failed: number;
+  unassigned: number;
   duplicatesDetected: number;
   errors: ProcessJobErrorEntry[];
   tokenUsage: TokenUsageSummary;

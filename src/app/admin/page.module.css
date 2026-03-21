@@ -1,4 +1,4 @@
-﻿.page {
+.page {
   min-height: 100vh;
   position: relative;
   background:
@@ -204,6 +204,24 @@
   display: grid;
   gap: 10px;
   margin-top: 14px;
+}
+
+/* ── Label de sección dentro del formulario ── */
+.formSectionLabel {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: #7a8fb5;
+  margin-top: 6px;
+  margin-bottom: 2px;
+  padding-left: 2px;
+  border-left: 2px solid rgba(91, 140, 247, 0.5);
+  padding-left: 8px;
+}
+
+.page[data-theme="light"] .formSectionLabel {
+  color: #4a6090;
+  border-left-color: rgba(58, 100, 200, 0.45);
 }
 
 .createClientSubmitWrap {
@@ -422,13 +440,8 @@
   color: #dce6ff;
 }
 
-.lastRun p {
-  color: #dce6ff;
-}
-
-.lastRun strong {
-  color: #f4f8ff;
-}
+.lastRun p { color: #dce6ff; }
+.lastRun strong { color: #f4f8ff; }
 
 .auditBlock {
   margin-top: 14px;
@@ -447,10 +460,7 @@
   margin-bottom: 10px;
 }
 
-.auditTableWrap {
-  overflow-x: auto;
-  overflow-y: visible;
-}
+.auditTableWrap { overflow-x: auto; overflow-y: visible; }
 
 .auditBody {
   min-height: 150px;
@@ -517,37 +527,19 @@
 }
 
 @media (max-width: 980px) {
-  .cards {
-    grid-template-columns: 1fr;
-  }
-
-  .summaryStrip {
-    grid-template-columns: 1fr 1fr;
-  }
+  .cards { grid-template-columns: 1fr; }
+  .summaryStrip { grid-template-columns: 1fr 1fr; }
 }
 
 @media (max-width: 620px) {
-  .panel {
-    padding: 16px;
-  }
-
-  .topBar h1 {
-    font-size: 28px;
-  }
-
-  .summaryStrip {
-    grid-template-columns: 1fr;
-  }
-
-  .card li {
-    flex-direction: column;
-  }
-
-  .formGrid {
-    grid-template-columns: 1fr;
-  }
+  .panel { padding: 16px; }
+  .topBar h1 { font-size: 28px; }
+  .summaryStrip { grid-template-columns: 1fr; }
+  .card li { flex-direction: column; }
+  .formGrid { grid-template-columns: 1fr; }
 }
 
+/* ── Light mode ── */
 .page[data-theme="light"] {
   background:
     radial-gradient(1200px 400px at 10% -10%, rgba(255, 206, 121, 0.35), transparent 60%),
@@ -569,33 +561,21 @@
   box-shadow: 0 14px 36px rgba(28, 44, 78, 0.18);
 }
 
-.page[data-theme="light"] .eyebrow {
-  color: #3f5f9b;
-}
-
-.page[data-theme="light"] .caption {
-  color: #4f6388;
-}
+.page[data-theme="light"] .eyebrow { color: #3f5f9b; }
+.page[data-theme="light"] .caption { color: #4f6388; }
 
 .page[data-theme="light"] .tokenBox {
   border: 1px solid rgba(35, 58, 104, 0.2);
   background: rgba(255, 255, 255, 0.72);
 }
-
-.page[data-theme="light"] .tokenBox label {
-  color: #3f5f9b;
-}
+.page[data-theme="light"] .tokenBox label { color: #3f5f9b; }
 
 .page[data-theme="light"] .collapseToggle {
   background: #f5f8ff;
   border: 1px solid rgba(35, 58, 104, 0.28);
   color: #25375c;
 }
-
-.page[data-theme="light"] .collapseTitle {
-  color: #3f5f9b;
-}
-
+.page[data-theme="light"] .collapseTitle { color: #3f5f9b; }
 .page[data-theme="light"] .collapseChevron {
   border-right-color: #25375c;
   border-bottom-color: #25375c;
@@ -614,11 +594,7 @@
   color: #25375c;
   border: 1px solid rgba(35, 58, 104, 0.35);
 }
-
-.page[data-theme="light"] .secondaryBtn {
-  background: #d7e3ff;
-  color: #142443;
-}
+.page[data-theme="light"] .secondaryBtn { background: #d7e3ff; color: #142443; }
 
 .page[data-theme="light"] .card,
 .page[data-theme="light"] .lastRun,
@@ -629,18 +605,12 @@
 
 .page[data-theme="light"] .card h2,
 .page[data-theme="light"] .lastRun h2,
-.page[data-theme="light"] .auditBlock h2 {
-  color: #37558f;
-}
+.page[data-theme="light"] .auditBlock h2 { color: #37558f; }
 
 .page[data-theme="light"] .card li,
-.page[data-theme="light"] .auditTable td {
-  color: #273654;
-}
+.page[data-theme="light"] .auditTable td { color: #273654; }
 
-.page[data-theme="light"] .noteLine {
-  color: #5b709b;
-}
+.page[data-theme="light"] .noteLine { color: #5b709b; }
 
 .page[data-theme="light"] .metricPill {
   color: #2d456f;
@@ -648,60 +618,18 @@
   background: rgba(219, 232, 255, 0.86);
 }
 
-.page[data-theme="light"] .badgeOn {
-  color: #1f6b3f;
-  border-color: rgba(62, 176, 104, 0.35);
-  background: rgba(201, 245, 219, 0.92);
-}
+.page[data-theme="light"] .badgeOn { color: #1f6b3f; border-color: rgba(62,176,104,0.35); background: rgba(201,245,219,0.92); }
+.page[data-theme="light"] .badgeOff { color: #8a3131; border-color: rgba(208,88,88,0.34); background: rgba(252,219,219,0.92); }
+.page[data-theme="light"] .badgeRun { color: #255e84; border-color: rgba(57,142,194,0.34); background: rgba(213,239,255,0.9); }
+.page[data-theme="light"] .badgeIdle { color: #554783; border-color: rgba(120,104,179,0.32); background: rgba(231,224,255,0.9); }
+.page[data-theme="light"] .badgeOk { color: #1f6b3f; border-color: rgba(62,176,104,0.35); background: rgba(201,245,219,0.92); }
+.page[data-theme="light"] .badgeLimited { color: #8f5c1d; border-color: rgba(199,141,58,0.35); background: rgba(255,235,209,0.93); }
+.page[data-theme="light"] .badgeUnknown { color: #4a5f8a; border-color: rgba(112,132,182,0.3); background: rgba(228,236,255,0.9); }
 
-.page[data-theme="light"] .badgeOff {
-  color: #8a3131;
-  border-color: rgba(208, 88, 88, 0.34);
-  background: rgba(252, 219, 219, 0.92);
-}
-
-.page[data-theme="light"] .badgeRun {
-  color: #255e84;
-  border-color: rgba(57, 142, 194, 0.34);
-  background: rgba(213, 239, 255, 0.9);
-}
-
-.page[data-theme="light"] .badgeIdle {
-  color: #554783;
-  border-color: rgba(120, 104, 179, 0.32);
-  background: rgba(231, 224, 255, 0.9);
-}
-
-.page[data-theme="light"] .badgeOk {
-  color: #1f6b3f;
-  border-color: rgba(62, 176, 104, 0.35);
-  background: rgba(201, 245, 219, 0.92);
-}
-
-.page[data-theme="light"] .badgeLimited {
-  color: #8f5c1d;
-  border-color: rgba(199, 141, 58, 0.35);
-  background: rgba(255, 235, 209, 0.93);
-}
-
-.page[data-theme="light"] .badgeUnknown {
-  color: #4a5f8a;
-  border-color: rgba(112, 132, 182, 0.3);
-  background: rgba(228, 236, 255, 0.9);
-}
-
-.page[data-theme="light"] .updateHint {
-  color: #5b709b;
-}
-
-.page[data-theme="light"] .auditTable th {
-  color: #3f5f9b;
-}
-
+.page[data-theme="light"] .updateHint { color: #5b709b; }
+.page[data-theme="light"] .auditTable th { color: #3f5f9b; }
 .page[data-theme="light"] .auditTable th,
-.page[data-theme="light"] .auditTable td {
-  border-bottom: 1px solid rgba(35, 58, 104, 0.18);
-}
+.page[data-theme="light"] .auditTable td { border-bottom: 1px solid rgba(35, 58, 104, 0.18); }
 
 .page[data-theme="light"] .summaryStrip span {
   border: 1px solid rgba(35, 58, 104, 0.2);
@@ -709,18 +637,9 @@
   color: #223557;
 }
 
-.page[data-theme="light"] .lastRun p {
-  color: #314569;
-}
-
-.page[data-theme="light"] .lastRun strong {
-  color: #1f2f4e;
-}
-
-.page[data-theme="light"] .errorList p {
-  border-left: 2px solid #d25252;
-  color: #6d2a2a;
-}
+.page[data-theme="light"] .lastRun p { color: #314569; }
+.page[data-theme="light"] .lastRun strong { color: #1f2f4e; }
+.page[data-theme="light"] .errorList p { border-left: 2px solid #d25252; color: #6d2a2a; }
 
 .page[data-theme="light"] .error {
   border: 1px solid rgba(208, 88, 88, 0.45);

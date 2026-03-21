@@ -27,6 +27,16 @@
   font-size: 14px;
 }
 
+.sessionMsg {
+  margin: 0 0 14px 0;
+  border: 1px solid rgba(255, 186, 103, 0.45);
+  background: rgba(120, 80, 20, 0.3);
+  color: #ffe4b0;
+  border-radius: 8px;
+  padding: 9px 12px;
+  font-size: 13px;
+}
+
 .form {
   display: grid;
   gap: 10px;

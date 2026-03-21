@@ -1,15 +1,12 @@
 import { Client } from "@prisma/client";
 import { getPrismaClient } from "@/lib/prisma";
-import { ClientGoogleConfig, ProcessingClient } from "@/types/client.types";
+import { ClientDriveFolders, ClientGoogleConfig, ProcessingClient } from "@/types/client.types";
 
 export class ClientRepository {
   async listActiveClients(): Promise<ProcessingClient[]> {
     const prisma = getPrismaClient();
     const rows = await prisma.client.findMany({
-      where: {
-        isActive: true,
-        role: "CLIENT",
-      },
+      where: { isActive: true, role: "CLIENT" },
       orderBy: { createdAt: "asc" },
     });
 
@@ -21,8 +18,7 @@ export class ClientRepository {
       id: row.id,
       name: row.name,
       isActive: row.isActive,
-      driveFolderPending: row.driveFolderPending ?? "",
-      driveFolderProcessed: row.driveFolderProcessed ?? "",
+      driveFoldersJson: (row.driveFoldersJson as ClientDriveFolders | null | undefined) ?? null,
       googleConfigJson: (row.googleConfigJson as ClientGoogleConfig | null | undefined) ?? null,
       extractionConfigJson:
         (row.extractionConfigJson as Record<string, unknown> | null | undefined) ?? null,

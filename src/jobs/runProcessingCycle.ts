@@ -1,4 +1,5 @@
-﻿import { env } from "@/config/env";
+import { env } from "@/config/env";
+import { createEmptyTokenUsageSummary } from "@/lib/createEmptyTokenUsageSummary";
 import { ClientRepository } from "@/repositories/client.repository";
 import { processPendingDocumentsJob } from "@/jobs/processPendingDocuments.job";
 import { SchedulerControlService } from "@/services/schedulerControl.service";
@@ -10,6 +11,7 @@ import {
   resolveGoogleConfig,
   resolveMapping,
   resolveSheetName,
+  resolveFolders,
   validateClientProcessingConfig,
 } from "@/lib/clientProcessingConfig";
 
@@ -67,17 +69,21 @@ export async function runProcessingCycle(
       const sheetName = resolveSheetName(client);
       const mapping = resolveMapping(client);
       const googleConfig = resolveGoogleConfig(client);
+      const folders = resolveFolders(client);
 
       try {
         validateClientProcessingConfig(client, sheetName, googleConfig);
         console.log(`[run-cycle] client-start clientId=${client.id} name="${client.name}"`);
+
         const clientSummary = await processPendingDocumentsJob({
           clientId: client.id,
           clientName: client.name,
           sheetName,
           mapping,
-          drivePendingFolderId: client.driveFolderPending,
-          driveScannedFolderId: client.driveFolderProcessed,
+          drivePendingFolderId: folders.pending,
+          driveScannedFolderId: folders.scanned,
+          driveUnassignedFolderId: folders.unassigned,
+          driveFailedFolderId: folders.failed,
           googleConfig,
           aiConfig: resolveAiConfig(client),
         });
@@ -95,7 +101,7 @@ export async function runProcessingCycle(
           summary: clientSummary,
         });
         console.log(
-          `[run-cycle] client-done clientId=${client.id} processed=${clientSummary.processed} failed=${clientSummary.failed}`
+          `[run-cycle] client-done clientId=${client.id} processed=${clientSummary.processed} unassigned=${clientSummary.unassigned} failed=${clientSummary.failed}`
         );
       } catch (error) {
         const message = error instanceof Error ? error.message : "Unknown error";
@@ -108,21 +114,10 @@ export async function runProcessingCycle(
           processed: 0,
           skipped: 0,
           failed: 1,
+          unassigned: 0,
           duplicatesDetected: 0,
-          errors: [
-            {
-              fileId: `client:${client.id}`,
-              fileName: client.name,
-              error: message,
-            },
-          ],
-          tokenUsage: {
-            inputTokens: 0,
-            outputTokens: 0,
-            totalTokens: 0,
-            byProvider: {},
-            byModel: {},
-          },
+          errors: [{ fileId: `client:${client.id}`, fileName: client.name, error: message }],
+          tokenUsage: createEmptyTokenUsageSummary(),
         };
 
         addSummary(aggregateSummary, failedClientSummary);
@@ -143,7 +138,7 @@ export async function runProcessingCycle(
 
     await controlService.completeRun(aggregateSummary, intervalMinutes, options?.clientId);
     console.log(
-      `[run-cycle] aggregate totalFound=${aggregateSummary.totalFound} processed=${aggregateSummary.processed} failed=${aggregateSummary.failed} duplicates=${aggregateSummary.duplicatesDetected}`
+      `[run-cycle] aggregate totalFound=${aggregateSummary.totalFound} processed=${aggregateSummary.processed} unassigned=${aggregateSummary.unassigned} failed=${aggregateSummary.failed} duplicates=${aggregateSummary.duplicatesDetected}`
     );
     return aggregateSummary;
   } catch (error) {
@@ -159,15 +154,10 @@ function createAggregateSummary(): ProcessJobSummary {
     processed: 0,
     skipped: 0,
     failed: 0,
+    unassigned: 0,
     duplicatesDetected: 0,
     errors: [],
-    tokenUsage: {
-      inputTokens: 0,
-      outputTokens: 0,
-      totalTokens: 0,
-      byProvider: {},
-      byModel: {},
-    },
+    tokenUsage: createEmptyTokenUsageSummary(),
     clientSummaries: [],
   };
 }
@@ -177,6 +167,7 @@ function addSummary(target: ProcessJobSummary, incoming: ProcessJobSummary): voi
   target.processed += incoming.processed;
   target.skipped += incoming.skipped;
   target.failed += incoming.failed;
+  target.unassigned += incoming.unassigned;
   target.duplicatesDetected += incoming.duplicatesDetected;
   target.errors.push(...incoming.errors);
 

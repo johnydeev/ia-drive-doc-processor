@@ -1,6 +1,6 @@
 import { google, sheets_v4 } from "googleapis";
 import { env } from "@/config/env";
-import { buildBusinessKeyParts, buildBusinessKeyString } from "@/lib/businessKey";
+import { buildBusinessKeyParts, buildBusinessKeyString, normalizeBusinessAmount } from "@/lib/businessKey";
 import { ClientGoogleConfig } from "@/types/client.types";
 import { ExtractedDocumentData } from "@/types/extractedDocument.types";
 
@@ -36,6 +36,34 @@ const HEADER_BY_FIELD: Record<keyof SheetsRowMapping, string> = {
   sourceFileUrl: "URL_ARCHIVO",
   isDuplicate: "ES_DUPLICADO",
 };
+
+/**
+ * Formatea monto como pesos argentinos: punto = miles, coma = decimal.
+ * Ejemplo: 118000 → "$ 118.000,00"
+ */
+function formatAmountARS(value: number | string | null | undefined): string {
+  if (value === null || value === undefined || value === "") return "";
+  const num =
+    typeof value === "number"
+      ? value
+      : Number(normalizeBusinessAmount(value)); // reusar el parser centralizado
+  if (!Number.isFinite(num)) return value === null || value === undefined ? "" : String(value);
+  return (
+    "$ " +
+    new Intl.NumberFormat("es-AR", {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    }).format(num)
+  );
+}
+
+export interface DirectoryData {
+  consortiums: { canonicalName: string; cuit: string | null; aliases: string | null }[];
+  providers: { canonicalName: string; cuit: string | null; alias: string | null }[];
+  rubros: { name: string; description: string | null }[];
+  coeficientes: { code: string; name: string }[];
+  warnings: string[];
+}
 
 export class GoogleSheetsService {
   private sheets: sheets_v4.Sheets;
@@ -73,7 +101,12 @@ export class GoogleSheetsService {
     for (const [key, column] of entries) {
       const index = this.columnToIndex(column);
       const value = data[key];
-      row[index] = value === undefined || value === null ? "" : String(value);
+
+      if (key === "amount") {
+        row[index] = formatAmountARS(value as number | string | null | undefined);
+      } else {
+        row[index] = value === undefined || value === null ? "" : String(value);
+      }
     }
 
     return row;
@@ -100,7 +133,6 @@ export class GoogleSheetsService {
     const columns = Object.values(mapping).map((column) => this.columnToIndex(column));
     const minIndex = Math.min(...columns);
     const maxIndex = Math.max(...columns);
-
     const startColumn = this.indexToColumn(minIndex);
     const endColumn = this.indexToColumn(maxIndex);
     return `${sheetName}!${startColumn}:${endColumn}`;
@@ -109,28 +141,22 @@ export class GoogleSheetsService {
   private indexToColumn(index: number): string {
     let current = index + 1;
     let column = "";
-
     while (current > 0) {
       const remainder = (current - 1) % 26;
       column = String.fromCharCode(65 + remainder) + column;
       current = Math.floor((current - 1) / 26);
     }
-
     return column;
   }
 
   private columnToIndex(column: string): number {
     const letters = column.trim().toUpperCase();
     let index = 0;
-
     for (let i = 0; i < letters.length; i += 1) {
       const code = letters.charCodeAt(i);
-      if (code < 65 || code > 90) {
-        throw new Error(`Invalid column letter: ${column}`);
-      }
+      if (code < 65 || code > 90) throw new Error(`Invalid column letter: ${column}`);
       index = index * 26 + (code - 64);
     }
-
     return index - 1;
   }
 
@@ -144,11 +170,7 @@ export class GoogleSheetsService {
       return row[index] ?? "";
     };
 
-    const parseAmount = (value: string): number | null => {
-      const numeric = value.replace(/[^\d.,-]/g, "").replace(/,/g, ".").trim();
-      const parsed = Number.parseFloat(numeric);
-      return Number.isFinite(parsed) ? parsed : null;
-    };
+    const amountCell = getCell(mapping.amount);
 
     return buildBusinessKeyString(
       buildBusinessKeyParts({
@@ -159,45 +181,42 @@ export class GoogleSheetsService {
         detail: getCell(mapping.detail) || null,
         observation: null,
         dueDate: getCell(mapping.dueDate) || null,
-        amount: parseAmount(getCell(mapping.amount)),
+        // normalizeBusinessAmount ya maneja es-AR, en-US y plano
+        amount: amountCell ? Number(normalizeBusinessAmount(amountCell)) || null : null,
         alias: null,
       })
     );
   }
 
-  async getExistingDuplicateKeys(sheetName: string, mapping: SheetsRowMapping): Promise<Set<string>> {
+  async getExistingDuplicateKeys(
+    sheetName: string,
+    mapping: SheetsRowMapping
+  ): Promise<Set<string>> {
     const range = this.getRangeFromMapping(sheetName, mapping);
-
     const response = await this.sheets.spreadsheets.values.get({
       spreadsheetId: this.spreadsheetId,
       range,
     });
-
     const rows = response.data.values ?? [];
     const keys = new Set<string>();
-
     for (let i = 1; i < rows.length; i += 1) {
       const duplicateKey = this.buildDuplicateKeyFromRow(rows[i], mapping);
-      if (duplicateKey) {
-        keys.add(duplicateKey);
-      }
+      if (duplicateKey) keys.add(duplicateKey);
     }
-
     return keys;
   }
 
-  private async ensureHeaderRow(sheetName: string, mapping: SheetsRowMapping): Promise<void> {
+  private async ensureHeaderRow(
+    sheetName: string,
+    mapping: SheetsRowMapping
+  ): Promise<void> {
     const existing = await this.sheets.spreadsheets.values.get({
       spreadsheetId: this.spreadsheetId,
       range: `${sheetName}!1:1`,
     });
-
     const firstRow = existing.data.values?.[0] ?? [];
     const hasAnyHeaderCell = firstRow.some((cell) => String(cell).trim().length > 0);
-
-    if (hasAnyHeaderCell) {
-      return;
-    }
+    if (hasAnyHeaderCell) return;
 
     const headerRow = this.buildHeaderRow(mapping);
     const columns = Object.values(mapping).map((c) => this.columnToIndex(c));
@@ -208,10 +227,126 @@ export class GoogleSheetsService {
       spreadsheetId: this.spreadsheetId,
       range: `${sheetName}!${startColumn}1:${endColumn}1`,
       valueInputOption: "RAW",
-      requestBody: {
-        values: [headerRow],
-      },
+      requestBody: { values: [headerRow] },
     });
+  }
+
+  private async withRetry<T>(fn: () => Promise<T>): Promise<T> {
+    try {
+      return await fn();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      const isRateLimit =
+        message.includes("429") ||
+        message.includes("Quota exceeded") ||
+        message.includes("rateLimitExceeded");
+      if (!isRateLimit) throw err;
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+      return await fn();
+    }
+  }
+
+  async readDirectory(): Promise<DirectoryData> {
+    const warnings: string[] = [];
+
+    const TABS: { name: string; headers: string[]; cols: string }[] = [
+      { name: "_Consorcios",  headers: ["NOMBRE CANÓNICO", "CUIT", "ALIASES"], cols: "A:C" },
+      { name: "_Proveedores", headers: ["NOMBRE CANÓNICO", "CUIT", "ALIAS"],   cols: "A:C" },
+      { name: "_Rubros",      headers: ["NOMBRE", "DESCRIPCIÓN"],              cols: "A:B" },
+      { name: "_Coeficientes",headers: ["NOMBRE", "CÓDIGO"],                   cols: "A:B" },
+    ];
+
+    // 1. Obtener hojas existentes en el archivo
+    const spreadsheet = await this.withRetry(() =>
+      this.sheets.spreadsheets.get({ spreadsheetId: this.spreadsheetId })
+    );
+    const existingTitles = new Set(
+      spreadsheet.data.sheets?.map((s) => s.properties?.title ?? "") ?? []
+    );
+
+    // 2. Crear las hojas que faltan (en un solo batchUpdate)
+    const missingTabs = TABS.filter((t) => !existingTitles.has(t.name));
+    if (missingTabs.length > 0) {
+      await this.withRetry(() =>
+        this.sheets.spreadsheets.batchUpdate({
+          spreadsheetId: this.spreadsheetId,
+          requestBody: {
+            requests: missingTabs.map((t) => ({
+              addSheet: { properties: { title: t.name } },
+            })),
+          },
+        })
+      );
+      // Escribir encabezados en las hojas recién creadas
+      await Promise.all(
+        missingTabs.map((t) =>
+          this.withRetry(() =>
+            this.sheets.spreadsheets.values.update({
+              spreadsheetId: this.spreadsheetId,
+              range: `${t.name}!A1`,
+              valueInputOption: "RAW",
+              requestBody: { values: [t.headers] },
+            })
+          )
+        )
+      );
+      warnings.push(
+        `Se crearon las hojas: ${missingTabs.map((t) => t.name).join(", ")}. Cargá los datos y volvé a sincronizar.`
+      );
+    }
+
+    // 3. Leer datos de todas las hojas
+    const readTab = async (tabName: string, cols: string): Promise<string[][]> => {
+      const response = await this.withRetry(() =>
+        this.sheets.spreadsheets.values.get({
+          spreadsheetId: this.spreadsheetId,
+          range: `${tabName}!${cols}`,
+        })
+      );
+      const rows = response.data.values ?? [];
+      return rows.slice(1).filter((row) => row[0]?.toString().trim());
+    };
+
+    const [consortiumRows, providerRows, rubroRows, coeficienteRows] = await Promise.all([
+      readTab("_Consorcios", "A:C"),
+      readTab("_Proveedores", "A:C"),
+      readTab("_Rubros", "A:B"),
+      readTab("_Coeficientes", "A:B"),
+    ]);
+
+    return {
+      consortiums: consortiumRows
+        .map((row) => ({
+          canonicalName: row[0]?.toString().trim().toUpperCase() ?? "",
+          cuit: row[1]?.toString().trim() || null,
+          aliases: row[2]?.toString().trim() || null,
+        }))
+        .filter((c) => c.canonicalName),
+
+      providers: providerRows
+        .map((row) => ({
+          canonicalName: row[0]?.toString().trim().toUpperCase() ?? "",
+          cuit: row[1]?.toString().trim() || null,
+          alias: row[2]?.toString().trim() || null,
+        }))
+        .filter((p) => p.canonicalName),
+
+      rubros: rubroRows
+        .map((row) => ({
+          name: row[0]?.toString().trim().toUpperCase() ?? "",
+          description: row[1]?.toString().trim() || null,
+        }))
+        .filter((r) => r.name),
+
+      coeficientes: coeficienteRows
+        .map((row) => ({
+          name: row[0]?.toString().trim().toUpperCase() ?? "",
+          code: row[1]?.toString().trim().toUpperCase() ?? "",
+        }))
+        .filter((c) => c.name && c.code),
+
+      warnings,
+    };
   }
 
   async insertRow(
@@ -240,9 +375,7 @@ export class GoogleSheetsService {
       spreadsheetId: this.spreadsheetId,
       range: targetRange,
       valueInputOption: "USER_ENTERED",
-      requestBody: {
-        values: [row],
-      },
+      requestBody: { values: [row] },
     });
 
     return {

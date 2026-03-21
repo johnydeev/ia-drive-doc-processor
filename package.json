@@ -14,7 +14,8 @@
     "diagnose:gemini": "tsx src/jobs/diagnose-gemini.ts",
     "prisma:generate": "prisma generate",
     "prisma:migrate:deploy": "prisma migrate deploy",
-    "prisma:migrate:status": "prisma migrate status"
+    "prisma:migrate:status": "prisma migrate status",
+    "local": "powershell -ExecutionPolicy Bypass -File .\\scripts\\run-local.ps1"
   },
   "dependencies": {
     "@google/generative-ai": "^0.24.1",
@@ -30,6 +31,7 @@
     "react": "19.2.3",
     "react-dom": "19.2.3",
     "tesseract.js": "^7.0.0",
+    "xlsx": "^0.18.5",
     "zod": "^4.3.6"
   },
   "devDependencies": {
