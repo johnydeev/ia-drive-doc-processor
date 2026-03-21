@@ -1,5 +1,6 @@
 import { env } from "@/config/env";
 import { createEmptyTokenUsageSummary } from "@/lib/createEmptyTokenUsageSummary";
+import { cycleLog } from "@/lib/logger";
 import { ClientRepository } from "@/repositories/client.repository";
 import { processPendingDocumentsJob } from "@/jobs/processPendingDocuments.job";
 import { SchedulerControlService } from "@/services/schedulerControl.service";
@@ -57,9 +58,7 @@ export async function runProcessingCycle(
     throw new Error(`Client not found or inactive: ${options.clientId}`);
   }
 
-  console.log(
-    `[run-cycle] trigger=${trigger} clients=${clients.length} intervalMinutes=${intervalMinutes} enabled=${current.enabled} targetClient=${options?.clientId ?? "ALL"}`
-  );
+  cycleLog.start(trigger, clients.length, intervalMinutes, options?.clientId);
 
   const aggregateSummary = createAggregateSummary();
 
@@ -73,7 +72,7 @@ export async function runProcessingCycle(
 
       try {
         validateClientProcessingConfig(client, sheetName, googleConfig);
-        console.log(`[run-cycle] client-start clientId=${client.id} name="${client.name}"`);
+        cycleLog.clientStart(client.id, client.name);
 
         const clientSummary = await processPendingDocumentsJob({
           clientId: client.id,
@@ -100,12 +99,11 @@ export async function runProcessingCycle(
           endedAt: new Date(),
           summary: clientSummary,
         });
-        console.log(
-          `[run-cycle] client-done clientId=${client.id} processed=${clientSummary.processed} unassigned=${clientSummary.unassigned} failed=${clientSummary.failed}`
-        );
+
+        cycleLog.clientDone(client.id, clientSummary.processed, clientSummary.unassigned, clientSummary.failed);
       } catch (error) {
         const message = error instanceof Error ? error.message : "Unknown error";
-        console.error(`[run-cycle] client-failed clientId=${client.id} error=${message}`);
+        cycleLog.clientFailed(client.id, message);
 
         const failedClientSummary: ProcessJobSummary = {
           clientId: client.id,
@@ -137,9 +135,13 @@ export async function runProcessingCycle(
     }
 
     await controlService.completeRun(aggregateSummary, intervalMinutes, options?.clientId);
-    console.log(
-      `[run-cycle] aggregate totalFound=${aggregateSummary.totalFound} processed=${aggregateSummary.processed} unassigned=${aggregateSummary.unassigned} failed=${aggregateSummary.failed} duplicates=${aggregateSummary.duplicatesDetected}`
-    );
+    cycleLog.aggregateSummary({
+      totalFound: aggregateSummary.totalFound,
+      processed: aggregateSummary.processed,
+      unassigned: aggregateSummary.unassigned,
+      failed: aggregateSummary.failed,
+      duplicatesDetected: aggregateSummary.duplicatesDetected,
+    });
     return aggregateSummary;
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";

@@ -1,4 +1,4 @@
-﻿# Dependencies stage
+# ── Dependencies ─────────────────────────────────────────────────
 FROM node:20-bookworm-slim AS deps
 WORKDIR /app
 RUN apt-get update && \
@@ -7,7 +7,16 @@ RUN apt-get update && \
 COPY package*.json ./
 RUN npm ci
 
-# Build stage
+# ── Production dependencies only ────────────────────────────────
+FROM node:20-bookworm-slim AS prod-deps
+WORKDIR /app
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends openssl ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
+COPY package*.json ./
+RUN npm ci --omit=dev
+
+# ── Build ────────────────────────────────────────────────────────
 FROM node:20-bookworm-slim AS builder
 WORKDIR /app
 RUN apt-get update && \
@@ -16,9 +25,11 @@ RUN apt-get update && \
 ENV SKIP_ENV_VALIDATION=1
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
-RUN npx prisma generate && npm run build && npx tsc -p tsconfig.jobs.json
+RUN npx prisma generate && \
+    npm run build && \
+    npm run build:jobs
 
-# Runtime stage
+# ── Runtime ──────────────────────────────────────────────────────
 FROM node:20-bookworm-slim AS runner
 WORKDIR /app
 ENV NODE_ENV=production
@@ -31,18 +42,29 @@ RUN apt-get update && \
       tesseract-ocr-spa \
       tesseract-ocr-eng \
       ca-certificates && \
-    rm -rf /var/lib/apt/lists/*
+    rm -rf /var/lib/apt/lists/* && \
+    addgroup --system --gid 1001 nodejs && \
+    adduser --system --uid 1001 nextjs
 
-COPY --from=builder /app/node_modules ./node_modules
-COPY --from=builder /app/.next ./.next
+# Next.js standalone
+COPY --from=builder /app/.next/standalone ./
+COPY --from=builder /app/.next/static ./.next/static
 COPY --from=builder /app/public ./public
-COPY --from=builder /app/src ./src
-COPY --from=builder /app/prisma ./prisma
-COPY --from=builder /app/dist ./dist
-COPY --from=builder /app/package*.json ./
-COPY --from=builder /app/tsconfig.json ./tsconfig.json
-COPY --from=builder /app/next.config.ts ./next.config.ts
 
+# Jobs compilados (worker + scheduler)
+COPY --from=builder /app/dist ./dist
+
+# Production node_modules para los jobs
+# (standalone tiene sus propios módulos embebidos para Next.js)
+COPY --from=prod-deps /app/node_modules ./node_modules
+
+# Prisma client generado
+COPY --from=builder /app/node_modules/.prisma ./node_modules/.prisma
+COPY --from=builder /app/node_modules/@prisma ./node_modules/@prisma
+COPY --from=builder /app/prisma ./prisma
+
+USER nextjs
 EXPOSE 3000
 
-CMD ["npm","run","start"]
+# Default: web server. Override via docker-compose command.
+CMD ["node", "server.js"]

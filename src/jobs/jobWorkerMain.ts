@@ -2,6 +2,7 @@ import { env } from "@/config/env";
 import { parseProcessIntervalMinutes } from "@/jobs/runProcessingCycle";
 import { processSingleDriveFileJob } from "@/jobs/processPendingDocuments.job";
 import { getPrismaClient } from "@/lib/prisma";
+import { workerLog } from "@/lib/logger";
 import {
   resolveAiConfig,
   resolveGoogleConfig,
@@ -63,6 +64,7 @@ async function claimNextJob() {
 
 async function finalizeJob(
   jobId: string,
+  fileName: string | null,
   attempts: number,
   maxAttempts: number,
   startedAt: Date | null,
@@ -71,12 +73,14 @@ async function finalizeJob(
 ): Promise<void> {
   const prisma = getPrismaClient();
   const now = new Date();
+  const durationMs = startedAt ? now.getTime() - startedAt.getTime() : 0;
 
   if (success) {
     await prisma.processingJob.update({
       where: { id: jobId },
       data: { status: "COMPLETED", finishedAt: now, errorMessage: null },
     });
+    workerLog.jobCompleted(jobId, fileName, durationMs);
     return;
   }
 
@@ -93,6 +97,14 @@ async function finalizeJob(
       startedAt: shouldFail ? startedAt : null,
     },
   });
+
+  workerLog.jobFailed(jobId, fileName, errorMessage ?? "Unknown error", nextAttempts, maxAttempts);
+
+  if (shouldFail) {
+    workerLog.jobPermanentFailure(jobId, fileName);
+  } else {
+    workerLog.jobRetry(jobId, nextAttempts + 1, maxAttempts);
+  }
 }
 
 async function handleJob(job: {
@@ -119,16 +131,20 @@ async function handleJob(job: {
   });
 
   if (!clientRow) {
-    await finalizeJob(job.id, job.attempts, job.maxAttempts, job.startedAt, false, "Client not found");
+    workerLog.clientNotFound(job.id, job.clientId);
+    await finalizeJob(job.id, job.driveFileName, job.attempts, job.maxAttempts, job.startedAt, false, "Client not found");
     return;
   }
 
   const client = mapClient(clientRow);
 
   if (!client.isActive) {
-    await finalizeJob(job.id, job.attempts, job.maxAttempts, job.startedAt, false, "Client inactive");
+    workerLog.clientInactive(job.id, client.name);
+    await finalizeJob(job.id, job.driveFileName, job.attempts, job.maxAttempts, job.startedAt, false, "Client inactive");
     return;
   }
+
+  workerLog.jobClaimed(job.id, job.driveFileId, job.driveFileName, client.name);
 
   let errorMessage: string | undefined;
   let summary: ProcessJobSummary | null = null;
@@ -167,7 +183,7 @@ async function handleJob(job: {
   }
 
   const success = summary !== null && summary.failed === 0;
-  await finalizeJob(job.id, job.attempts, job.maxAttempts, job.startedAt, success, errorMessage);
+  await finalizeJob(job.id, job.driveFileName, job.attempts, job.maxAttempts, job.startedAt, success, errorMessage);
 
   if (summary) {
     const now = new Date();
@@ -185,7 +201,7 @@ async function handleJob(job: {
 }
 
 async function runWorker(): Promise<void> {
-  console.log("[job-worker] starting");
+  workerLog.starting();
 
   while (true) {
     const job = await claimNextJob();
@@ -197,10 +213,9 @@ async function runWorker(): Promise<void> {
     try {
       await handleJob(job);
     } catch (error) {
-      console.error(
-        `[job-worker] unhandled error jobId=${job.id} error=${
-          error instanceof Error ? error.message : "Unknown error"
-        }`
+      workerLog.unhandledError(
+        job.id,
+        error instanceof Error ? error.message : "Unknown error"
       );
     }
   }

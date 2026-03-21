@@ -1,37 +1,58 @@
 services:
+  # ── Next.js web server + API ───────────────────────────────────
   web:
     build:
       context: .
       dockerfile: Dockerfile
     restart: unless-stopped
-    env_file:
-      - .env
+    env_file: .env
     environment:
       NODE_ENV: production
-    command: sh -c "npm run prisma:migrate:deploy && (npm run schedule &) && npm run start"
+      HOSTNAME: "0.0.0.0"
     ports:
       - "3000:3000"
     healthcheck:
-      test:
-        [
-          "CMD-SHELL",
-          "node -e \"fetch('http://localhost:3000/login').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\"",
-        ]
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3000/login').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 30s
       timeout: 10s
       retries: 5
-      start_period: 40s
+      start_period: 30s
 
+  # ── Scheduler: escanea Drive y crea ProcessingJobs ─────────────
+  scheduler:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      NODE_ENV: production
+    command: ["node", "dist/jobs/scheduler.js"]
+    depends_on:
+      web:
+        condition: service_healthy
+
+  # ── Worker: procesa la cola de jobs ────────────────────────────
   worker:
     build:
       context: .
       dockerfile: Dockerfile
     restart: unless-stopped
-    env_file:
-      - .env
+    env_file: .env
     environment:
       NODE_ENV: production
-    command: node dist/jobs/jobWorker.js
+    command: ["node", "dist/jobs/jobWorkerMain.js"]
+    depends_on:
+      web:
+        condition: service_healthy
+
+  # ── Cloudflare Tunnel ──────────────────────────────────────────
+  tunnel:
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    command: tunnel run
+    environment:
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN}
     depends_on:
       web:
         condition: service_healthy

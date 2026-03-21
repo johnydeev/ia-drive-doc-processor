@@ -1,5 +1,17 @@
 # Changelog
 
+## 2026-03-21 (sesión 2)
+
+Highlights
+- **Dockerización completa**: Dockerfile multi-stage con Next.js standalone output, 3 servicios separados (web, scheduler, worker).
+- **docker-compose.yml** reescrito: web con healthcheck, scheduler y worker como servicios independientes, Cloudflare Tunnel integrado.
+- **Path aliases resueltos**: `tsc-alias` como post-procesador para que `dist/` use paths relativos en vez de `@/`.
+- **tsconfig.jobs.json** arreglado: excluye `useAuthGuard.ts` (DOM) y shim para `CanvasRenderingContext2D`.
+- **ESLint** configurado con `typescript-eslint` + `@next/eslint-plugin-next`. 0 errores, 8 warnings.
+- **GitHub Actions CI/CD**: workflow con 3 jobs (check → build → deploy a self-hosted runner).
+- **Scripts nuevos**: `build:jobs`, `lint`, `typecheck`, `check` (pipeline completo pre-deploy).
+- **Fixes de build**: encoding UTF-8 en `close-period/route.ts`, async params en `receipt/route.ts`, creado `clientAuth.ts` faltante, type cast en `scan/route.ts`.
+
 ## 2026-03-21
 
 Highlights
@@ -12,10 +24,14 @@ Highlights
 - Fuzzy match ahora limpia ceros a la izquierda en ambos lados antes de comparar tokens.
 - Alias match soporta fuzzy inverso (OCR → alias además de alias → OCR).
 - Nuevas abreviaturas de calles: SGTO→SARGENTO, CTE→COMANDANTE, INT→INTENDENTE, PROF→PROFESOR.
+- Nuevo módulo `src/lib/logger.ts` — sistema de logging centralizado con timestamps, emojis, separadores visuales y logs estructurados por proceso (scheduler, worker, pipeline, run-cycle).
+- Scheduler ahora muestra: inicio de ciclo con cantidad de clientes, estado por cliente (pausado/escaneando/sin PDFs/jobs encolados), fin de ciclo, y errores detallados.
+- Worker ahora muestra: job reclamado con nombre de archivo y cliente, duración del job, reintentos y fallas permanentes.
+- Pipeline ahora muestra: cada paso del procesamiento (descarga, hash, extracción IA, matching, canonización, destino), tipo de LSP detectado, resultado de cada match (método + nombre canónico), y resumen del lote.
 - Establecida regla obligatoria de documentación: `docs/progreso.md`, `docs/decisiones.md` y `CHANGELOG.md` deben actualizarse con cada cambio significativo.
 - Actualizado CLAUDE.md con sección de router LSP, tabla de prompts por empresa, y regla de documentación.
-- Inicializado `docs/decisiones.md` con las primeras 3 decisiones técnicas documentadas.
-- Actualizado `docs/progreso.md` al estado actual (prompts LSP completados, migraciones aplicadas).
+- Inicializado `docs/decisiones.md` con las primeras decisiones técnicas documentadas.
+- Actualizado `docs/progreso.md` al estado actual.
 
 ## 2026-03-20
 

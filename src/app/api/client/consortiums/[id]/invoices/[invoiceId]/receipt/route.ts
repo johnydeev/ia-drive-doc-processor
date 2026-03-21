@@ -21,12 +21,12 @@ const MONTH_NAMES = [
  */
 export async function POST(
   request: NextRequest,
-  { params }: { params: { id: string; invoiceId: string } }
+  context: { params: Promise<{ id: string; invoiceId: string }> }
 ) {
   const auth = requireClientSession(request);
   if (auth.error) return auth.error;
 
-  const { id: consortiumId, invoiceId } = params;
+  const { id: consortiumId, invoiceId } = await context.params;
   const clientId = auth.session.clientId;
 
   try {
@@ -154,12 +154,12 @@ export async function POST(
  */
 export async function DELETE(
   request: NextRequest,
-  { params }: { params: { id: string; invoiceId: string } }
+  context: { params: Promise<{ id: string; invoiceId: string }> }
 ) {
   const auth = requireClientSession(request);
   if (auth.error) return auth.error;
 
-  const { id: consortiumId, invoiceId } = params;
+  const { id: consortiumId, invoiceId } = await context.params;
   const clientId = auth.session.clientId;
 
   try {

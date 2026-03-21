@@ -82,7 +82,7 @@ export async function POST(
       try {
         const { GeminiExtractorService } = await import("@/services/geminiExtractor.service");
         const extractor = new GeminiExtractorService({ apiKey: geminiKey, model: geminiModel });
-        extracted = await extractor.extractStructuredData(text) as Record<string, unknown>;
+        extracted = await extractor.extractStructuredData(text) as unknown as Record<string, unknown>;
       } catch (err) {
         console.warn("[scan] Gemini failed:", err instanceof Error ? err.message : err);
       }
@@ -92,7 +92,7 @@ export async function POST(
       try {
         const { AiExtractorService } = await import("@/services/aiExtractor.service");
         const extractor = new AiExtractorService({ apiKey: openaiKey, model: openaiModel });
-        extracted = await extractor.extractStructuredData(text) as Record<string, unknown>;
+        extracted = await extractor.extractStructuredData(text) as unknown as Record<string, unknown>;
       } catch (err) {
         console.warn("[scan] OpenAI failed:", err instanceof Error ? err.message : err);
       }

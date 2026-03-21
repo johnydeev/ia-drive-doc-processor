@@ -4,6 +4,7 @@ import { ClientRepository } from "@/repositories/client.repository";
 import { GoogleDriveService } from "@/services/googleDrive.service";
 import { SchedulerControlService } from "@/services/schedulerControl.service";
 import { getPrismaClient } from "@/lib/prisma";
+import { schedulerLog } from "@/lib/logger";
 import {
   resolveGoogleConfig,
   resolveSheetName,
@@ -20,6 +21,7 @@ let localRunning = false;
 
 const runOnce = async (): Promise<void> => {
   if (localRunning) {
+    schedulerLog.skippedBusy();
     return;
   }
 
@@ -28,9 +30,11 @@ const runOnce = async (): Promise<void> => {
   try {
     const clients = await clientRepository.listActiveClients();
     if (clients.length === 0) {
-      console.log("[scheduler] no active clients to process");
+      schedulerLog.cycleEmpty();
       return;
     }
+
+    schedulerLog.cycleStart(clients.length);
 
     for (const client of clients) {
       try {
@@ -39,19 +43,22 @@ const runOnce = async (): Promise<void> => {
         const state = await controlService.getState(minutes, client.id);
 
         if (!state.enabled) {
-          console.log(`[scheduler] client paused clientId=${client.id} name="${client.name}"`);
+          schedulerLog.clientPaused(client.id, client.name);
           continue;
         }
 
+        schedulerLog.clientScanning(client.id, client.name);
+
         const sheetName = resolveSheetName(client);
         const googleConfig = resolveGoogleConfig(client);
-        const folders = resolveFolders(client);            // ← usa driveFoldersJson
+        const folders = resolveFolders(client);
         validateClientProcessingConfig(client, sheetName, googleConfig);
 
         const driveService = new GoogleDriveService(googleConfig);
-        const files = await driveService.listPendingPdfFiles(folders.pending); // ← corregido
+        const files = await driveService.listPendingPdfFiles(folders.pending);
 
         if (files.length === 0) {
+          schedulerLog.clientNoPdfs(client.id, client.name);
           continue;
         }
 
@@ -86,29 +93,26 @@ const runOnce = async (): Promise<void> => {
         }
 
         if (created > 0) {
-          console.log(
-            `[scheduler] queued ${created} job(s) for clientId=${client.id} name="${client.name}"`
-          );
+          schedulerLog.jobsQueued(created, client.id, client.name);
         }
       } catch (error) {
-        console.error(
-          `[scheduler] job enqueue failed clientId=${client.id} name="${client.name}" error=${
-            error instanceof Error ? error.message : "Unknown error"
-          }`
+        schedulerLog.clientError(
+          client.id,
+          client.name,
+          error instanceof Error ? error.message : "Unknown error"
         );
       }
     }
+
+    schedulerLog.cycleEnd();
   } catch (error) {
-    console.error(
-      "[scheduler] failed",
-      error instanceof Error ? error.message : "Unknown error"
-    );
+    schedulerLog.fatalError(error instanceof Error ? error.message : "Unknown error");
   } finally {
     localRunning = false;
   }
 };
 
-console.log(`[scheduler] starting. Interval: ${minutes} minutes`);
+schedulerLog.starting(minutes);
 
 void runOnce();
 setInterval(runOnce, intervalMs);

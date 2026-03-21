@@ -34,7 +34,7 @@ export async function POST(request: NextRequest) {
     }
 
     // resolveGoogleConfig desencripta la private key correctamente
-    const googleConfig = resolveGoogleConfig(client);
+    const googleConfig = resolveGoogleConfig(client as any);
     if (!googleConfig) {
       return NextResponse.json(
         { ok: false, error: "Credenciales de Google incompletas" },

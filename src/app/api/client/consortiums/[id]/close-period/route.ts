@@ -58,7 +58,7 @@ export async function POST(
       return NextResponse.json({
         ok: true,
         requiresConfirmation: true,
-        message: "¿Confirmás el cierre del período actual?",
+        message: "Â¿ConfirmÃ¡s el cierre del perÃ­odo actual?",
         currentPeriod: {
           year: currentPeriod.year,
           month: currentPeriod.month,

@@ -25,5 +25,5 @@ ModuleAny._resolveFilename = function (
 };
 
 // Load the compiled worker logic after alias patching.
-// eslint-disable-next-line @typescript-eslint/no-var-requires
+// eslint-disable-next-line @typescript-eslint/no-require-imports
 require("./jobWorkerMain");

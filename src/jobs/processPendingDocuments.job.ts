@@ -1,7 +1,9 @@
 import { env } from "@/config/env";
 import { normalizeConsortiumName, consortiumFuzzyMatch, consortiumAliasMatch } from "@/lib/consortiumNormalizer";
+import { identifyLSPProvider } from "@/lib/extraction";
 import { refineExtractionWithRawText } from "@/lib/extraction";
 import { createEmptyTokenUsageSummary } from "@/lib/createEmptyTokenUsageSummary";
+import { pipelineLog } from "@/lib/logger";
 import { accumulateTokenUsage } from "@/types/aiUsage.types";
 import { ExtractedDocumentData } from "@/types/extractedDocument.types";
 import { ProcessJobSummary } from "@/types/process.types";
@@ -135,7 +137,7 @@ async function createProcessingContext(
   try {
     existingDuplicateKeys = await sheetsService.getExistingDuplicateKeys(config.sheetName, mapping);
   } catch (error) {
-    console.warn(`[job:${config.clientId}] duplicate detection bootstrap failed: ${error instanceof Error ? error.message : "Unknown error"}`);
+    pipelineLog.stepStart(config.clientId, `Dedup bootstrap falló: ${error instanceof Error ? error.message : "Unknown"}`);
   }
 
   return {
@@ -157,19 +159,6 @@ interface AssignmentResult {
   canonicalProviderTaxId: string | null;
 }
 
-/**
- * Resuelve consorcio y proveedor a partir de los datos extraídos por IA/OCR.
- *
- * Estrategia de matching para CONSORCIO (en orden de prioridad):
- *  1. Match exacto por canonicalName normalizado
- *  2. Fuzzy match: todos los tokens del nombre DB aparecen en el raw OCR
- *  3. Alias match: el raw OCR coincide con algún alias registrado en el consorcio
- *
- * Estrategia de matching para PROVEEDOR:
- *  1. CUIT normalizado (excluyendo CUIT del consorcio)
- *  2. Nombre exacto / alias
- *  3. Nombre parcial
- */
 async function resolveAssignment(
   extracted: ExtractedDocumentData,
   clientId: string,
@@ -177,7 +166,6 @@ async function resolveAssignment(
   consortiumRepository: ConsortiumRepository,
   providerRepository: ProviderRepository
 ): Promise<AssignmentResult> {
-  const tag = `[assign fileId=${fileId}]`;
   const base: AssignmentResult = {
     consortiumId: undefined, providerId: undefined, periodId: undefined,
     unassigned: true, unassignedReason: null,
@@ -187,7 +175,6 @@ async function resolveAssignment(
   // ── 1. Consorcio ─────────────────────────────────────────────────────────
 
   const rawConsortium = extracted.consortium?.trim() ?? null;
-  console.log(`${tag} raw consortium="${rawConsortium}"`);
 
   if (!rawConsortium) {
     return { ...base, unassignedReason: "No se pudo extraer el consorcio del PDF" };
@@ -195,20 +182,18 @@ async function resolveAssignment(
 
   const prisma = getPrismaClient();
 
-  // Cargar todos los consorcios del cliente una sola vez
   const allConsortiums = await prisma.consortium.findMany({
     where: { clientId },
     select: { id: true, canonicalName: true, rawName: true, cuit: true, aliases: true },
   });
 
   const canonicalName = normalizeConsortiumName(rawConsortium);
-  console.log(`${tag} normalized consortium="${canonicalName}"`);
 
   // Intento 1: match exacto por canonicalName
   let consortiumRow = allConsortiums.find((c) => c.canonicalName === canonicalName);
-  let matchMethod = consortiumRow ? "exact" : "";
+  let matchMethod = consortiumRow ? "exacto" : "";
 
-  // Intento 2: fuzzy match (tokens del nombre DB en el raw OCR)
+  // Intento 2: fuzzy match
   if (!consortiumRow) {
     const fuzzy = allConsortiums.find((c) => consortiumFuzzyMatch(rawConsortium, c.canonicalName));
     if (fuzzy) { consortiumRow = fuzzy; matchMethod = "fuzzy"; }
@@ -224,9 +209,11 @@ async function resolveAssignment(
   }
 
   if (!consortiumRow) {
-    console.warn(
-      `${tag} → unassigned: consorcio "${rawConsortium}" (norm: "${canonicalName}") no encontrado. ` +
-      `DB: [${allConsortiums.map((c) => `"${c.canonicalName}"`).join(", ")}]`
+    pipelineLog.consortiumNotFound(
+      clientId,
+      rawConsortium,
+      canonicalName,
+      allConsortiums.map((c) => c.canonicalName)
     );
     return {
       ...base,
@@ -234,9 +221,8 @@ async function resolveAssignment(
     };
   }
 
-  console.log(`${tag} consortium found method=${matchMethod} id=${consortiumRow.id} canonical="${consortiumRow.canonicalName}"`);
+  pipelineLog.consortiumMatch(clientId, matchMethod, consortiumRow.canonicalName);
 
-  // Buscar el objeto completo para incluir periods
   const consortium = await consortiumRepository.findByCanonicalName(clientId, consortiumRow.canonicalName);
   if (!consortium) {
     return { ...base, unassignedReason: `Consorcio no encontrado: "${rawConsortium}"` };
@@ -261,17 +247,15 @@ async function resolveAssignment(
   const normOcrCuit = normCuit(rawCuit);
   const normOcrName = normName(rawName);
 
-  console.log(`${tag} OCR taxId="${rawCuit}"(norm="${normOcrCuit}") provider="${rawName}"(norm="${normOcrName}")`);
-
   let matched: typeof allProviders[0] | undefined;
   let providerMatchMethod = "";
 
   // Intento 1: CUIT normalizado, excluyendo CUIT del consorcio
   if (normOcrCuit.length >= 10 && normOcrCuit !== consortiumCuitNorm) {
     matched = allProviders.find((p) => normCuit(p.cuit) === normOcrCuit);
-    if (matched) providerMatchMethod = `CUIT (norm: ${normOcrCuit})`;
+    if (matched) providerMatchMethod = `CUIT (${normOcrCuit})`;
   } else if (normOcrCuit.length >= 10 && normOcrCuit === consortiumCuitNorm) {
-    console.warn(`${tag} OCR CUIT coincide con consorcio — fallback a nombre`);
+    pipelineLog.providerCuitMatchesConsortium(clientId, normOcrCuit);
   }
 
   // Intento 2: nombre / alias exacto
@@ -279,7 +263,7 @@ async function resolveAssignment(
     matched = allProviders.find((p) =>
       normName(p.canonicalName) === normOcrName || (p.alias && normName(p.alias) === normOcrName)
     );
-    if (matched) providerMatchMethod = `name exact ("${normOcrName}")`;
+    if (matched) providerMatchMethod = `nombre exacto ("${normOcrName}")`;
   }
 
   // Intento 3: nombre parcial
@@ -288,12 +272,11 @@ async function resolveAssignment(
       normName(p.canonicalName).includes(normOcrName) ||
       normOcrName.includes(normName(p.canonicalName).slice(0, 5))
     );
-    if (matched) providerMatchMethod = `name partial ("${normOcrName}")`;
+    if (matched) providerMatchMethod = `nombre parcial ("${normOcrName}")`;
   }
 
-  console.log(`${tag} provider match=${Boolean(matched)} method="${providerMatchMethod}" name="${matched?.canonicalName ?? "none"}"`);
-
   if (!matched) {
+    pipelineLog.providerNotFound(clientId, rawCuit, rawName);
     return {
       ...base,
       unassigned: true,
@@ -301,10 +284,12 @@ async function resolveAssignment(
     };
   }
 
+  pipelineLog.providerMatch(clientId, providerMatchMethod, matched.canonicalName);
+
   try {
     await providerRepository.linkToConsortium(matched.id, consortium.id);
   } catch (linkErr) {
-    console.warn(`${tag} linkToConsortium non-fatal: ${linkErr instanceof Error ? linkErr.message : linkErr}`);
+    // Non-fatal
   }
 
   return {
@@ -331,21 +316,25 @@ async function processDriveFile(
     existingDuplicateKeys,
   } = context;
 
+  const cid = resolvedConfig.clientId;
+
   const runStep = async <T>(label: string, fn: () => Promise<T>): Promise<T> => {
+    pipelineLog.stepStart(cid, label);
     try { return await fn(); }
     catch (error) { throw new Error(`${label} failed: ${error instanceof Error ? error.message : "Unknown error"}`); }
   };
 
   try {
-    console.log(`[job:${resolvedConfig.clientId}] processing fileId=${file.id} name="${file.name}"`);
+    pipelineLog.fileStart(cid, file.id, file.name);
+
     const sourceFileUrl = buildDriveFileUrl(file.id, file.webViewLink);
-    const buffer = await runStep("download", () => driveService.downloadFile(file.id));
+    const buffer = await runStep("Descarga de Drive", () => driveService.downloadFile(file.id));
 
     const fileHash = invoiceRepository.computeDocumentHash(buffer);
-    const existingByHash = await runStep("dedup-hash-check", () =>
-      invoiceRepository.findDuplicateByHash(resolvedConfig.clientId, fileHash)
+    const existingByHash = await runStep("Verificación duplicado por hash", () =>
+      invoiceRepository.findDuplicateByHash(cid, fileHash)
     );
-    console.log(`[job:${resolvedConfig.clientId}] hash=${fileHash.slice(0, 8)}... duplicateByHash=${Boolean(existingByHash)}`);
+    pipelineLog.hashResult(cid, fileHash, Boolean(existingByHash));
 
     let extracted: ExtractedDocumentData | null = null;
     let isDuplicate = Boolean(existingByHash);
@@ -354,62 +343,84 @@ async function processDriveFile(
       const { sourceFileUrl: _url, isDuplicate: _dup, ...storedFields } =
         existingByHash.extraction as ExtractedDocumentData;
       extracted = { ...storedFields };
-      const text = await runStep("extract-text", () => pdfExtractor.extractTextFromPdf(buffer));
+      const text = await runStep("Extracción de texto (PDF)", () => pdfExtractor.extractTextFromPdf(buffer));
       extracted = refineExtractionWithRawText(extracted, text);
     } else {
-      const text = await runStep("extract-text", () => pdfExtractor.extractTextFromPdf(buffer));
+      const text = await runStep("Extracción de texto (PDF)", () => pdfExtractor.extractTextFromPdf(buffer));
+
+      // Detectar tipo de documento
+      const lspProvider = identifyLSPProvider(text);
+      if (lspProvider) {
+        pipelineLog.lspDetected(cid, lspProvider);
+      }
+
       const providerErrors: string[] = [];
 
       if (geminiModule) {
         try {
           const extractor = new geminiModule.GeminiExtractorService({ apiKey: geminiApiKey, model: geminiModel });
-          extracted = await runStep("gemini-extract", () => extractor.extractStructuredData(text));
+          extracted = await runStep("Extracción IA (Gemini)", () => extractor.extractStructuredData(text));
           accumulateTokenUsage(summary.tokenUsage, extractor.getLastUsage?.());
+          pipelineLog.aiExtraction(cid, "gemini", true);
         } catch (error) {
-          providerErrors.push(error instanceof Error ? error.message : "Gemini unknown error");
+          const msg = error instanceof Error ? error.message : "Gemini unknown error";
+          providerErrors.push(msg);
+          pipelineLog.aiExtraction(cid, "gemini", false, msg);
         }
       }
 
       if (extracted === null && openAiModule) {
         try {
           const extractor = new openAiModule.AiExtractorService({ apiKey: openaiApiKey, model: openaiModel });
-          extracted = await runStep("openai-extract", () => extractor.extractStructuredData(text));
+          extracted = await runStep("Extracción IA (OpenAI)", () => extractor.extractStructuredData(text));
           accumulateTokenUsage(summary.tokenUsage, extractor.getLastUsage?.());
+          pipelineLog.aiExtraction(cid, "openai", true);
         } catch (error) {
-          providerErrors.push(error instanceof Error ? error.message : "OpenAI unknown error");
+          const msg = error instanceof Error ? error.message : "OpenAI unknown error";
+          providerErrors.push(msg);
+          pipelineLog.aiExtraction(cid, "openai", false, msg);
         }
       }
 
       if (extracted === null) {
-        if (providerErrors.length > 0) {
-          console.warn(`[job:${resolvedConfig.clientId}] AI fallback OCR_ONLY file=${file.id}: ${providerErrors.join(" | ")}`);
-        }
+        pipelineLog.aiOcrFallback(cid);
         extracted = buildOcrOnlyPayload();
       }
     }
 
     if (extracted === null) throw new Error("extraction produced no result unexpectedly");
 
-    console.log(
-      `[job:${resolvedConfig.clientId}] extracted consortium="${extracted.consortium ?? "null"}"` +
-      ` provider="${extracted.provider ?? "null"}" taxId="${extracted.providerTaxId ?? "null"}"`
-    );
+    pipelineLog.extractionResult(cid, {
+      consortium: extracted.consortium,
+      provider: extracted.provider,
+      providerTaxId: extracted.providerTaxId,
+      amount: extracted.amount,
+      dueDate: extracted.dueDate,
+    });
 
     if (!isDuplicate) {
-      const dup = await runStep("dedup-business-check", () =>
-        invoiceRepository.findDuplicateByBusinessKey(resolvedConfig.clientId, extracted!)
+      const dup = await runStep("Verificación duplicado por clave de negocio", () =>
+        invoiceRepository.findDuplicateByBusinessKey(cid, extracted!)
       );
-      isDuplicate = Boolean(dup);
+      if (dup) {
+        isDuplicate = true;
+        pipelineLog.duplicateByBusinessKey(cid);
+      }
     }
 
     const duplicateKey = invoiceRepository.buildBusinessKeyFromData(extracted);
-    if (!isDuplicate && duplicateKey) isDuplicate = existingDuplicateKeys.has(duplicateKey);
+    if (!isDuplicate && duplicateKey) {
+      if (existingDuplicateKeys.has(duplicateKey)) {
+        isDuplicate = true;
+        pipelineLog.duplicateByBusinessKey(cid);
+      }
+    }
 
     extracted.sourceFileUrl = sourceFileUrl;
     extracted.isDuplicate = isDuplicate ? "YES" : "NO";
 
     const assignment = await resolveAssignment(
-      extracted, resolvedConfig.clientId, file.id, consortiumRepository, providerRepository
+      extracted, cid, file.id, consortiumRepository, providerRepository
     );
 
     if (!assignment.unassigned) {
@@ -417,60 +428,66 @@ async function processDriveFile(
       if (assignment.canonicalProvider)      extracted.provider      = assignment.canonicalProvider;
       if (assignment.canonicalProvider)      extracted.alias         = assignment.canonicalProvider;
       if (assignment.canonicalProviderTaxId) extracted.providerTaxId = assignment.canonicalProviderTaxId;
-      console.log(
-        `[job:${resolvedConfig.clientId}] canonized consortium="${extracted.consortium}" provider="${extracted.provider}" taxId="${extracted.providerTaxId}"`
-      );
+      pipelineLog.canonized(cid, extracted.consortium ?? "?", extracted.provider ?? "?", extracted.providerTaxId ?? "?");
     }
 
     const { sourceFileUrl: _url, isDuplicate: _dup, ...extractionFields } = extracted;
 
     if (assignment.unassigned) {
-      console.warn(`[job:${resolvedConfig.clientId}] unassigned fileId=${file.id} reason="${assignment.unassignedReason}"`);
+      pipelineLog.movedToUnassigned(cid, file.id, assignment.unassignedReason ?? "razón desconocida");
       if (resolvedConfig.driveUnassignedFolderId && resolvedConfig.drivePendingFolderId) {
-        await runStep("move-to-unassigned", () =>
+        await runStep("Mover a Sin Asignar", () =>
           driveService.moveFileToUnassigned(file.id, resolvedConfig.drivePendingFolderId!, resolvedConfig.driveUnassignedFolderId!)
         );
       }
-      await runStep("invoice-save", () =>
+      await runStep("Guardar invoice", () =>
         invoiceRepository.saveProcessedInvoice({
-          clientId: resolvedConfig.clientId, documentHash: fileHash, fileId: file.id,
+          clientId: cid, documentHash: fileHash, fileId: file.id,
           sourceFileUrl, extraction: extractionFields, isDuplicate,
           consortiumId: assignment.consortiumId, providerId: undefined, periodId: assignment.periodId,
         })
       );
+      pipelineLog.invoiceSaved(cid, isDuplicate);
       summary.unassigned += 1;
+      pipelineLog.fileCompleted(cid, file.name, { processed: 0, unassigned: 1, duplicate: isDuplicate });
       return;
     }
 
-    await runStep("sheets-insert", () =>
+    await runStep("Insertar en Google Sheets", () =>
       sheetsService.insertRow(resolvedConfig.sheetName, extracted!, resolvedMapping)
     );
-    await runStep("move-to-scanned", () =>
+    pipelineLog.sheetsInserted(cid);
+
+    await runStep("Mover a Escaneados", () =>
       driveService.moveFileToScanned(file.id, resolvedConfig.drivePendingFolderId, resolvedConfig.driveScannedFolderId)
     );
-    await runStep("invoice-save", () =>
+    pipelineLog.movedToScanned(cid, file.id);
+
+    await runStep("Guardar invoice", () =>
       invoiceRepository.saveProcessedInvoice({
-        clientId: resolvedConfig.clientId, documentHash: fileHash, fileId: file.id,
+        clientId: cid, documentHash: fileHash, fileId: file.id,
         sourceFileUrl, extraction: extractionFields, isDuplicate,
         consortiumId: assignment.consortiumId, providerId: assignment.providerId, periodId: assignment.periodId,
       })
     );
+    pipelineLog.invoiceSaved(cid, isDuplicate);
 
     if (duplicateKey) existingDuplicateKeys.add(duplicateKey);
     if (isDuplicate)  summary.duplicatesDetected += 1;
     summary.processed += 1;
-    console.log(`[job:${resolvedConfig.clientId}] done fileId=${file.id} duplicate=${isDuplicate} processed=${summary.processed} unassigned=${summary.unassigned}`);
+    pipelineLog.fileCompleted(cid, file.name, { processed: 1, unassigned: 0, duplicate: isDuplicate });
 
   } catch (error) {
     summary.failed += 1;
     const errorMessage = error instanceof Error ? error.message : "Unknown error";
     summary.errors.push({ fileId: file.id, fileName: file.name, error: errorMessage });
-    console.error(`[job:${resolvedConfig.clientId}] failed fileId=${file.id} error=${errorMessage}`);
+    pipelineLog.fileFailed(cid, file.name, errorMessage);
     if (resolvedConfig.driveFailedFolderId && resolvedConfig.drivePendingFolderId) {
       try {
         await driveService.moveFileToFailed(file.id, resolvedConfig.drivePendingFolderId, resolvedConfig.driveFailedFolderId);
-      } catch (e) {
-        console.error(`[job:${resolvedConfig.clientId}] could not move to failedFolder: ${e instanceof Error ? e.message : "Unknown"}`);
+        pipelineLog.movedToFailed(cid, file.id);
+      } catch {
+        // Silent — ya logueamos el error principal
       }
     }
   }
@@ -506,7 +523,7 @@ export async function processPendingDocumentsJob(
   const files = await context.driveService.listPendingPdfFiles(resolvedConfig.drivePendingFolderId);
   const processedIds = new Set<string>();
 
-  console.log(`[job:${resolvedConfig.clientId}] start client="${resolvedConfig.clientName}" pendingFolder=${resolvedConfig.drivePendingFolderId}`);
+  pipelineLog.batchStart(resolvedConfig.clientId, resolvedConfig.clientName, resolvedConfig.drivePendingFolderId ?? "?", files.length);
 
   const summary = createBaseSummary(files.length);
   summary.clientId = resolvedConfig.clientId;
@@ -518,7 +535,14 @@ export async function processPendingDocumentsJob(
     await processDriveFile({ id: file.id, name: file.name, webViewLink: file.webViewLink }, context, summary);
   }
 
-  console.log(`[job:${resolvedConfig.clientId}] summary totalFound=${summary.totalFound} processed=${summary.processed} unassigned=${summary.unassigned} failed=${summary.failed} duplicates=${summary.duplicatesDetected}`);
+  pipelineLog.batchSummary(resolvedConfig.clientId, {
+    totalFound: summary.totalFound,
+    processed: summary.processed,
+    unassigned: summary.unassigned,
+    failed: summary.failed,
+    duplicatesDetected: summary.duplicatesDetected,
+  });
+
   return summary;
 }
 

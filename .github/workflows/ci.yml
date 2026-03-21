@@ -1,0 +1,87 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+env:
+  NODE_VERSION: "20"
+
+jobs:
+  # ── Lint + Type Check + Build Jobs ─────────────────────────────
+  check:
+    name: Lint & Type Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - run: npm ci
+
+      - name: Prisma generate
+        run: npx prisma generate
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Type check (Next.js)
+        run: npm run typecheck
+
+      - name: Build jobs (worker + scheduler)
+        run: npm run build:jobs
+
+  # ── Build Docker image ─────────────────────────────────────────
+  build:
+    name: Docker Build
+    needs: check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          tags: dpp:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ── Deploy (solo en push a master, self-hosted runner) ─────────
+  deploy:
+    name: Deploy
+    needs: build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build and restart
+        run: |
+          cd ${{ github.workspace }}
+          docker compose build
+          docker compose up -d
+          docker image prune -f
+
+      - name: Wait for healthy
+        run: |
+          echo "Waiting for web to be healthy..."
+          for i in $(seq 1 30); do
+            if docker compose ps web | grep -q "healthy"; then
+              echo "Web is healthy!"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "Web did not become healthy in time"
+          docker compose logs web --tail 20
+          exit 1

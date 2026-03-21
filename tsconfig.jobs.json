@@ -21,5 +21,8 @@
     "src/repositories/**/*.ts",
     "src/utils/**/*.ts"
   ],
-  "exclude": ["node_modules"]
+  "exclude": [
+    "node_modules",
+    "src/lib/useAuthGuard.ts"
+  ]
 }

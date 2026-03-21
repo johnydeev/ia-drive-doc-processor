@@ -1,12 +1,12 @@
 # Progreso del proyecto — drive-doc-processor
 
-Actualizado al 21/03/2026.
+Actualizado al 21/03/2026 (sesión 2).
 
 ---
 
 ## Estado general
 
-El sistema core está funcionando en producción. Pipeline de PDFs, extracción IA, matching y envío a Sheets completo. Se acaba de refactorizar el sistema de extracción IA para LSPs con prompts por empresa y mejoras en normalización de direcciones.
+El sistema core está funcionando en producción. Pipeline de PDFs, extracción IA, matching y envío a Sheets completo. Se dockerizó el proyecto con 3 servicios separados (web, scheduler, worker), CI/CD con GitHub Actions, y Cloudflare Tunnel integrado.
 
 ---
 
@@ -14,10 +14,11 @@ El sistema core está funcionando en producción. Pipeline de PDFs, extracción 
 
 - Pipeline de procesamiento de PDFs (download → dedup → extracción → match → Sheets → mover)
 - Extracción IA con Gemini + fallback OpenAI
-- **Prompts LSP por empresa** — `identifyLSPProvider()` como router con prompts específicos para Edesur, Edenor, AySA, Metrogas, Naturgy, Camuzzi, Litoral Gas (21/03/2026)
-- **Normalización de direcciones LSP** — limpieza de ceros a la izquierda, sufijos numéricos, código postal, piso/depto (21/03/2026)
-- **CUIT hardcodeado por empresa LSP** — elimina confusión entre CUIT del proveedor y del consorcio (21/03/2026)
-- **Reglas dueDate específicas** — CESP, CAE y otras fechas inválidas documentadas por empresa (21/03/2026)
+- **Prompts LSP por empresa** — `identifyLSPProvider()` como router con prompts para Edesur, Edenor, AySA, Metrogas, Naturgy, Camuzzi, Litoral Gas (21/03/2026)
+- **Normalización de direcciones LSP** — limpieza de ceros, sufijos numéricos, CP, piso/depto (21/03/2026)
+- **CUIT hardcodeado por empresa LSP** — elimina confusión proveedor vs consorcio (21/03/2026)
+- **Reglas dueDate específicas** — CESP, CAE y fechas inválidas por empresa (21/03/2026)
+- **Logging estructurado** — módulo `src/lib/logger.ts` con timestamps, emojis, separadores, logs por proceso (21/03/2026)
 - Matching de consorcios (exacto + fuzzy + alias) con expansión de abreviaturas
 - Matching de proveedores (CUIT + nombre + parcial)
 - Deduplicación por hash SHA256 y business key
@@ -27,27 +28,32 @@ El sistema core está funcionando en producción. Pipeline de PDFs, extracción 
 - Importación masiva desde Excel (edificios + proveedores)
 - Recibo de pago: subida a Drive + guardado en Invoice
 - Scheduler + Worker como procesos separados
-- Script `run-local.ps1` para levantar los 3 procesos
 - Sincronización directorio ALTA (Sheets → DB) con 4 hojas
 - Panel admin con métricas, alta de clientes, edición de configuración
 - Campo `aliases` en Consortium (migración aplicada)
 - Tablas Rubro y Coeficiente a nivel cliente (migración aplicada)
 - Regla de documentación obligatoria en `docs/` establecida (21/03/2026)
+- **Dockerización completa** — Dockerfile multi-stage con standalone, 3 servicios separados en docker-compose (21/03/2026)
+- **CI/CD con GitHub Actions** — lint + typecheck + build jobs + Docker build + deploy automático (21/03/2026)
+- **ESLint configurado** — typescript-eslint + @next/eslint-plugin-next (21/03/2026)
+- **Cloudflare Tunnel** integrado en docker-compose (21/03/2026)
+- **Fixes de build**: encoding UTF-8 en close-period/route.ts, async params en receipt/route.ts, clientAuth.ts creado, type cast en scan/route.ts (21/03/2026)
 
 ---
 
 ## En progreso 🔄
 
-- **Validación en producción de prompts LSP refactorizados**
-  - Archivos desplegados: `src/lib/extraction.ts`, `src/lib/consortiumNormalizer.ts`
-  - Falta: probar con PDFs reales de Edesur, AySA, Metrogas en el worker
-  - Si persisten errores: ajustar prompts con ejemplos del texto real extraído
+- **Configurar self-hosted GitHub Actions runner** en la máquina local para deploy automático
+- **Validación en producción de cambios del 21/03**
+  - Prompts LSP refactorizados: probar con PDFs reales de Edesur, AySA, Metrogas
 
 ---
 
 ## Pendiente ❌
 
 ### Alta prioridad
+- [ ] Configurar self-hosted runner de GitHub Actions en la máquina local
+- [ ] Probar docker-compose up completo con .env y CLOUDFLARE_TUNNEL_TOKEN
 - [ ] Probar extracción LSP refactorizada con PDFs reales en producción
 - [ ] UI de edición de aliases de consorcio desde el panel (hoy solo via SQL en Supabase)
 
@@ -63,10 +69,10 @@ El sistema core está funcionando en producción. Pipeline de PDFs, extracción 
 
 ## Próximos pasos sugeridos
 
-1. Probar los prompts LSP refactorizados con PDFs reales
-2. Si hay errores, capturar el texto extraído del PDF y ajustar el prompt correspondiente
-3. Construir UI de edición de aliases de consorcio
-4. Construir UI de gestión de carpetas Drive
+1. Probar `docker compose up` completo con .env y CLOUDFLARE_TUNNEL_TOKEN
+2. Configurar self-hosted runner de GitHub Actions
+3. Probar extracción LSP con PDFs reales
+4. Construir UI de edición de aliases de consorcio
 
 ---
 
