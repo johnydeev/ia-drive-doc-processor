@@ -1,11 +1,45 @@
 # CLAUDE.md — drive-doc-processor
 
-Contexto completo del proyecto para Claude Code. Actualizado al 20/03/2026.
+Contexto completo del proyecto para Claude Code. Actualizado al 21/03/2026.
 
 ---
 
 ## Al iniciar sesión
 Siempre leer docs/progreso.md antes de empezar para entender el estado actual del proyecto y los próximos pasos.
+
+---
+
+## ⚠️ Regla obligatoria de documentación
+
+**Aplica a TODO contexto de desarrollo de software, sin excepciones.**
+
+Cada vez que se realice un cambio significativo en el proyecto — ya sea una feature nueva, un bugfix, una refactorización, o una decisión de arquitectura — se DEBEN actualizar los siguientes archivos antes de considerar el trabajo terminado:
+
+### `docs/progreso.md`
+Registro vivo del estado de cada feature y tarea. Documenta:
+- Qué se completó y cuándo
+- Qué está en progreso y su estado actual
+- Qué queda pendiente, con prioridad
+- Problemas conocidos y workarounds
+
+Actualizar este archivo es OBLIGATORIO al completar o avanzar cualquier tarea.
+
+### `docs/decisiones.md`
+Registro de decisiones técnicas tomadas ante problemas reales. Cada entrada documenta:
+- **Fecha** del cambio
+- **Problema** que se encontró (qué estaba fallando y por qué)
+- **Decisión** que se tomó (qué se hizo y la razón técnica)
+- **Alternativas descartadas** (si aplica)
+- **Impacto** (qué archivos cambiaron, qué mejoró)
+
+Actualizar este archivo es OBLIGATORIO cuando se toma una decisión de diseño o se resuelve un problema que otros desarrolladores (o el mismo contexto en el futuro) necesiten entender.
+
+### `CHANGELOG.md`
+Registro cronológico de cambios por fecha. Incluir highlights de lo que se hizo en cada sesión de trabajo.
+
+> **La documentación no es opcional ni es "lo último que se hace". Es parte del entregable.** Si no se actualizaron estos 3 archivos, el trabajo no está terminado.
+
+---
 
 ## Descripción del proyecto
 
@@ -98,8 +132,8 @@ src/
 │   ├── scheduler.ts
 │   └── jobWorkerMain.ts
 ├── lib/
-│   ├── extraction.ts           # Prompts de extracción IA (facturas + LSP)
-│   ├── consortiumNormalizer.ts # Normalización + fuzzy + alias match
+│   ├── extraction.ts           # Router LSP + prompts por empresa + prompt facturas
+│   ├── consortiumNormalizer.ts # Normalización + fuzzy + alias match + limpieza LSP
 │   ├── businessKey.ts          # Normalización de montos para deduplicación
 │   └── clientProcessingConfig.ts
 ├── services/
@@ -223,40 +257,36 @@ Siempre usar `resolveGoogleConfig(client)` para construir el `GoogleSheetsServic
 
 ## Extracción IA (src/lib/extraction.ts)
 
-El sistema detecta automáticamente el tipo de documento y usa el prompt adecuado:
+El sistema detecta automáticamente el tipo de documento con `identifyLSPProvider()` y rutea al prompt específico de cada empresa.
+
+### Router LSP: `identifyLSPProvider(text)`
+Analiza los primeros 4000 caracteres y retorna:
+- `"EDESUR"` / `"EDENOR"` / `"AYSA"` / `"METROGAS"` / `"NATURGY"` / `"CAMUZZI"` / `"LITORAL_GAS"` / `"ABSA"` → prompt específico
+- `"GENERIC_LSP"` → prompt genérico LSP (fallback)
+- `null` → no es LSP → usa `buildInvoicePrompt` (facturas normales)
+
+### Prompts por empresa implementados
+| Empresa | Función | CUIT hardcodeado |
+|---------|---------|-----------------|
+| Edesur | `buildEdesurPrompt()` | 30-71079642-7 |
+| Edenor | `buildEdenorPrompt()` | 30-65651651-4 |
+| AySA | `buildAysaPrompt()` | 30-70956507-5 |
+| Metrogas | `buildGasPrompt()` | 30-65786442-4 |
+| Naturgy | `buildGasPrompt()` | 30-53330905-7 |
+| Camuzzi | `buildGasPrompt()` | 30-65786613-3 |
+| Litoral Gas | `buildGasPrompt()` | 30-66176173-2 |
+| Genérico LSP | `buildGenericUtilityBillPrompt()` | — |
+| Facturas normales | `buildInvoicePrompt()` | — |
+
+### Reglas compartidas entre prompts LSP
+- **CUIT**: cada prompt indica explícitamente el CUIT de la empresa y advierte que el CUIT del cliente/consorcio NO debe usarse como providerTaxId.
+- **Dirección**: reglas unificadas en `CONSORTIUM_ADDRESS_RULES` para limpiar ceros, sufijos, CP, piso/depto.
+- **Fechas inválidas**: reglas en `INVALID_DATE_RULES` compartidas (CESP, CAE, emisión, próxima liquidación).
 
 ### Facturas normales (`buildInvoicePrompt`)
 - `providerTaxId` = CUIT del **emisor** (NO el del consorcio receptor)
 - `dueDate` = fecha de **pago** (NO fecha CAE, NO inicio de actividades)
-  - Válido: campo junto a CUIT e inicio de actividades del proveedor en el encabezado
-  - Inválido: `"Fecha Vto."` junto a `"CAE Nº:"` → es del código AFIP
 - `amount` = Importe Total (nunca un subtotal)
-
-### LSP — Liquidación de Servicios Públicos (`buildUtilityBillPrompt`)
-Detectado automáticamente si el texto contiene: EDESUR, EDENOR, AYSA, AGUA Y SANEAMIENTOS, METROGAS, NATURGY, CAMUZZI, etc.
-
-- `provider` = empresa de servicios (Edesur, AySA, etc.)
-- `providerTaxId` = CUIT de la **empresa** (NO del cliente que aparece prominente)
-- `consortium` = dirección del inmueble (calle + número, sin piso/depto/CP)
-- `amount` = monto del **1° vencimiento** (ignorar 2°)
-- `dueDate` = fecha del 1° vencimiento
-  - Inválido: `"C.E.S.P: XXXXX | Fecha Vto: DD/MM"` → es del código CESP, no de pago
-  - Inválido: `"Próxima liquidación vence..."` → es del próximo mes
-  - Válido en AySA: `"Vencimiento 20/02/2026"` o `"A debitar el 23/02/2026"`
-
-#### Formato observado en Edesur (para futura refactorización de prompt)
-Del PDF real analizado:
-- `boletaNumber`: dentro de `"LSP B 0501-73540975 18"` → extraer solo `0501-73540975`
-- Dos vencimientos presentados así:
-  ```
-  Total a pagar hasta   Fecha límite de pago en banco
-  18/02/2026 $121.670,97    23/02/2026 $122.078,88
-  ```
-  → usar siempre el **primer** par (fecha + monto)
-- `consortium`: aparece bajo `"CONSORCIO DE PROPIETARIOS"` como cliente, seguido de la dirección del suministro
-- `provider`: `"EDESUR S.A."` / CUIT: `30-71079642-7`
-
-**Pendiente:** refactorizar `extraction.ts` para prompts por empresa (`buildEdesurPrompt`, `buildAysaPrompt`, etc.) con router `identifyLSPProvider()`.
 
 ### Regla crítica de dueDate (aplica a ambos tipos)
 El vencimiento de PAGO siempre aparece asociado a un MONTO.
@@ -287,15 +317,31 @@ normalizeConsortiumName("CONSORCIO DE PROPIETARIOS AV PUEYRREDON 2418")
 
 normalizeConsortiumName("BROWN ALMTE AV 708")
 // → "ALMIRANTE BROWN 708"  (expande abreviatura ALMTE)
+
+normalizeConsortiumName("AV ALMIRANTE BROWN 00706 018")
+// → "ALMIRANTE BROWN 706"  (quita ceros y sufijo numérico)
+
+normalizeConsortiumName("CASTILLO 00246 C1414AWF CAPITAL FEDERAL")
+// → "CASTILLO 246"  (quita ceros, CP y localidad)
+
+normalizeConsortiumName("SAN ANTONIO 345 PB A")
+// → "SAN ANTONIO 345"  (quita piso/depto)
 ```
 
-**Prefijos reconocidos:** CONSORCIO DE COPROPIETARIOS / CONSORCIO DE PROPIETARIOS / CONSORCIO COPROPIETARIOS / CONSORCIO PROPIETARIOS / CONS. COPROPIET. / CONS. PROPIET. / CONS. PROP. / CONSORCIO CALLE / CONSORCIO
+### Pipeline de normalización (en orden)
+1. Strip prefijo consorcio (CONSORCIO DE PROPIETARIOS, CONS. PROP., etc.)
+2. Expandir abreviaturas de calles (ALMTE→ALMIRANTE, GRAL→GENERAL, etc.)
+3. Quitar ceros a la izquierda (00706 → 706)
+4. Quitar código postal y localidad (C1414AWF CAPITAL FEDERAL)
+5. Quitar piso/depto/unidad (PB A, 3 B, DPTO 4)
+6. Quitar sufijos numéricos extras de LSPs (706 018 → 706)
+7. Extraer calle + número (sin tipo de vía)
 
-**Tipos de vía:** AV / AVDA / AVENIDA / CALLE / BLVD / DIAGONAL / PASAJE / PJE / RUTA / etc.
+### Fuzzy match mejorado
+`consortiumFuzzyMatch()` ahora aplica `stripLeadingZeros` y `expandAbbreviations` en ambos lados antes de tokenizar. Esto permite que "ALMIRANTE BROWN 00706 018" matchee con "ALMIRANTE BROWN 706".
 
-**Abreviaturas de calle expandidas:** ALMTE→ALMIRANTE, GRAL→GENERAL, CNEL→CORONEL, DR→DOCTOR, ING→INGENIERO, PRES→PRESIDENTE, BV→BOULEVARD, etc.
-
-**Palabras ruido eliminadas:** NUMEROS / NRO / N° / NUM entre nombre y número
+### Alias match mejorado
+`consortiumAliasMatch()` soporta matching en ambas direcciones (fuzzy directo + fuzzy inverso).
 
 **Número distinto entre factura y DB (ej: Edesur 708 vs DB 706):**
 No se puede resolver automáticamente. Registrar alias en Supabase:
@@ -325,7 +371,6 @@ Hoja `Proveedores`:
 - Alias en edificios: separados por `|`
 - Alias en proveedores: campo único opcional (celda vacía = null)
 - Duplicados: se omiten (skip), no sobreescriben
-- Requiere `npm install xlsx` antes de usar
 
 ---
 
@@ -395,24 +440,13 @@ Customizable por cliente en `extractionConfigJson.columnMapping`.
 - **Tokens de IA:** `extractRelevantLines(text, 80)` — primeras 80 líneas no vacías.
 - **Formato de monto:** siempre `es-AR` con `Intl.NumberFormat`.
 - **clientAuth vs adminAuth:** usar `requireClientSession` para endpoints de clientes, `requireAuthenticatedSession` para los del panel admin.
+- **Documentación:** Siempre actualizar `docs/progreso.md`, `docs/decisiones.md` y `CHANGELOG.md` después de cada cambio significativo. Ver sección "Regla obligatoria de documentación" arriba.
 
 ---
 
 ## Pendientes conocidos
 
-### Migraciones pendientes de aplicar
-> **Parar los 3 procesos antes** (el `.dll` de Prisma queda bloqueado en Windows).
-```powershell
-npx prisma migrate deploy
-npx prisma generate
-```
-Migraciones incluidas:
-- `20260319000300_consortium_aliases` → agrega campo `aliases` a Consortium
-- `20260320000100_rubro_coeficiente_to_client_level` → tablas Rubro + Coeficiente a nivel cliente + `lastDirectorySyncAt` en SchedulerState
-
 ### Features pendientes
-- [ ] **Prompts LSP por empresa**: refactorizar `extraction.ts` para tener `buildEdesurPrompt()`, `buildAysaPrompt()`, etc. con función `identifyLSPProvider()` como router. Ver sección LSP arriba para formato Edesur documentado.
-- [ ] `npm install xlsx` (requerido para importación Excel — no está en package.json aún)
 - [ ] UI de edición de aliases de consorcio (hoy solo via SQL en Supabase)
 - [ ] UI de gestión de carpetas Drive por cliente desde el panel
 - [ ] Resincronización automática con Sheets cuando Google falla

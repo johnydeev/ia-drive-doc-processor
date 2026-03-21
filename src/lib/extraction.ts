@@ -1,4 +1,4 @@
-﻿import { z } from "zod";
+import { z } from "zod";
 import { ExtractedDocumentData } from "@/types/extractedDocument.types";
 
 function normalizeCuit(value: string | null): string | null {
@@ -59,30 +59,61 @@ const OUTPUT_JSON_TEMPLATE = {
   alias: "string | null",
 };
 
+// ═══════════════════════════════════════════════════════════════════════════
+// LSP Provider Identification — Router
+// ═══════════════════════════════════════════════════════════════════════════
+
+export type LSPProvider =
+  | "EDESUR"
+  | "EDENOR"
+  | "AYSA"
+  | "METROGAS"
+  | "NATURGY"
+  | "CAMUZZI"
+  | "LITORAL_GAS"
+  | "ABSA"
+  | "GENERIC_LSP";
+
 /**
- * Regla de dueDate para facturas normales.
+ * Identifica qué empresa de servicios públicos emitió la factura.
+ * Analiza los primeros 4000 caracteres del texto del PDF.
+ *
+ * Retorna null si no es una LSP.
  */
-const DUE_DATE_RULE = [
-  "- dueDate: fecha límite en que el cliente debe PAGAR este comprobante. YYYY-MM-DD.",
-  "",
-  "  VÁLIDO — usar la fecha:",
-  "    ✓ 'Fecha de Vto. para el pago', 'Fecha límite de pago', 'Vence:', 'Vencimiento:'",
-  "      con una fecha de pago.",
-  "    ✓ 'Vencimiento: [fecha]' o 'Fecha Vto.: [fecha]' en el encabezado de la factura",
-  "      junto al número de comprobante, CUIT e inicio de actividades del emisor.",
-  "    ✓ '1° Vencimiento: [fecha]' junto a un monto — siempre válido.",
-  "",
-  "  INVÁLIDO — devolver null:",
-  "    ✗ 'Fecha Vto.' junto a 'CAE N°:' o número largo de dígitos — es vencimiento AFIP.",
-  "    ✗ 'C.E.S.P: XXXXX | Fecha Vto: [fecha]' — el Fecha Vto aquí es del código CESP",
-  "       (código electrónico de servicio público), NO de pago.",
-  "    ✗ 'Inicio de actividades' — antigüedad del proveedor en AFIP.",
-  "    ✗ 'Fecha de emisión' / 'Fecha:' sola — es cuando se emitió el comprobante.",
-  "    ✗ 'Período facturado desde/hasta' — período del servicio.",
-  "",
-  "  Si no existe un vencimiento de pago explícito: null.",
-  "  No deducir, no calcular, no suponer. Ante cualquier duda: null.",
-].join("\n");
+export function identifyLSPProvider(text: string): LSPProvider | null {
+  const upper = text.slice(0, 4000).toUpperCase();
+
+  // Primero verificar si es una LSP
+  if (!isUtilityBill(upper)) {
+    return null;
+  }
+
+  // Identificar empresa específica
+  if (upper.includes("EDESUR")) return "EDESUR";
+  if (upper.includes("EDENOR")) return "EDENOR";
+
+  if (
+    upper.includes("AYSA") ||
+    upper.includes("AY.S.A") ||
+    upper.includes("AGUA Y SANEAMIENTOS")
+  ) {
+    return "AYSA";
+  }
+
+  if (upper.includes("METROGAS")) return "METROGAS";
+  if (upper.includes("NATURGY")) return "NATURGY";
+  if (upper.includes("CAMUZZI")) return "CAMUZZI";
+  if (upper.includes("LITORAL GAS")) return "LITORAL_GAS";
+  if (upper.includes("ABSA") || (upper.includes("AGUAS") && upper.includes("ARGENTINAS"))) {
+    return "ABSA";
+  }
+
+  return "GENERIC_LSP";
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Text utilities
+// ═══════════════════════════════════════════════════════════════════════════
 
 /**
  * Extrae las primeras N líneas no vacías del texto del PDF.
@@ -99,9 +130,14 @@ function extractRelevantLines(text: string, maxLines = 80): string {
 
 /**
  * Detecta si el texto corresponde a una Liquidación de Servicios Públicos (LSP).
+ * Acepta texto ya en uppercase o lo convierte.
  */
-function isUtilityBill(text: string): boolean {
-  const upper = text.slice(0, 3000).toUpperCase();
+function isUtilityBill(textOrUpper: string): boolean {
+  const upper =
+    textOrUpper === textOrUpper.toUpperCase()
+      ? textOrUpper
+      : textOrUpper.slice(0, 4000).toUpperCase();
+
   return (
     upper.includes("LIQUIDACIÓN DE SERVICIOS PÚBLICOS") ||
     upper.includes("LIQUIDACION DE SERVICIOS PUBLICOS") ||
@@ -121,25 +157,98 @@ function isUtilityBill(text: string): boolean {
   );
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// Main prompt builder — entry point
+// ═══════════════════════════════════════════════════════════════════════════
+
 export function buildExtractionPrompt(text: string): string {
   const relevantText = extractRelevantLines(text, 80);
-  const utility = isUtilityBill(text);
+  const lspProvider = identifyLSPProvider(text);
 
-  if (utility) {
-    return buildUtilityBillPrompt(relevantText);
+  if (!lspProvider) {
+    return buildInvoicePrompt(relevantText);
   }
 
-  return buildInvoicePrompt(relevantText);
+  // Route to specific prompt per LSP provider
+  switch (lspProvider) {
+    case "EDESUR":
+      return buildEdesurPrompt(relevantText);
+    case "EDENOR":
+      return buildEdenorPrompt(relevantText);
+    case "AYSA":
+      return buildAysaPrompt(relevantText);
+    case "METROGAS":
+    case "NATURGY":
+    case "CAMUZZI":
+    case "LITORAL_GAS":
+      return buildGasPrompt(relevantText, lspProvider);
+    default:
+      return buildGenericUtilityBillPrompt(relevantText);
+  }
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// Common rules shared across prompts
+// ═══════════════════════════════════════════════════════════════════════════
+
+const JSON_RESPONSE_INSTRUCTION = [
+  "Responde SOLO JSON con EXACTAMENTE estas claves y tipos:",
+  JSON.stringify(OUTPUT_JSON_TEMPLATE, null, 2),
+].join("\n");
+
+const CONSORTIUM_ADDRESS_RULES = [
+  "- consortium: dirección del INMUEBLE donde se presta el servicio.",
+  "  Buscarlo en 'Domicilio de Prestación del Servicio', 'Domicilio suministro',",
+  "  'Dirección del inmueble', o dirección del cliente/titular.",
+  "  Extraer SOLO calle y número principal. ELIMINAR:",
+  "    • Números de piso, departamento, unidad (PB, PA, 1°A, etc.)",
+  "    • Código postal (C1414AWF, B1602, etc.)",
+  "    • Localidad y provincia (CAPITAL FEDERAL, BUENOS AIRES, etc.)",
+  "    • Ceros a la izquierda en el número (00246 → 246, 02178 → 2178)",
+  "    • Sufijos numéricos extras después del número principal (001, 018, etc.)",
+  "  Ejemplos:",
+  "    'FRAY JUSTO SANTAMARIA DE ORO 02178 001' → 'FRAY JUSTO SANTAMARIA DE ORO 2178'",
+  "    'CASTILLO 00246 C1414AWF CAPITAL FEDERAL' → 'CASTILLO 246'",
+  "    'SAN ANTONIO 345 PB A' → 'SAN ANTONIO 345'",
+  "    'AV ALMIRANTE BROWN 706 018' → 'AV ALMIRANTE BROWN 706'",
+].join("\n");
+
+const INVALID_DATE_RULES = [
+  "  INVÁLIDO — siempre null:",
+  "    ✗ 'C.E.S.P: XXXXX | Fecha Vto: [fecha]' — el Fecha Vto es del código CESP",
+  "       (código electrónico de servicio público), NO de pago.",
+  "    ✗ 'CAE N°: XXXXXXXXXX | Fecha Vto: [fecha]' — es vencimiento del código AFIP.",
+  "    ✗ 'Fecha de emisión' o 'Fecha:' sola — es cuando se generó el documento.",
+  "    ✗ 'Próxima liquidación vence el [fecha]' — es del próximo mes.",
+  "    ✗ Fechas de 2° o 3° vencimiento con recargo.",
+  "    ✗ 'Inicio de actividades' — antigüedad del emisor en AFIP.",
+  "  Si no existe ningún caso válido: null. No deducir, no calcular, no suponer.",
+].join("\n");
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Invoice prompt (facturas normales A, B, C, etc.)
+// ═══════════════════════════════════════════════════════════════════════════
+
 /**
- * Prompt para facturas/boletas de proveedores (caso general).
+ * Regla de dueDate para facturas normales.
  */
+const DUE_DATE_RULE = [
+  "- dueDate: fecha límite en que el cliente debe PAGAR este comprobante. YYYY-MM-DD.",
+  "",
+  "  VÁLIDO — usar la fecha:",
+  "    ✓ 'Fecha de Vto. para el pago', 'Fecha límite de pago', 'Vence:', 'Vencimiento:'",
+  "      con una fecha de pago.",
+  "    ✓ 'Vencimiento: [fecha]' o 'Fecha Vto.: [fecha]' en el encabezado de la factura",
+  "      junto al número de comprobante, CUIT e inicio de actividades del emisor.",
+  "    ✓ '1° Vencimiento: [fecha]' junto a un monto — siempre válido.",
+  "",
+  INVALID_DATE_RULES,
+].join("\n");
+
 function buildInvoicePrompt(relevantText: string): string {
   return [
     "Extrae datos de una factura/comprobante en PDF (administración de consorcios en Argentina).",
-    "Responde SOLO JSON con EXACTAMENTE estas claves y tipos:",
-    JSON.stringify(OUTPUT_JSON_TEMPLATE, null, 2),
+    JSON_RESPONSE_INSTRUCTION,
 
     "=== REGLAS ===",
 
@@ -170,69 +279,260 @@ function buildInvoicePrompt(relevantText: string): string {
   ].join("\n\n");
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// EDESUR prompt
+// ═══════════════════════════════════════════════════════════════════════════
+
 /**
- * Prompt especializado para Liquidaciones de Servicios Públicos (LSP).
+ * Prompt especializado para facturas de EDESUR S.A.
  *
- * Cubre las variantes reales observadas en facturas argentinas:
- *
- * EDESUR / EDENOR:
- *   - CUIT del cliente aparece prominente junto a "CUIT:" en el encabezado del receptor
- *   - Puede tener 1° y 2° vencimiento
- *
- * AySA (Agua y Saneamientos Argentinos):
- *   - Encabezado: "C.E.S.P: XXXXXX | Fecha Vto: DD/MM/YYYY" → Fecha Vto es del CESP, NO de pago
- *   - CUIT de AySA: 30-70956507-5 (está en el encabezado junto a nombre y inicio de actividades)
- *   - CUIT del cliente aparece al FINAL del documento: "IVA RESPONSABLE INSCRIPTO - CUIT No. XX"
- *   - Caso débito automático: no hay "Vencimiento" sino "A debitar el [fecha]"
- *   - Caso pago normal: "Vencimiento [fecha]" en encabezado grande + "Total a pagar hasta [fecha]"
- *   - Consorcio = "Domicilio de Prestación del Servicio" (calle y número del inmueble)
- *   - boletaNumber = número largo tipo "0106A11487223"
+ * Formato observado en PDFs reales:
+ * - Encabezado: "EDESUR S.A." con CUIT 30-71079642-7
+ * - boletaNumber dentro de "LSP B 0501-73540975 18" → extraer solo "0501-73540975"
+ * - Dos vencimientos:
+ *     Total a pagar hasta   Fecha límite de pago en banco
+ *     18/02/2026 $121.670,97    23/02/2026 $122.078,88
+ *   → usar SIEMPRE el primer par (fecha + monto)
+ * - consortium: aparece bajo "CONSORCIO DE PROPIETARIOS" como cliente,
+ *   seguido de dirección del suministro
+ * - CUIT del cliente (consorcio) aparece prominente → IGNORAR para providerTaxId
  */
-function buildUtilityBillPrompt(relevantText: string): string {
+function buildEdesurPrompt(relevantText: string): string {
+  return [
+    "Extrae datos de una factura de EDESUR (energía eléctrica) argentina.",
+    JSON_RESPONSE_INSTRUCTION,
+
+    "=== REGLAS ESPECÍFICAS EDESUR ===",
+
+    "- provider: siempre 'EDESUR S.A.'",
+
+    "- providerTaxId: CUIT de EDESUR → '30-71079642-7'.",
+    "  CUIDADO: en la factura aparece prominente el CUIT del CLIENTE (consorcio) en la sección",
+    "  de datos del titular/receptor. Ese CUIT NO es de Edesur. Ignorarlo completamente.",
+    "  El CUIT de Edesur suele estar junto al nombre 'EDESUR S.A.' en el bloque del emisor.",
+
+    "- boletaNumber: extraer de la línea tipo 'LSP B PPPP-NNNNNNNN NN'.",
+    "  Tomar SOLO la parte PPPP-NNNNNNNN (ej: de 'LSP B 0501-73540975 18' → '0501-73540975').",
+    "  Si no encontrás ese formato, buscar 'Nro. de Cliente' o 'Nro. Factura'.",
+
+    CONSORTIUM_ADDRESS_RULES,
+
+    "- amount: monto del PRIMER vencimiento solamente.",
+    "  Edesur presenta dos columnas:",
+    "    'Total a pagar hasta [FECHA1] $[MONTO1]    Fecha límite de pago en banco [FECHA2] $[MONTO2]'",
+    "  Usar MONTO1 (el menor, sin recargo). Formato numérico (ej: 121670.97).",
+
+    "- dueDate: fecha del PRIMER vencimiento. YYYY-MM-DD.",
+    "  Usar FECHA1 del par descrito arriba.",
+    "  VÁLIDO:",
+    "    ✓ 'Total a pagar hasta [fecha]' — es la fecha de pago.",
+    "    ✓ '1° Vencimiento [fecha]'",
+    INVALID_DATE_RULES,
+
+    "- detail: 'Energía eléctrica' o descripción del servicio.",
+
+    "- Usa null si un dato no se puede extraer con certeza.",
+
+    "Texto de la factura Edesur:",
+    relevantText,
+  ].join("\n\n");
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// EDENOR prompt
+// ═══════════════════════════════════════════════════════════════════════════
+
+function buildEdenorPrompt(relevantText: string): string {
+  return [
+    "Extrae datos de una factura de EDENOR (energía eléctrica) argentina.",
+    JSON_RESPONSE_INSTRUCTION,
+
+    "=== REGLAS ESPECÍFICAS EDENOR ===",
+
+    "- provider: siempre 'EDENOR S.A.'",
+
+    "- providerTaxId: CUIT de EDENOR → '30-65651651-4'.",
+    "  CUIDADO: el CUIT del CLIENTE (consorcio) aparece en la sección del titular.",
+    "  NO es el providerTaxId. Ignorarlo.",
+
+    "- boletaNumber: buscar formato LSP similar a Edesur: 'LSP B PPPP-NNNNNNNN'.",
+    "  Extraer solo PPPP-NNNNNNNN. Si no hay ese formato, buscar 'Nro. Factura' o similar.",
+
+    CONSORTIUM_ADDRESS_RULES,
+
+    "- amount: monto del PRIMER vencimiento (sin recargo). Formato numérico.",
+
+    "- dueDate: fecha del PRIMER vencimiento. YYYY-MM-DD.",
+    "  VÁLIDO:",
+    "    ✓ 'Vencimiento [fecha]' junto a un monto.",
+    "    ✓ 'Total a pagar hasta [fecha]'",
+    INVALID_DATE_RULES,
+
+    "- detail: 'Energía eléctrica'.",
+
+    "Texto de la factura Edenor:",
+    relevantText,
+  ].join("\n\n");
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// AySA prompt
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * Prompt especializado para AySA (Agua y Saneamientos Argentinos S.A.).
+ *
+ * Particularidades observadas:
+ * - CUIT de AySA: 30-70956507-5 (junto a nombre e inicio de actividades)
+ * - CUIT del CLIENTE aparece AL FINAL: "IVA RESPONSABLE INSCRIPTO - CUIT No. XX-XXXXXXXX-X"
+ * - C.E.S.P (código electrónico): "C.E.S.P: XXXXX | Fecha Vto: DD/MM" → NO es fecha de pago
+ * - Caso débito automático: "A debitar el [fecha]" → SÍ es fecha de pago
+ * - Caso pago normal: "Vencimiento [fecha]" en encabezado grande
+ * - boletaNumber: alfanumérico largo tipo "0106A11487223"
+ * - Domicilio: "Domicilio de Prestación del Servicio" con calle y número
+ */
+function buildAysaPrompt(relevantText: string): string {
+  return [
+    "Extrae datos de una factura de AySA (Agua y Saneamientos Argentinos) argentina.",
+    JSON_RESPONSE_INSTRUCTION,
+
+    "=== REGLAS ESPECÍFICAS AYSA ===",
+
+    "- provider: siempre 'AYSA' (o 'AGUA Y SANEAMIENTOS ARGENTINOS S.A.' si aparece completo).",
+
+    "- providerTaxId: CUIT de AySA → '30-70956507-5'.",
+    "  El CUIT de AySA está en el encabezado junto a 'AySA', 'CUIT Nº' e inicio de actividades.",
+    "  ⚠️ TRAMPA COMÚN: al FINAL del documento aparece:",
+    "    'IVA RESPONSABLE INSCRIPTO - CUIT No. XX-XXXXXXXX-X'",
+    "    Ese es el CUIT del CLIENTE (consorcio). NO es de AySA. IGNORARLO SIEMPRE.",
+    "  Si no podés confirmar 30-70956507-5 en el texto: usar null, nunca el del cliente.",
+
+    "- boletaNumber: número alfanumérico largo, formato típico '0106A11487223'.",
+    "  Tomarlo tal cual aparece. Puede estar etiquetado como 'Nro.' o en el código de barras.",
+
+    CONSORTIUM_ADDRESS_RULES,
+    "  En AySA buscar específicamente 'Domicilio de Prestación del Servicio'.",
+
+    "- amount: monto total a pagar en el PRIMER vencimiento.",
+    "  En débito automático: usar 'Total a debitar $XXX' o 'A debitar el [fecha] $XXX'.",
+    "  Formato numérico (ej: 798400.87). Ignorar 2° y 3° vencimiento.",
+
+    "- dueDate: fecha de pago. YYYY-MM-DD.",
+    "  VÁLIDO:",
+    "    ✓ 'Vencimiento [fecha]' — en encabezado grande, es la fecha de pago.",
+    "    ✓ 'Total a pagar hasta el [fecha]' — explícitamente de pago.",
+    "    ✓ 'A debitar el [fecha]' — en débito automático, es cuando se cobra.",
+    "  INVÁLIDO — siempre null:",
+    "    ✗ 'C.E.S.P: XXXXX | Fecha Vto: DD/MM/YYYY' — 'Fecha Vto' aquí es del código",
+    "       C.E.S.P (Código Electrónico de Servicio Público). Es una referencia interna",
+    "       de AySA para el sistema de cobro electrónico. NO es fecha de pago del usuario.",
+    "    ✗ 'Fecha de emisión'",
+    "    ✗ 'Próxima liquidación vence el [fecha]' — es del próximo mes.",
+    "  Si no existe ningún caso válido: null.",
+
+    "- detail: 'Agua y cloacas' o 'Servicio de agua y saneamiento'.",
+
+    "Texto de la factura AySA:",
+    relevantText,
+  ].join("\n\n");
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Gas companies prompt (Metrogas, Naturgy, Camuzzi, Litoral Gas)
+// ═══════════════════════════════════════════════════════════════════════════
+
+const GAS_PROVIDER_CUITS: Record<string, string> = {
+  METROGAS: "30-65786442-4",
+  NATURGY: "30-53330905-7",
+  CAMUZZI: "30-65786613-3",
+  LITORAL_GAS: "30-66176173-2",
+};
+
+const GAS_PROVIDER_NAMES: Record<string, string> = {
+  METROGAS: "METROGAS S.A.",
+  NATURGY: "NATURGY BAN S.A.",
+  CAMUZZI: "CAMUZZI GAS PAMPEANA S.A.",
+  LITORAL_GAS: "LITORAL GAS S.A.",
+};
+
+function buildGasPrompt(relevantText: string, provider: LSPProvider): string {
+  const providerName = GAS_PROVIDER_NAMES[provider] ?? provider;
+  const providerCuit = GAS_PROVIDER_CUITS[provider] ?? null;
+  const cuitInstruction = providerCuit
+    ? `- providerTaxId: CUIT de ${providerName} → '${providerCuit}'.\n` +
+      "  CUIDADO: el CUIT del CLIENTE (consorcio) aparece en la sección del titular.\n" +
+      "  NO es el providerTaxId. Ignorarlo.\n" +
+      `  Si no podés confirmar '${providerCuit}' en el texto: usar null.`
+    : "- providerTaxId: CUIT de la EMPRESA DE GAS (NO del cliente).\n" +
+      "  Buscar en el bloque del emisor junto al nombre de la empresa.\n" +
+      "  El CUIT del cliente/consorcio NO es el providerTaxId. Ignorarlo.";
+
+  return [
+    `Extrae datos de una factura de ${providerName} (gas natural) argentina.`,
+    JSON_RESPONSE_INSTRUCTION,
+
+    `=== REGLAS ESPECÍFICAS ${provider} ===`,
+
+    `- provider: siempre '${providerName}'.`,
+
+    cuitInstruction,
+
+    "- boletaNumber: número de la liquidación/factura.",
+    "  Buscar 'Nro. Factura', 'Nro. Comprobante', o formato LSP.",
+
+    CONSORTIUM_ADDRESS_RULES,
+
+    "- amount: monto del PRIMER vencimiento (sin recargo). Formato numérico.",
+
+    "- dueDate: fecha del PRIMER vencimiento. YYYY-MM-DD.",
+    "  VÁLIDO:",
+    "    ✓ 'Vencimiento [fecha]' junto a un monto.",
+    "    ✓ 'Total a pagar hasta [fecha]'",
+    "    ✓ '1° Vencimiento [fecha]'",
+    INVALID_DATE_RULES,
+
+    "- detail: 'Gas natural'.",
+
+    `Texto de la factura ${providerName}:`,
+    relevantText,
+  ].join("\n\n");
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Generic utility bill prompt (fallback for unrecognized LSPs)
+// ═══════════════════════════════════════════════════════════════════════════
+
+function buildGenericUtilityBillPrompt(relevantText: string): string {
   return [
     "Extrae datos de una Liquidación de Servicios Públicos (LSP) argentina.",
-    "Responde SOLO JSON con EXACTAMENTE estas claves y tipos:",
-    JSON.stringify(OUTPUT_JSON_TEMPLATE, null, 2),
+    JSON_RESPONSE_INSTRUCTION,
 
     "=== REGLAS PARA LSP (luz, gas, agua) ===",
 
     "- provider: nombre de la EMPRESA DE SERVICIOS emisora. Es el logo/encabezado principal.",
     "  Ejemplos: 'EDESUR', 'EDENOR', 'AYSA', 'METROGAS', 'NATURGY', 'CAMUZZI'.",
 
-    "- providerTaxId: CUIT de la EMPRESA DE SERVICIOS. En facturas de AySA y similares:",
-    "    • El CUIT de la empresa está en su bloque de datos (junto a nombre, IIBB, inicio de actividades).",
-    "      Ej AySA: 'CUIT Nº 30-70956507-5'",
-    "    • Al final del documento puede aparecer 'IVA RESPONSABLE INSCRIPTO - CUIT No. XX-XXXXXXXX-X'",
-    "      — ese es el CUIT del CLIENTE (consorcio), NO de la empresa. Ignorarlo.",
-    "  Si no podés identificar el CUIT de la empresa con certeza: null.",
+    "- providerTaxId: CUIT de la EMPRESA DE SERVICIOS, NO del cliente/consorcio.",
+    "  El CUIT de la empresa está en su bloque de datos (junto a nombre, IIBB, inicio de actividades).",
+    "  ⚠️ REGLA CRÍTICA: En estos documentos el CUIT del CLIENTE (consorcio) suele aparecer",
+    "  muy prominente en la sección del titular o al final del documento. Ese CUIT NO es el",
+    "  del proveedor. NUNCA usarlo como providerTaxId.",
+    "  Si no podés identificar con certeza el CUIT de la EMPRESA: null.",
 
-    "- consortium: dirección del INMUEBLE donde se presta el servicio.",
-    "  Buscarlo en 'Domicilio de Prestación del Servicio' o dirección del cliente.",
-    "  Extraer solo calle y número principal (sin piso, depto, CP, localidad).",
-    "  Ejemplos: 'FRAY JUSTO SANTAMARIA DE ORO 02178 001' → 'FRAY JUSTO SANTAMARIA DE ORO 2178'",
-    "            'CASTILLO 00246 C1414AWF CAPITAL FEDERAL' → 'CASTILLO 246'",
-    "            'SAN ANTONIO 345 PB A' → 'SAN ANTONIO 345'",
+    CONSORTIUM_ADDRESS_RULES,
 
     "- boletaNumber: número de la liquidación.",
-    "  En AySA tiene formato alfanumérico: '0106A11487223'. Tomarlo tal cual.",
 
     "- amount: monto total a pagar en el PRIMER vencimiento.",
     "  Ignorar 2° y 3° vencimiento (tienen recargo).",
-    "  En débito automático, usar el monto de 'Total a debitar $XXX' o 'A debitar el [fecha] $XXX'.",
     "  Formato numérico (ej: 798400.87).",
 
-    "- dueDate: fecha de pago. YYYY-MM-DD. Reglas estrictas:",
+    "- dueDate: fecha de pago. YYYY-MM-DD.",
     "  VÁLIDO:",
-    "    ✓ 'Vencimiento [fecha]' o 'Vencimiento [fecha] Total a pagar $XXX' — es la fecha de pago.",
+    "    ✓ 'Vencimiento [fecha]' junto a un monto — es la fecha de pago.",
     "    ✓ 'Total a pagar hasta el [fecha]' — explícitamente de pago.",
-    "    ✓ 'A debitar el [fecha]' — en débito automático, es la fecha en que se cobra.",
-    "  INVÁLIDO — siempre null:",
-    "    ✗ 'C.E.S.P: XXXXX | Fecha Vto: [fecha]' — el Fecha Vto es del código CESP,",
-    "       NO de pago. Es una fecha interna de AySA/EDESUR para sistemas de cobro electrónico.",
-    "    ✗ 'Fecha de emisión' — es cuando se generó el documento.",
-    "    ✗ 'Próxima liquidación vence el [fecha]' — es del próximo mes, no de esta factura.",
-    "    ✗ Fechas de 2° o 3° vencimiento con recargo.",
-    "  Si no existe ningún caso válido: null.",
+    "    ✓ 'A debitar el [fecha]' — en débito automático.",
+    INVALID_DATE_RULES,
 
     "- detail: tipo de servicio (ej: 'Agua y cloacas', 'Energía eléctrica', 'Gas natural').",
 
@@ -240,6 +540,10 @@ function buildUtilityBillPrompt(relevantText: string): string {
     relevantText,
   ].join("\n\n");
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Output parsing
+// ═══════════════════════════════════════════════════════════════════════════
 
 function normalizeModelOutput(raw: string): string {
   const trimmed = raw.trim();
@@ -256,6 +560,10 @@ export function parseExtractionOutput(raw: string): ExtractedDocumentData {
   const parsed = JSON.parse(normalized);
   return EXTRACTED_DOCUMENT_SCHEMA.parse(parsed);
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Post-extraction refinement (consortium enrichment from raw text)
+// ═══════════════════════════════════════════════════════════════════════════
 
 function normalizeLine(value: string): string {
   return value.replace(/\s+/g, " ").trim();

@@ -1,12 +1,12 @@
 # Progreso del proyecto — drive-doc-processor
 
-Actualizado al 20/03/2026.
+Actualizado al 21/03/2026.
 
 ---
 
 ## Estado general
 
-El sistema core está funcionando. El pipeline de procesamiento de PDFs, extracción IA, matching de consorcios/proveedores y envío a Google Sheets está completo y en producción.
+El sistema core está funcionando en producción. Pipeline de PDFs, extracción IA, matching y envío a Sheets completo. Se acaba de refactorizar el sistema de extracción IA para LSPs con prompts por empresa y mejoras en normalización de direcciones.
 
 ---
 
@@ -14,8 +14,11 @@ El sistema core está funcionando. El pipeline de procesamiento de PDFs, extracc
 
 - Pipeline de procesamiento de PDFs (download → dedup → extracción → match → Sheets → mover)
 - Extracción IA con Gemini + fallback OpenAI
-- Detección automática de LSP (Edesur, AySA, Metrogas, etc.)
-- Matching de consorcios (exacto + fuzzy + alias)
+- **Prompts LSP por empresa** — `identifyLSPProvider()` como router con prompts específicos para Edesur, Edenor, AySA, Metrogas, Naturgy, Camuzzi, Litoral Gas (21/03/2026)
+- **Normalización de direcciones LSP** — limpieza de ceros a la izquierda, sufijos numéricos, código postal, piso/depto (21/03/2026)
+- **CUIT hardcodeado por empresa LSP** — elimina confusión entre CUIT del proveedor y del consorcio (21/03/2026)
+- **Reglas dueDate específicas** — CESP, CAE y otras fechas inválidas documentadas por empresa (21/03/2026)
+- Matching de consorcios (exacto + fuzzy + alias) con expansión de abreviaturas
 - Matching de proveedores (CUIT + nombre + parcial)
 - Deduplicación por hash SHA256 y business key
 - Sistema multi-tenant con roles ADMIN / CLIENT / VIEWER
@@ -25,44 +28,44 @@ El sistema core está funcionando. El pipeline de procesamiento de PDFs, extracc
 - Recibo de pago: subida a Drive + guardado en Invoice
 - Scheduler + Worker como procesos separados
 - Script `run-local.ps1` para levantar los 3 procesos
-- Normalización de nombres de consorcios con abreviaturas
+- Sincronización directorio ALTA (Sheets → DB) con 4 hojas
+- Panel admin con métricas, alta de clientes, edición de configuración
+- Campo `aliases` en Consortium (migración aplicada)
+- Tablas Rubro y Coeficiente a nivel cliente (migración aplicada)
+- Regla de documentación obligatoria en `docs/` establecida (21/03/2026)
 
 ---
 
 ## En progreso 🔄
 
-- Campo `aliases` en Consortium
-  - Migración lista: `20260319000300_consortium_aliases`
-  - Falta aplicar: `npx prisma migrate deploy` → `npx prisma generate`
-  - Falta: UI de edición de aliases (hoy solo via SQL en Supabase)
+- **Validación en producción de prompts LSP refactorizados**
+  - Archivos desplegados: `src/lib/extraction.ts`, `src/lib/consortiumNormalizer.ts`
+  - Falta: probar con PDFs reales de Edesur, AySA, Metrogas en el worker
+  - Si persisten errores: ajustar prompts con ejemplos del texto real extraído
 
 ---
 
 ## Pendiente ❌
 
 ### Alta prioridad
-- [ ] Aplicar migración `consortium_aliases`
-  ```powershell
-  npx prisma migrate deploy
-  npx prisma generate
-  ```
-- [ ] `npm install xlsx` — requerido para que funcione la importación Excel
+- [ ] Probar extracción LSP refactorizada con PDFs reales en producción
+- [ ] UI de edición de aliases de consorcio desde el panel (hoy solo via SQL en Supabase)
 
 ### Media prioridad
-- [ ] UI de edición de aliases de consorcio desde el panel (hoy solo via SQL)
 - [ ] UI de gestión de carpetas Drive por cliente desde el panel admin
 - [ ] Agregar URL de recibo a columna de Google Sheets
+- [ ] Resincronización automática con Sheets cuando Google falla
 
 ### Baja prioridad
-- [ ] Resincronización automática con Sheets cuando Google falla
+- [ ] UI para asignar Rubro y Coeficiente a invoices individuales desde el panel (Stage 2)
 
 ---
 
 ## Próximos pasos sugeridos
 
-1. Aplicar la migración pendiente de aliases
-2. Instalar dependencia xlsx
-3. Construir UI de edición de aliases
+1. Probar los prompts LSP refactorizados con PDFs reales
+2. Si hay errores, capturar el texto extraído del PDF y ajustar el prompt correspondiente
+3. Construir UI de edición de aliases de consorcio
 4. Construir UI de gestión de carpetas Drive
 
 ---
@@ -71,3 +74,4 @@ El sistema core está funcionando. El pipeline de procesamiento de PDFs, extracc
 
 - En Windows, `npx prisma generate` puede fallar si los 3 procesos están corriendo (el `.dll` queda bloqueado). Parar todo antes de migrar.
 - PowerShell no soporta `&&`. Siempre correr comandos por separado.
+- Números de calle distintos entre factura y DB (ej: Edesur 708 vs DB 706) no se resuelven automáticamente → registrar alias manualmente.

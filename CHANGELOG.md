@@ -1,5 +1,22 @@
 # Changelog
 
+## 2026-03-21
+
+Highlights
+- Refactorización completa de `extraction.ts`: nuevo router `identifyLSPProvider()` que detecta la empresa de servicios y despacha a un prompt específico.
+- Prompts dedicados para: Edesur (`buildEdesurPrompt`), Edenor (`buildEdenorPrompt`), AySA (`buildAysaPrompt`), Metrogas/Naturgy/Camuzzi/Litoral Gas (`buildGasPrompt`), y genérico LSP (`buildGenericUtilityBillPrompt`).
+- CUIT de cada empresa hardcodeado en su prompt → resuelve confusión entre CUIT del proveedor y del consorcio.
+- Reglas de dueDate específicas por empresa → resuelve extracción errónea de fecha CESP/CAE como fecha de pago.
+- Reglas de dirección unificadas en `CONSORTIUM_ADDRESS_RULES` con instrucciones de limpiar ceros, sufijos, CP, piso.
+- `consortiumNormalizer.ts` mejorado: nuevas funciones `stripLeadingZeros`, `stripTrailingNumericSuffix`, `stripPostalAndLocality`, `stripFloorUnit`.
+- Fuzzy match ahora limpia ceros a la izquierda en ambos lados antes de comparar tokens.
+- Alias match soporta fuzzy inverso (OCR → alias además de alias → OCR).
+- Nuevas abreviaturas de calles: SGTO→SARGENTO, CTE→COMANDANTE, INT→INTENDENTE, PROF→PROFESOR.
+- Establecida regla obligatoria de documentación: `docs/progreso.md`, `docs/decisiones.md` y `CHANGELOG.md` deben actualizarse con cada cambio significativo.
+- Actualizado CLAUDE.md con sección de router LSP, tabla de prompts por empresa, y regla de documentación.
+- Inicializado `docs/decisiones.md` con las primeras 3 decisiones técnicas documentadas.
+- Actualizado `docs/progreso.md` al estado actual (prompts LSP completados, migraciones aplicadas).
+
 ## 2026-03-20
 
 Highlights
