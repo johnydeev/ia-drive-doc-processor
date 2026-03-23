@@ -1,282 +1,235 @@
 # Drive Doc Processor
 
-Backend multi-tenant en `Next.js + TypeScript` para procesar comprobantes PDF desde Google Drive, extraer datos con IA/OCR, cargar resultados en Google Sheets y mantener trazabilidad en PostgreSQL.
+Sistema multi-tenant para administrar consorcios de propiedad horizontal en Argentina. Procesa automáticamente PDFs de facturas y boletas desde Google Drive usando IA, extrae datos estructurados, los guarda en base de datos y los envía a Google Sheets.
 
-## Estado actual del sistema
-- Multi-tenant por cliente (`Client`) con roles `ADMIN`, `CLIENT`, `VIEWER`.
-- Scheduler automatico por cliente (solo `CLIENT` activos) que encola trabajos en `ProcessingJob`.
-- Workers procesan la cola de trabajos y ejecutan el pipeline de PDFs.
-- Asignacion de consorcio/proveedor/periodo a partir de la extraccion (auto-creacion si aplica).
-- Gestión de consorcios con cierre de períodos.
-- Control `ON/OFF` por cliente desde el dashboard.
-- Dashboard admin con:
-  - alta de clientes (rol `CLIENT`),
-  - metricas por cliente,
-  - estado agregado del scheduler y consumo de tokens.
-- Dashboard cliente con:
-  - control de su propio scheduler,
-  - ejecucion manual,
-  - resumen de ultima corrida, tokens y cuota estimada.
-- Dashboard viewer: acceso de solo lectura (sin controles).
-- Autenticacion por cookie httpOnly con expiracion de token a 24h.
-- Persistencia en PostgreSQL (Prisma).
-- Deteccion de duplicados por hash y clave de negocio.
+## Stack
 
-## Flujo de procesamiento (por cliente)
-1. Scheduler escanea la carpeta `Pendientes` y crea `ProcessingJob` por PDF.
-2. Worker toma un job pendiente.
-3. Descarga PDF.
-4. Extrae texto:
-  - texto embebido directo (pdf-parse),
-  - fallback OCR con `tesseract.js` + `pdfjs-dist` si no hay texto.
-5. Extrae JSON estructurado con IA:
-  - intenta Gemini (config cliente o global),
-  - luego OpenAI (config cliente o global),
-  - si fallan ambos => `OCR_ONLY`.
-6. Detecta duplicado:
-  - por `documentHash` (sha256),
-  - por clave de negocio normalizada.
-7. Asigna consorcio/proveedor/periodo si hay datos extraidos.
-8. Inserta fila en Google Sheets.
-9. Mueve archivo a carpeta `Escaneados`.
-10. Registra logs, totales y tokens en DB.
+- **Frontend/API:** Next.js 16 + TypeScript + React 19
+- **Base de datos:** PostgreSQL (Supabase) + Prisma ORM
+- **IA:** Google Gemini (primario) + OpenAI (fallback)
+- **Servicios externos:** Google Drive, Google Sheets
+- **OCR:** Tesseract.js + @napi-rs/canvas + pdfjs-dist
+- **Infraestructura:** Docker + Cloudflare Tunnel + GitHub Actions CI/CD
 
-## Arquitectura resumida
-- API/UI: Next.js App Router (`src/app`).
-- Scheduler (job creator): proceso separado (`src/jobs/scheduler.ts`) que encola en `ProcessingJob`.
-- Worker (job processor): proceso separado (`src/jobs/jobWorkerMain.ts`) que consume la cola.
-- Flujo: Drive scan -> `ProcessingJob` queue -> Workers -> pipeline de procesamiento.
-- Persistencia: Prisma + PostgreSQL (`prisma/schema.prisma`).
-- Servicios:
-  - Drive: `src/services/googleDrive.service.ts`
-  - Sheets: `src/services/googleSheets.service.ts`
-  - OCR: `src/services/ocr.service.ts`
-  - PDF text: `src/services/pdfTextExtractor.service.ts`
-  - Gemini: `src/services/geminiExtractor.service.ts`
-  - OpenAI: `src/services/aiExtractor.service.ts`
+## Arquitectura
 
-## Modelos principales (Prisma)
-- `Client`: usuario/tenant con config de Drive/Sheets e IA.
-- `Invoice`: factura procesada + metadatos + deduplicacion.
-- `ProcessingJob`: cola persistente de procesamiento.
-- `ProcessingLog`: historial de ejecuciones.
-- `SchedulerState`: estado runtime y acumulados por cliente.
-- `TokenUsage`: consumo de tokens por corrida/proveedor/modelo.
-- `Consortium`: consorcios por cliente (nombre normalizado + nombre original).
-- `Provider`: proveedores por cliente.
-- `ConsortiumProvider`: relacion many-to-many entre consorcios y proveedores.
-- `Period`: periodos por consorcio (status `ACTIVE`/`CLOSED`).
+El sistema corre como **3 procesos independientes**:
 
-## Variables de entorno
-### Requeridas
-- `DATABASE_URL`
-- `PROCESS_INTERVAL_MINUTES`
-- `SESSION_SECRET`
+| Proceso | Responsabilidad |
+|---------|-----------------|
+| **Web** | UI + API REST + autenticación (Next.js standalone) |
+| **Scheduler** | Escanea Google Drive por cliente y encola `ProcessingJob` |
+| **Worker** | Procesa la cola: descarga PDF, extrae con IA, guarda en DB, envía a Sheets |
 
-### Requeridas para migraciones Prisma
-- `DIRECT_URL`
+### Pipeline de procesamiento
 
-### Opcionales (fallback global)
-Estas son opcionales porque el modo recomendado es usar credenciales por cliente en DB:
-- `GOOGLE_PROJECT_ID`
-- `GOOGLE_CLIENT_EMAIL`
-- `GOOGLE_PRIVATE_KEY`
-- `GOOGLE_DRIVE_PENDING_FOLDER_ID`
-- `GOOGLE_DRIVE_SCANNED_FOLDER_ID`
-- `GOOGLE_SHEETS_ID`
-- `GOOGLE_SHEETS_SHEET_NAME` (default interno: `Datos`)
-- `GEMINI_API_KEY`
-- `GEMINI_MODEL`
-- `OPENAI_API_KEY`
-- `OPENAI_MODEL`
-- `GOOGLE_CREDENTIALS_ENCRYPTION_KEY` (si no esta, se usa `SESSION_SECRET` para cifrar)
+1. Descarga PDF desde Google Drive
+2. Deduplicación por hash SHA256
+3. Extracción de texto (pdf-parse, fallback OCR con Tesseract)
+4. Detección automática de tipo de documento (router LSP por empresa)
+5. Extracción IA con prompt específico (Gemini, fallback OpenAI, fallback OCR_ONLY)
+6. Deduplicación por clave de negocio (boletaNumber + providerTaxId + dueDate + amount)
+7. Matching de consorcio (exacto, fuzzy, alias) y proveedor (CUIT, nombre, parcial)
+8. Canonización con datos de DB
+9. Inserción en Google Sheets (formato es-AR)
+10. Mover archivo a carpeta correspondiente + guardar Invoice en DB
 
-## Configuracion local
-1. Instalar dependencias:
+### Empresas de servicios (LSP) soportadas
+
+Router `identifyLSPProvider()` con prompts dedicados para: **Edesur, Edenor, AySA, Metrogas, Naturgy, Camuzzi, Litoral Gas**. CUIT hardcodeado por empresa para evitar confusión con el CUIT del consorcio. Fallback a prompt genérico LSP o prompt de factura normal.
+
+## Docker (producción)
+
+### Requisitos
+
+- Docker y Docker Compose
+- Archivo `.env` en la raíz (copiar de `.env.example`)
+- Token de Cloudflare Tunnel (opcional, para acceso externo)
+
+### Levantar
+
+```bash
+# Build + levantar los 4 servicios
+docker compose up --build -d
+
+# Ver logs
+docker compose logs -f
+
+# Solo un servicio
+docker compose logs -f web
+
+# Bajar
+docker compose down
+```
+
+### Servicios
+
+| Servicio | Puerto | Descripción |
+|----------|--------|-------------|
+| `web` | 3000 | Next.js standalone + API, healthcheck integrado |
+| `scheduler` | - | Escanea Drive cada N minutos |
+| `worker` | - | Procesa cola de jobs |
+| `tunnel` | - | Cloudflare Tunnel (opcional) |
+
+Los 3 servicios de la app comparten la misma imagen Docker (`drive-doc-processor:latest`). Solo `web` tiene `build:`, scheduler y worker reusan la imagen.
+
+### Imagen Docker
+
+- **Base:** `node:20-bookworm-slim` (Debian, NO Alpine — requerido por `@napi-rs/canvas`)
+- **Multi-stage:** deps, prod-deps, builder, runner
+- **Runtime:** incluye `tesseract-ocr` (spa + eng), corre como usuario `nextjs` (no root)
+
+## Desarrollo local
+
+### Requisitos
+
+- Node.js 20+
+- PostgreSQL (o Supabase)
+- Archivo `.env` (copiar de `.env.example`)
+
+### Instalación
+
 ```bash
 npm install
+npx prisma generate
+npx prisma migrate deploy
 ```
 
-2. Crear/ajustar entorno:
-Crear `.env.local` con las variables requeridas.
+### Crear usuario admin
 
-3. Generar cliente Prisma:
 ```bash
-npm run prisma:generate
+npx tsx scripts/create-admin.ts admin@empresa.com MiPassword123
 ```
 
-4. Aplicar migraciones:
-```bash
-npm run prisma:migrate:deploy
+### Levantar los 3 procesos
+
+```powershell
+# Windows (abre 3 terminales automáticamente)
+npm run local
+
+# O manualmente en 3 terminales separadas:
+npm run dev        # Web (puerto 3000)
+npm run schedule   # Scheduler
+npm run worker     # Worker
 ```
 
-## Ejecutar en desarrollo
-Necesitas 3 procesos:
+> Los 3 procesos deben estar corriendo para que el pipeline funcione. Solo `npm run dev` levanta la UI pero no procesa PDFs.
 
-1. Web/API:
-```bash
-npm run dev
+## Scripts
+
+| Script | Descripción |
+|--------|-------------|
+| `npm run dev` | Servidor Next.js en modo desarrollo |
+| `npm run build` | Build de producción (Next.js standalone) |
+| `npm run build:jobs` | Compila scheduler + worker a `dist/` |
+| `npm run start` | Servidor de producción |
+| `npm run typecheck` | Verificación de tipos TypeScript |
+| `npm run lint` | ESLint |
+| `npm run check` | Pipeline completo: generate + lint + typecheck + build:jobs |
+| `npm run schedule` | Ejecuta el scheduler (dev, con tsx) |
+| `npm run worker` | Ejecuta el worker (dev, con tsx) |
+| `npm run local` | Levanta los 3 procesos (Windows/PowerShell) |
+| `npm run diagnose -- <fileId>` | Diagnóstico de acceso a archivo en Drive |
+| `npm run diagnose:db` | Diagnóstico de conexión a DB |
+| `npm run diagnose:gemini` | Test de extracción con Gemini |
+
+## Variables de entorno
+
+Ver `.env.example` para la lista completa con descripciones.
+
+### Requeridas
+
+| Variable | Descripción |
+|----------|-------------|
+| `DATABASE_URL` | PostgreSQL connection pooler URL |
+| `DIRECT_URL` | PostgreSQL directo (para migraciones) |
+| `SESSION_SECRET` | JWT signing key (mín 32 chars) |
+| `PROCESS_INTERVAL_MINUTES` | Intervalo del scheduler en minutos |
+
+### Opcionales (fallback global)
+
+Credenciales de Google, claves de IA (Gemini/OpenAI), y configuración de Drive/Sheets. Cada cliente puede tener su propia configuración almacenada encriptada en DB, las variables globales actúan como fallback.
+
+### Docker
+
+| Variable | Descripción |
+|----------|-------------|
+| `CLOUDFLARE_TUNNEL_TOKEN` | Token de Cloudflare Tunnel |
+
+## Sistema multi-tenant
+
+- **ADMIN** — gestiona clientes, ve métricas agregadas, auditoría
+- **CLIENT** — opera su scheduler, ejecuta corridas manuales, gestiona consorcios/proveedores
+- **VIEWER** — acceso de solo lectura
+
+Cada cliente tiene:
+- Credenciales Google propias (encriptadas en DB)
+- Carpetas Drive configurables (pendientes, escaneados, sin asignar, fallidos, recibos)
+- Archivo Google Sheets para datos + archivo ALTA para sincronización de directorio
+- Claves IA propias (Gemini/OpenAI) opcionales
+
+## Features principales
+
+- Pipeline automático de procesamiento de PDFs con extracción IA
+- Prompts LSP dedicados por empresa de servicios (7 empresas + genérico)
+- Normalización de direcciones: expansión de abreviaturas, limpieza de ceros, CP, piso/depto
+- Matching de consorcios en 3 niveles: exacto, fuzzy (tokens), alias
+- Matching de proveedores: CUIT normalizado, nombre exacto/alias, nombre parcial
+- Deduplicación por hash SHA256 y clave de negocio
+- Sincronización de directorio desde archivo ALTA (Sheets a DB)
+- Importación masiva desde Excel (edificios + proveedores)
+- Recibo de pago: subida a Drive organizada por consorcio/período
+- Logging estructurado con timestamps y separadores visuales
+
+## CI/CD
+
+GitHub Actions (`.github/workflows/ci.yml`) con 3 jobs:
+
+1. **Check** — lint + typecheck + build:jobs
+2. **Build** — Docker build con cache GHA (BuildKit)
+3. **Deploy** — Solo en push a `master`, corre en self-hosted runner
+
+## Estructura del proyecto
+
+```
+src/
+├── app/                    # Next.js App Router (UI + API)
+│   ├── api/
+│   │   ├── auth/          # Login / logout / me
+│   │   ├── admin/         # Panel admin (clientes, auditoría, scheduler)
+│   │   └── client/        # Operaciones de cliente (consorcios, proveedores, sync, import)
+│   └── admin/             # UI del panel admin
+├── jobs/                  # Scheduler + Worker + Pipeline principal
+├── lib/                   # Lógica core (extracción IA, normalización, matching, logger)
+├── services/              # Servicios externos (Drive, Sheets, Gemini, OpenAI, OCR)
+├── repositories/          # Capa de acceso a datos (Prisma)
+├── config/                # Variables de entorno
+├── types/                 # Definiciones TypeScript
+└── utils/                 # Utilidades (encriptación)
 ```
 
-2. Scheduler (crea jobs):
-```bash
-npm run schedule
-```
+## Modelos principales (Prisma)
 
-3. Worker (procesa jobs):
-```bash
-npm run worker
-```
+| Modelo | Descripción |
+|--------|-------------|
+| `Client` | Tenant/usuario con roles y configuración |
+| `Consortium` | Edificio (canonicalName + aliases + CUIT) |
+| `Provider` | Proveedor (canonicalName + CUIT + alias) |
+| `Period` | Período mensual por consorcio (ACTIVE/CLOSED) |
+| `Invoice` | Factura procesada con datos extraídos |
+| `Rubro` | Categoría de gasto (nivel cliente) |
+| `Coeficiente` | Coeficiente de liquidación (nivel cliente) |
+| `ProcessingJob` | Cola persistente de procesamiento |
+| `SchedulerState` | Estado runtime del scheduler por cliente |
+| `ProcessingLog` | Historial de ejecuciones |
+| `TokenUsage` | Consumo de tokens IA por corrida |
 
-Si solo ejecutas `npm run dev`, no hay procesamiento automatico.
-Si queres levantar todo en paralelo:
-```bash
-powershell -ExecutionPolicy Bypass -File scripts/run-local.ps1
-```
+## Documentación interna
 
-## Scripts utiles
-- `npm run dev`: levanta Next en desarrollo.
-- `npm run schedule`: levanta loop automatico.
-- `npm run worker`: procesa jobs pendientes.
-- `npm run build`: build de produccion.
-- `npm run start`: servidor de produccion.
-- `npm run prebuild:check`: prisma generate + tsc + prisma validate.
-- `npm run diagnose -- <fileId>`: diagnostico Drive por archivo.
-- `npm run diagnose:gemini`: test de extraccion Gemini.
-- `npm run diagnose:db`: diagnostico de conexion DB.
-- `npm run prisma:migrate:deploy`: aplica migraciones.
+- `CLAUDE.md` — Contexto completo del proyecto para desarrollo con IA
+- `docs/progreso.md` — Estado actual de features y tareas
+- `docs/decisiones.md` — Registro de decisiones técnicas
 
-## Endpoints principales
-### Auth
-- `POST /api/auth/login`
-- `POST /api/auth/logout`
-- `GET /api/auth/me`
-- `POST /api/auth/register` -> deshabilitado (retorna 403)
+## Licencia
 
-### Procesamiento
-- `POST /api/process` -> ejecuta corrida manual global (sin autenticacion).
-
-### Admin / Scheduler
-- `GET /api/admin/scheduler/status` (admin ve agregado, cliente ve su propio estado)
-- `POST /api/admin/scheduler/toggle` (solo rol `CLIENT`)
-- `POST /api/admin/scheduler/run` (solo rol `CLIENT`)
-- `GET /api/admin/audit/clients` (solo rol `ADMIN`)
-- `POST /api/admin/clients` (solo rol `ADMIN`)
-
-### Consorcios (cliente)
-- `GET /api/client/consortiums`
-- `POST /api/client/consortiums`
-- `GET /api/client/consortiums/:id`
-- `POST /api/client/consortiums/:id/close-period`
-
-### Documentacion API
-- Swagger UI: `GET /api-docs`
-- Alias: `GET /docs`
-- OpenAPI JSON: `GET /api/openapi`
-
-## Alta de cliente (desde panel ADMIN)
-Se guarda en DB:
-- Datos de cuenta: nombre, email, password temporal.
-- Drive:
-  - `driveFolderPending`
-  - `driveFolderProcessed`
-- Sheets:
-  - `sheetsId`
-  - `sheetName`
-- Service account Google (en JSON o campos sueltos):
-  - `projectId`
-  - `clientEmail`
-  - `privateKey`
-- IA opcional por cliente:
-  - `geminiApiKey`
-  - `openaiApiKey`
-
-## Validaciones importantes por cliente
-Antes de procesar se valida:
-- `driveFolderPending` obligatorio.
-- `driveFolderProcessed` obligatorio.
-- Pendientes y Escaneados deben ser distintos.
-- `sheetName` obligatorio.
-- Credenciales Google completas (`projectId/clientEmail/privateKey/sheetsId`).
-
-Si falta algo, se registra error explicito por cliente en la corrida.
-
-## Deduplicacion
-- `documentHash` (sha256) por cliente.
-- clave de negocio normalizada por cliente:
-  - `boletaNumberNorm`
-  - `providerTaxIdNorm`
-  - `dueDateNorm`
-  - `amountNorm`
-
-## Docker
-### Compose (actual)
-- `docker-compose.yml`:
-  - `web` (Next/API + scheduler)
-  - `worker` (job worker)
-
-Levantar:
-```bash
-docker compose up -d --build
-```
-
-Logs:
-```bash
-docker compose logs -f web
-docker compose logs -f worker
-```
-
-## Checklist de produccion
-### Seguridad
-- Definir `SESSION_SECRET` fuerte (minimo 32 bytes aleatorios).
-- Verificar que no haya credenciales reales en repositorio ni `.env` versionados.
-- Rotar claves de service account y API keys antes de go-live.
-- Forzar HTTPS y dominio final en el reverse proxy.
-
-### Base de datos
-- `DATABASE_URL` y `DIRECT_URL` apuntando a la DB productiva.
-- Ejecutar `npm run prisma:migrate:deploy`.
-- Confirmar que existe al menos un usuario `ADMIN`.
-
-### Scheduler y worker
-- Levantar `web` y `worker` (no solo `web`).
-- Verificar en logs que aparezca: `[scheduler] starting. Interval: ...`.
-- Verificar en logs del worker: `[job-worker] starting`.
-- Confirmar que cada cliente con rol `CLIENT` puede activar/desactivar su scheduler.
-
-### Integraciones por cliente
-- Validar `driveFolderPending` y `driveFolderProcessed` (distintos).
-- Validar `googleConfigJson` completo (`projectId/clientEmail/privateKey/sheetsId`).
-- Compartir carpetas Drive y archivo Sheets al service account correspondiente.
-- Confirmar `sheetName` correcto.
-
-### Pruebas funcionales minimas
-- Login ADMIN y CLIENT.
-- Alta de cliente desde panel ADMIN.
-- Toggle scheduler ON/OFF por cliente.
-- Corrida manual (`Ejecutar ahora`) y corrida automatica.
-- Verificar insercion en Sheets y movimiento a carpeta Escaneados.
-- Verificar deduplicacion por hash y clave de negocio.
-
-## Seguridad y sesiones
-- Cookie `httpOnly`, `sameSite=lax`.
-- Session cookie (se elimina al cerrar sesion de navegador).
-- Token con expiracion dura de 24 horas.
-- `SESSION_SECRET` obligatorio.
-
-## Troubleshooting rapido
-### `Unexpected token '<' ... is not valid JSON`
-- Normalmente significa que un endpoint devolvio HTML por error 500.
-- Revisar logs del server para identificar variable/config faltante.
-
-### Scheduler no corre automatico
-- Verificar que `npm run schedule` este activo (o proceso scheduler en `web` en Docker).
-- Verificar `PROCESS_INTERVAL_MINUTES`.
-- Verificar que el cliente tenga scheduler en `ON`.
-
-### Worker no procesa jobs
-- Verificar que el servicio `worker` este activo.
-- Verificar `GOOGLE_CREDENTIALS_ENCRYPTION_KEY` en el entorno del worker.
-
----
-Si agregamos funcionalidades nuevas, este README debe actualizarse en la misma PR para mantener trazabilidad del producto.
+Privado.

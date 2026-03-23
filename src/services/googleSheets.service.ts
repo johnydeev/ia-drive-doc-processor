@@ -14,6 +14,7 @@ export interface SheetsRowMapping {
   dueDate: string;
   amount: string;
   alias: string;
+  clientNumber: string;
   sourceFileUrl: string;
   isDuplicate: string;
 }
@@ -33,6 +34,7 @@ const HEADER_BY_FIELD: Record<keyof SheetsRowMapping, string> = {
   dueDate: "FECHA DE VENCIMIENTO",
   amount: "MONTO",
   alias: "ALIAS",
+  clientNumber: "NRO CLIENTE",
   sourceFileUrl: "URL_ARCHIVO",
   isDuplicate: "ES_DUPLICADO",
 };
@@ -58,10 +60,11 @@ function formatAmountARS(value: number | string | null | undefined): string {
 }
 
 export interface DirectoryData {
-  consortiums: { canonicalName: string; cuit: string | null; aliases: string | null }[];
-  providers: { canonicalName: string; cuit: string | null; alias: string | null }[];
+  consortiums: { canonicalName: string; cuit: string | null; matchNames: string | null; paymentAlias: string | null }[];
+  providers: { canonicalName: string; cuit: string | null; matchNames: string | null; paymentAlias: string | null }[];
   rubros: { name: string; description: string | null }[];
   coeficientes: { code: string; name: string }[];
+  lspServices: { consortiumName: string; provider: string; clientNumber: string; description: string | null }[];
   warnings: string[];
 }
 
@@ -184,6 +187,8 @@ export class GoogleSheetsService {
         // normalizeBusinessAmount ya maneja es-AR, en-US y plano
         amount: amountCell ? Number(normalizeBusinessAmount(amountCell)) || null : null,
         alias: null,
+        clientNumber: null,
+        paymentMethod: null,
       })
     );
   }
@@ -250,10 +255,11 @@ export class GoogleSheetsService {
     const warnings: string[] = [];
 
     const TABS: { name: string; headers: string[]; cols: string }[] = [
-      { name: "_Consorcios",  headers: ["NOMBRE CANÓNICO", "CUIT", "ALIASES"], cols: "A:C" },
-      { name: "_Proveedores", headers: ["NOMBRE CANÓNICO", "CUIT", "ALIAS"],   cols: "A:C" },
+      { name: "_Consorcios",  headers: ["NOMBRE CANÓNICO", "CUIT", "NOMBRES ALTERNATIVOS", "ALIAS"], cols: "A:D" },
+      { name: "_Proveedores", headers: ["NOMBRE CANÓNICO", "CUIT", "NOMBRES ALTERNATIVOS", "ALIAS"], cols: "A:D" },
       { name: "_Rubros",      headers: ["NOMBRE", "DESCRIPCIÓN"],              cols: "A:B" },
       { name: "_Coeficientes",headers: ["NOMBRE", "CÓDIGO"],                   cols: "A:B" },
+      { name: "_LspServices", headers: ["NOMBRE CANÓNICO", "PROVEEDOR", "NRO CLIENTE", "DESCRIPCIÓN"], cols: "A:D" },
     ];
 
     // 1. Obtener hojas existentes en el archivo
@@ -307,11 +313,12 @@ export class GoogleSheetsService {
       return rows.slice(1).filter((row) => row[0]?.toString().trim());
     };
 
-    const [consortiumRows, providerRows, rubroRows, coeficienteRows] = await Promise.all([
-      readTab("_Consorcios", "A:C"),
-      readTab("_Proveedores", "A:C"),
+    const [consortiumRows, providerRows, rubroRows, coeficienteRows, lspServiceRows] = await Promise.all([
+      readTab("_Consorcios", "A:D"),
+      readTab("_Proveedores", "A:D"),
       readTab("_Rubros", "A:B"),
       readTab("_Coeficientes", "A:B"),
+      readTab("_LspServices", "A:D"),
     ]);
 
     return {
@@ -319,7 +326,8 @@ export class GoogleSheetsService {
         .map((row) => ({
           canonicalName: row[0]?.toString().trim().toUpperCase() ?? "",
           cuit: row[1]?.toString().trim() || null,
-          aliases: row[2]?.toString().trim() || null,
+          matchNames: row[2]?.toString().trim() || null,
+          paymentAlias: row[3]?.toString().trim() || null,
         }))
         .filter((c) => c.canonicalName),
 
@@ -327,7 +335,8 @@ export class GoogleSheetsService {
         .map((row) => ({
           canonicalName: row[0]?.toString().trim().toUpperCase() ?? "",
           cuit: row[1]?.toString().trim() || null,
-          alias: row[2]?.toString().trim() || null,
+          matchNames: row[2]?.toString().trim() || null,
+          paymentAlias: row[3]?.toString().trim() || null,
         }))
         .filter((p) => p.canonicalName),
 
@@ -344,6 +353,15 @@ export class GoogleSheetsService {
           code: row[1]?.toString().trim().toUpperCase() ?? "",
         }))
         .filter((c) => c.name && c.code),
+
+      lspServices: lspServiceRows
+        .map((row) => ({
+          consortiumName: row[0]?.toString().trim().toUpperCase() ?? "",
+          provider: row[1]?.toString().trim().toUpperCase() ?? "",
+          clientNumber: row[2]?.toString().trim() ?? "",
+          description: row[3]?.toString().trim() || null,
+        }))
+        .filter((l) => l.consortiumName && l.provider && l.clientNumber),
 
       warnings,
     };

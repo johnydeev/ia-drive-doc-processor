@@ -4,6 +4,101 @@ Registro de decisiones tomadas ante problemas reales encontrados en producción.
 
 ---
 
+## 2026-03-23 — Modelo LspService para lookup automático de servicios públicos
+
+### Problema
+El pipeline extraía datos de facturas LSP (Edesur, AySA, etc.) pero no tenía forma de vincular la factura a un servicio específico dentro de un consorcio. Un consorcio puede tener múltiples servicios del mismo proveedor (ej: dos medidores Edesur con distintos números de cliente). Sin esta relación, no se podía identificar a qué servicio corresponde cada factura.
+
+### Decisión
+- Nueva tabla `LspService` con campos: clientId, consortiumId, provider (normalizado), clientNumber, description.
+- Unique constraint: `(consortiumId, provider, clientNumber)` — un consorcio no puede tener el mismo nro de cliente duplicado para el mismo proveedor.
+- El pipeline busca en `LspService` después de extraer `clientNumber` con IA, usando `clientId + provider + clientNumber`.
+- Si encuentra match → setea `lspServiceId` en Invoice. Si no → loguea warning y continúa.
+- Nueva columna NRO CLIENTE en Sheets (columna J) para registrar el número de cliente extraído.
+- Nuevo enum `PaymentMethod` (DEBITO_AUTOMATICO, TRANSFERENCIA, EFECTIVO) como campo nullable en Invoice.
+- Todos los prompts LSP actualizados para extraer `clientNumber` y `paymentMethod`.
+- Extracción limitada a página 1 para documentos LSP (reduce ruido en la extracción IA).
+- Nueva hoja `_LspServices` en archivo ALTA para cargar los servicios desde Sheets.
+
+### Alternativas descartadas
+- **Lookup por dirección del consorcio**: impreciso porque las LSPs formatean direcciones de maneras distintas.
+- **Campo clientNumber suelto en Invoice sin tabla**: no permite validar ni vincular a un consorcio específico.
+- **Crear LspService automáticamente desde el pipeline**: podría generar duplicados y datos incorrectos sin supervisión humana.
+
+### Impacto
+- Migración: `20260323000200_add_lspservice_paymentmethod`
+- Archivos modificados: `schema.prisma`, `extraction.ts`, `processPendingDocuments.job.ts`, `googleSheets.service.ts`, `sync-directory/route.ts`, `clientProcessingConfig.ts`, `pdfTextExtractor.service.ts`, `invoice.repository.ts`, `extractedDocument.types.ts`, `invoices/route.ts`
+- Columnas de Sheets desplazadas: sourceFileUrl J→K, isDuplicate K→L
+- Nuevo prompt: `buildPersonalPrompt` con keywords PERSONAL/TELECOM
+
+---
+
+## 2026-03-23 — Separar matchNames (interno) de paymentAlias (visible)
+
+### Problema
+El campo `alias` en Provider y `aliases` en Consortium cumplía dos funciones distintas:
+1. **Matching interno**: nombres alternativos para que el pipeline identifique la entidad en PDFs (ej: "BROWN ALMTE AV 708" para matchear con "ALMIRANTE BROWN 706").
+2. **Alias de pago**: nombre corto visible en la UI y en la columna "ALIAS" de Google Sheets.
+
+Mezclar ambos usos genera confusión: si un admin carga un alias de pago como "TIGRE", el pipeline lo usa para matching de nombre, lo cual puede generar falsos positivos. Y si se cargan nombres técnicos de matching (como direcciones alternativas), aparecen en la UI sin sentido para el usuario.
+
+### Decisión
+- Renombrar `Provider.alias` → `Provider.matchNames` y `Consortium.aliases` → `Consortium.matchNames`.
+- Agregar `paymentAlias` (String?, opcional) en ambos modelos.
+- `matchNames`: campo interno, separado por `|`, usado exclusivamente por el pipeline de matching. No se muestra en la UI.
+- `paymentAlias`: campo visible en la UI (label "Alias") y escrito en la columna "ALIAS" de Google Sheets. Si no tiene valor, la celda queda vacía.
+- En el pipeline, `extracted.alias` (columna I de Sheets) ahora se setea con `provider.paymentAlias` en vez de `provider.canonicalName`.
+- Migración por rename de columna (preserva datos existentes).
+
+### Alternativas descartadas
+- **Dos campos en la UI**: mostrar ambos campos al usuario. Descartado porque `matchNames` es un concepto técnico que el usuario no necesita ver ni gestionar directamente (se carga via Sheets ALTA o import Excel).
+- **Campo único con separador especial**: usar un prefijo o formato especial para distinguir matching de pago dentro del mismo campo. Frágil y propenso a errores.
+
+### Impacto
+- Migración: `20260323000100_rename_alias_to_matchnames_add_paymentalias`
+- Archivos modificados: `schema.prisma`, `processPendingDocuments.job.ts`, `googleSheets.service.ts`, `sync-directory/route.ts`, `import/route.ts`, `import/template/route.ts`, `providers/route.ts`, `consortiums/page.tsx`
+- Sync ALTA: hojas `_Consorcios` y `_Proveedores` ampliadas de 3 a 4 columnas
+- Import Excel: nueva columna "Alias de pago" en ambas hojas
+- Compatible con datos existentes: rename preserva valores, `paymentAlias` empieza como NULL
+
+---
+
+## 2026-03-23 — Optimización docker-compose: imagen compartida entre servicios
+
+### Problema
+Los 3 servicios (web, scheduler, worker) en `docker-compose.yml` tenían cada uno su propio bloque `build:`, lo que causaba que `docker compose up --build` construyera la misma imagen 3 veces. Esto triplicaba el tiempo de build sin ningún beneficio — los 3 servicios usan exactamente el mismo Dockerfile y la misma imagen final.
+
+### Decisión
+- Agregar `image: drive-doc-processor:latest` al servicio `web` (que mantiene el `build:`).
+- Reemplazar los bloques `build:` de `scheduler` y `worker` por `image: drive-doc-processor:latest`.
+- Resultado: `docker compose up --build` construye **una sola vez** y los 3 servicios reusan la misma imagen.
+
+### Alternativas descartadas
+- **docker compose build + referencia cruzada con `depends_on`**: Docker Compose no cachea automáticamente entre servicios con `build:` independiente — sigue intentando buildear cada uno.
+- **Script wrapper que hace `docker build` primero y luego `compose up`**: agrega complejidad innecesaria cuando el tag de imagen resuelve el problema nativamente.
+
+### Impacto
+- Archivo modificado: `docker-compose.yml`
+- Tiempo de build reducido ~66% (1 build en vez de 3)
+
+---
+
+## 2026-03-23 — Auditoría de .env.example para producción Docker
+
+### Problema
+El `.env.example` tenía 15 variables sin comentarios ni agrupación. Faltaba `GOOGLE_CREDENTIALS_ENCRYPTION_KEY` (usada en `encryption.util.ts` con fallback a `SESSION_SECRET`). Al preparar Docker para producción, un operador no sabría qué variables son requeridas vs opcionales ni qué hace cada una.
+
+### Decisión
+Reescribir `.env.example` con:
+- Variables agrupadas por categoría (DB, Auth, Google Cloud, Drive, Sheets, Scheduler, IA)
+- Comentarios descriptivos en cada variable
+- `GOOGLE_CREDENTIALS_ENCRYPTION_KEY` agregada como opcional
+
+### Impacto
+- Archivo modificado: `.env.example`
+
+---
+
 ## 2026-03-21 — Dockerización con 3 servicios separados y CI/CD
 
 ### Problema

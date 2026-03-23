@@ -18,8 +18,9 @@ const DEFAULT_MAPPING: SheetsRowMapping = {
   dueDate: "G",
   amount: "H",
   alias: "I",
-  sourceFileUrl: "J",
-  isDuplicate: "K",
+  clientNumber: "J",
+  sourceFileUrl: "K",
+  isDuplicate: "L",
 };
 
 const TIPO_GASTO_VALUES = ["ORDINARIO", "EXTRAORDINARIO", "PARTICULAR"] as const;
@@ -189,6 +190,8 @@ export async function POST(
             dueDate:       invoice.dueDate ? invoice.dueDate.toISOString().slice(0, 10) : null,
             amount:        invoice.amount ? Number(invoice.amount) : null,
             alias:         null,
+            clientNumber:  null,
+            paymentMethod: null,
             sourceFileUrl: null,
             isDuplicate:   "NO",
           };

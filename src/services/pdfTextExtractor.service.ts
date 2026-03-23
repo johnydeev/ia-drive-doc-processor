@@ -1,8 +1,8 @@
 import { PDFParse } from "pdf-parse";
 
 export class PdfTextExtractorService {
-  async extractTextFromPdf(buffer: Buffer): Promise<string> {
-    const directText = await this.extractTextDirectly(buffer);
+  async extractTextFromPdf(buffer: Buffer, maxPages?: number): Promise<string> {
+    const directText = await this.extractTextDirectly(buffer, maxPages);
     if (directText.length > 0) {
       return directText;
     }
@@ -15,8 +15,12 @@ export class PdfTextExtractorService {
     return this.cleanText(ocrText);
   }
 
-  private async extractTextDirectly(buffer: Buffer): Promise<string> {
-    const parser = new PDFParse({ data: buffer });
+  private async extractTextDirectly(buffer: Buffer, maxPages?: number): Promise<string> {
+    const options: Record<string, unknown> = { data: buffer };
+    if (maxPages) {
+      options.max = maxPages;
+    }
+    const parser = new PDFParse(options);
 
     try {
       const parsed = await parser.getText();

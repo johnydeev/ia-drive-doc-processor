@@ -25,6 +25,8 @@ export interface SaveInvoiceInput {
   consortiumId?: string;
   providerId?: string;
   periodId?: string;
+  lspServiceId?: string | null;
+  paymentMethod?: string | null;
 }
 
 export class InvoiceRepository {
@@ -142,6 +144,8 @@ export class InvoiceRepository {
           periodId: input.periodId ?? null,
           amount: input.extraction.amount,
           alias: input.extraction.alias,
+          lspServiceId: input.lspServiceId ?? null,
+          paymentMethod: input.paymentMethod as any ?? null,
           boletaNumberNorm: parts.boletaNumberNorm,
           providerTaxIdNorm: parts.providerTaxIdNorm,
           dueDateNorm: parts.dueDateNorm,
@@ -163,6 +167,8 @@ export class InvoiceRepository {
           periodId: input.periodId ?? null,
           amount: input.extraction.amount,
           alias: input.extraction.alias,
+          lspServiceId: input.lspServiceId ?? null,
+          paymentMethod: input.paymentMethod as any ?? null,
           boletaNumberNorm: parts.boletaNumberNorm,
           providerTaxIdNorm: parts.providerTaxIdNorm,
           dueDateNorm: parts.dueDateNorm,
@@ -200,6 +206,8 @@ export class InvoiceRepository {
         dueDate: invoice.dueDate ? invoice.dueDate.toISOString().slice(0, 10) : null,
         amount: invoice.amount !== null ? Number(invoice.amount) : null,
         alias: invoice.alias,
+        clientNumber: null,
+        paymentMethod: null,
       },
       sourceFileUrl: invoice.sourceFileUrl ?? undefined,
       fileId: invoice.driveFileId ?? undefined,

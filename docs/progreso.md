@@ -1,6 +1,6 @@
 # Progreso del proyecto — drive-doc-processor
 
-Actualizado al 21/03/2026 (sesión 2).
+Actualizado al 23/03/2026 (sesión 4).
 
 ---
 
@@ -38,11 +38,47 @@ El sistema core está funcionando en producción. Pipeline de PDFs, extracción 
 - **ESLint configurado** — typescript-eslint + @next/eslint-plugin-next (21/03/2026)
 - **Cloudflare Tunnel** integrado en docker-compose (21/03/2026)
 - **Fixes de build**: encoding UTF-8 en close-period/route.ts, async params en receipt/route.ts, clientAuth.ts creado, type cast en scan/route.ts (21/03/2026)
+- **Auditoría de producción Docker** — revisión completa de dependencias, env vars, migraciones y Docker setup (23/03/2026)
+  - TypeScript compila sin errores, ESLint solo 8 warnings menores (variables no usadas)
+  - `build:jobs` compila correctamente
+  - `@napi-rs/canvas` confirmado en uso en `ocr.service.ts` (necesario para OCR via canvas)
+  - 14 migraciones aplicadas, schema up to date, sin pendientes
+- **Optimización docker-compose** — eliminado triple build redundante (23/03/2026)
+  - Antes: los 3 servicios (web, scheduler, worker) tenían `build:` propio → imagen se construía 3 veces
+  - Ahora: solo `web` tiene `build:`, los 3 comparten `image: drive-doc-processor:latest`
+  - `docker compose up --build` construye una sola vez y los 3 servicios reusan la misma imagen
+- **`.env.example` actualizado** — agregada `GOOGLE_CREDENTIALS_ENCRYPTION_KEY`, comentarios descriptivos por sección, variables agrupadas por categoría (23/03/2026)
+- **Renombrado alias/aliases → matchNames + nuevo campo paymentAlias** (23/03/2026)
+  - Provider: `alias` → `matchNames` (interno, matching múltiple separado por `|`) + `paymentAlias` (visible en UI y Sheets)
+  - Consortium: `aliases` → `matchNames` (interno, matching) + `paymentAlias` (visible en UI y Sheets)
+  - Migración: `20260323000100_rename_alias_to_matchnames_add_paymentalias` (pendiente de aplicar)
+  - Pipeline: columna "ALIAS" de Sheets ahora escribe `provider.paymentAlias` (vacío si no tiene)
+  - Sync ALTA: hojas `_Consorcios` y `_Proveedores` ampliadas a 4 columnas (A:D)
+  - Import Excel: nueva columna "Alias de pago" en ambas hojas
+  - UI: provider muestra `paymentAlias` como "Alias", `matchNames` es invisible
+- **Modelo LspService + PaymentMethod** (23/03/2026)
+  - Nueva tabla `LspService`: clientId, consortiumId, provider (normalizado), clientNumber, description
+  - Nuevo enum `PaymentMethod`: DEBITO_AUTOMATICO, TRANSFERENCIA, EFECTIVO
+  - Invoice: nuevos campos `lspServiceId` (FK nullable) y `paymentMethod` (nullable)
+  - Prompts LSP actualizados: todos extraen `clientNumber` y `paymentMethod`
+  - Nuevo prompt `buildPersonalPrompt` con keywords PERSONAL/TELECOM en router
+  - Pipeline: extracción limitada a página 1 para LSP + lookup en LspService por clientNumber
+  - Sheets: nueva columna NRO CLIENTE (J), sourceFileUrl→K, isDuplicate→L
+  - Hoja `_LspServices` en archivo ALTA (4 columnas: NOMBRE CANÓNICO, PROVEEDOR, NRO CLIENTE, DESCRIPCIÓN)
+  - Sync directory: reemplazo total de LspServices por cliente
+  - Migración: `20260323000200_add_lspservice_paymentmethod` (pendiente de aplicar)
+  - Eliminado campo `isAutoCreated` (ya no existía en schema)
 
 ---
 
 ## En progreso 🔄
 
+- **Preparación para producción Docker** — auditoría completa en curso (23/03/2026)
+  - [x] Sección 1: Auditoría de dependencias y build — OK
+  - [x] Sección 2: Variables de entorno — OK, `.env.example` actualizado
+  - [x] Sección 3: Migraciones pendientes — OK, todas aplicadas
+  - [x] Sección 4: Docker — OK, docker-compose optimizado (imagen compartida)
+  - [x] Sección 5: Smoke test del pipeline (solo lectura) — OK, código coincide con docs
 - **Configurar self-hosted GitHub Actions runner** en la máquina local para deploy automático
 - **Validación en producción de cambios del 21/03**
   - Prompts LSP refactorizados: probar con PDFs reales de Edesur, AySA, Metrogas

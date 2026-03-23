@@ -153,12 +153,14 @@ src/
 
 ```
 Client          → Tenant. Roles: ADMIN / CLIENT / VIEWER
-  ├── Consortium  → Edificio. canonicalName + rawName + cuit + aliases
-  │   └── Period    → Período mensual. status: ACTIVE / CLOSED
-  ├── Provider    → Proveedor. canonicalName + cuit + alias
+  ├── Consortium  → Edificio. canonicalName + rawName + cuit + matchNames + paymentAlias
+  │   ├── Period    → Período mensual. status: ACTIVE / CLOSED
+  │   └── LspService → Servicio de empresa pública. provider + clientNumber + description
+  ├── Provider    → Proveedor. canonicalName + cuit + matchNames + paymentAlias
   ├── Rubro       → Categoría de gasto (nivel cliente). name + description?
   ├── Coeficiente → Coeficiente de liquidación (nivel cliente). code + name
-  ├── Invoice     → Boleta procesada. Liga a Consortium + Provider + Period
+  ├── Invoice     → Boleta procesada. Liga a Consortium + Provider + Period + LspService?
+  │                 lspServiceId / paymentMethod (nullable)
   │                 receiptDriveFileId / receiptDriveFileUrl (recibo de pago)
   ├── Receipt     → Recibo de pago (modelo separado, relacionado 1:1 con Invoice)
   ├── ProcessingJob → Cola de jobs (PENDING/PROCESSING/COMPLETED/FAILED)
@@ -175,11 +177,28 @@ Client          → Tenant. Roles: ADMIN / CLIENT / VIEWER
 - `isDuplicate` → flag (sigue yendo a Sheets, no se mueve en Drive)
 - `tipoGasto` → enum: ORDINARIO / EXTRAORDINARIO / PARTICULAR
 - `tipoComprobante` → string libre (A, B, C, Ticket, Recibo, etc.)
+- `lspServiceId` → FK nullable a LspService (vincula factura LSP con servicio específico)
+- `paymentMethod` → enum nullable: DEBITO_AUTOMATICO / TRANSFERENCIA / EFECTIVO
 - `receiptDriveFileId` / `receiptDriveFileUrl` → recibo de pago adjunto manualmente desde UI
 
+### Campos importantes en LspService
+- `provider` → nombre normalizado de la empresa (EDESUR, AYSA, EDENOR, METROGAS, NATURGY, CAMUZZI, LITORAL_GAS, PERSONAL)
+- `clientNumber` → número de cliente/cuenta en esa empresa
+- `description` → opcional (ej: "Edificio", "Local 1", "Encargado")
+- Unique constraint: `(consortiumId, provider, clientNumber)`
+- El pipeline busca por `clientId + provider + clientNumber` tras la extracción IA
+
 ### Campos importantes en Consortium
-- `aliases` → nombres alternativos separados por `|` para matching con LSP (Edesur, AySA, etc.)
+- `matchNames` → nombres alternativos separados por `|` para matching interno con LSP (Edesur, AySA, etc.)
   - Ejemplo: `"BROWN ALMTE AV 708|ALMIRANTE BROWN 708"`
+  - Campo interno — **no se muestra en la UI**
+- `paymentAlias` → alias visible en la UI y en la columna "ALIAS" de Google Sheets
+
+### Campos importantes en Provider
+- `matchNames` → nombres alternativos separados por `|` para matching interno
+  - Campo interno — **no se muestra en la UI**
+- `paymentAlias` → alias visible en la UI (label "Alias") y escrito en la columna "ALIAS" de Google Sheets
+  - Si no tiene valor, la celda de Sheets queda vacía
 
 ### googleConfigJson por cliente
 ```json
@@ -207,20 +226,22 @@ Client          → Tenant. Roles: ADMIN / CLIENT / VIEWER
 4. Primera sincronización: si las hojas no existen se crean automáticamente con encabezados.
 5. El usuario carga datos y vuelve a sincronizar.
 
-### Formato del archivo ALTA (4 hojas)
-| Hoja | Col A | Col B | Col C |
-|---|---|---|---|
-| `_Consorcios` | NOMBRE CANÓNICO | CUIT | ALIASES (opcional, separado por `\|`) |
-| `_Proveedores` | NOMBRE CANÓNICO | CUIT | ALIAS (opcional) |
-| `_Rubros` | NOMBRE | DESCRIPCIÓN (opcional) | — |
-| `_Coeficientes` | NOMBRE | CÓDIGO | — |
+### Formato del archivo ALTA (5 hojas)
+| Hoja | Col A | Col B | Col C | Col D |
+|---|---|---|---|---|
+| `_Consorcios` | NOMBRE CANÓNICO | CUIT | NOMBRES ALTERNATIVOS (separado por `\|`, interno) | ALIAS (visible en UI) |
+| `_Proveedores` | NOMBRE CANÓNICO | CUIT | NOMBRES ALTERNATIVOS (separado por `\|`, interno) | ALIAS (visible en UI) |
+| `_Rubros` | NOMBRE | DESCRIPCIÓN (opcional) | — | — |
+| `_Coeficientes` | NOMBRE | CÓDIGO | — | — |
+| `_LspServices` | NOMBRE CANÓNICO (consorcio) | PROVEEDOR (normalizado) | NRO CLIENTE | DESCRIPCIÓN (opcional) |
 
 ### Estrategia de sync por entidad
-- **Rubro / Coeficiente**: reemplazo total (`deleteMany` + `createMany`) — no tienen FK que afecte invoices.
+- **Rubro / Coeficiente / LspService**: reemplazo total (`deleteMany` + `createMany`).
 - **Consortium / Provider**: upsert + intento de delete de huérfanos. Si la FK falla → warning (no error fatal).
+- **LspService**: resuelve `consortiumId` buscando por `canonicalName` dentro del `clientId`. Si no encuentra → warning.
 
 ### Archivos clave
-- `src/services/googleSheets.service.ts` → método `readDirectory()`: lee las 4 hojas, auto-crea las faltantes, retorna `DirectoryData`.
+- `src/services/googleSheets.service.ts` → método `readDirectory()`: lee las 5 hojas, auto-crea las faltantes, retorna `DirectoryData`.
 - `src/app/api/client/sync-directory/route.ts` → POST endpoint. Usa `resolveGoogleConfig(client)` para desencriptar la private key.
 - `src/services/schedulerControl.service.ts` → propaga `lastDirectorySyncAt` en `toRuntimeState()`.
 
@@ -239,9 +260,10 @@ Siempre usar `resolveGoogleConfig(client)` para construir el `GoogleSheetsServic
 5. **Dedup business key** → boletaNumber + providerTaxId + dueDate + amount
 6. **Resolve assignment** → match consorcio + proveedor
 7. **Canonización** → reemplazar datos OCR por datos canónicos de DB
-8. **Insert Sheets** → fila con monto formateado en es-AR ($ 118.000,00)
-9. **Mover archivo** → Escaneados (ok) / Sin Asignar (no matcheó)
-10. **Guardar Invoice** + métricas
+8. **LspService lookup** → si es LSP y tiene clientNumber, buscar en tabla LspService
+9. **Insert Sheets** → fila con monto formateado en es-AR ($ 118.000,00) + NRO CLIENTE
+10. **Mover archivo** → Escaneados (ok) / Sin Asignar (no matcheó)
+11. **Guardar Invoice** + métricas (con lspServiceId y paymentMethod si aplica)
 
 ### Matching de consorcio (3 niveles, en orden)
 1. **Exacto** → `normalizeConsortiumName(rawOcr) === canonicalName`
@@ -261,20 +283,21 @@ El sistema detecta automáticamente el tipo de documento con `identifyLSPProvide
 
 ### Router LSP: `identifyLSPProvider(text)`
 Analiza los primeros 4000 caracteres y retorna:
-- `"EDESUR"` / `"EDENOR"` / `"AYSA"` / `"METROGAS"` / `"NATURGY"` / `"CAMUZZI"` / `"LITORAL_GAS"` / `"ABSA"` → prompt específico
+- `"EDESUR"` / `"EDENOR"` / `"AYSA"` / `"METROGAS"` / `"NATURGY"` / `"CAMUZZI"` / `"LITORAL_GAS"` / `"ABSA"` / `"PERSONAL"` → prompt específico
 - `"GENERIC_LSP"` → prompt genérico LSP (fallback)
 - `null` → no es LSP → usa `buildInvoicePrompt` (facturas normales)
 
 ### Prompts por empresa implementados
 | Empresa | Función | CUIT hardcodeado |
 |---------|---------|-----------------|
-| Edesur | `buildEdesurPrompt()` | 30-71079642-7 |
-| Edenor | `buildEdenorPrompt()` | 30-65651651-4 |
+| Edesur | `buildEdesurPrompt()` | 30-65511651-2 |
+| Edenor | `buildEdenorPrompt()` | 30-65511620-2 |
 | AySA | `buildAysaPrompt()` | 30-70956507-5 |
 | Metrogas | `buildGasPrompt()` | 30-65786442-4 |
 | Naturgy | `buildGasPrompt()` | 30-53330905-7 |
 | Camuzzi | `buildGasPrompt()` | 30-65786613-3 |
 | Litoral Gas | `buildGasPrompt()` | 30-66176173-2 |
+| Personal | `buildPersonalPrompt()` | 30-63945373-8 |
 | Genérico LSP | `buildGenericUtilityBillPrompt()` | — |
 | Facturas normales | `buildInvoicePrompt()` | — |
 
@@ -282,6 +305,11 @@ Analiza los primeros 4000 caracteres y retorna:
 - **CUIT**: cada prompt indica explícitamente el CUIT de la empresa y advierte que el CUIT del cliente/consorcio NO debe usarse como providerTaxId.
 - **Dirección**: reglas unificadas en `CONSORTIUM_ADDRESS_RULES` para limpiar ceros, sufijos, CP, piso/depto.
 - **Fechas inválidas**: reglas en `INVALID_DATE_RULES` compartidas (CESP, CAE, emisión, próxima liquidación).
+- **clientNumber**: cada prompt LSP indica dónde buscar el número de cliente específico de esa empresa.
+- **paymentMethod**: reglas compartidas en `PAYMENT_METHOD_RULES` (DEBITO_AUTOMATICO, TRANSFERENCIA, EFECTIVO, null).
+
+### Extracción limitada a página 1 para LSP
+Cuando `identifyLSPProvider()` detecta un LSP, el pipeline re-extrae el texto limitando a la primera página (`{ max: 1 }` en pdf-parse). Esto reduce ruido y mejora la precisión de la extracción IA.
 
 ### Facturas normales (`buildInvoicePrompt`)
 - `providerTaxId` = CUIT del **emisor** (NO el del consorcio receptor)
@@ -340,14 +368,14 @@ normalizeConsortiumName("SAN ANTONIO 345 PB A")
 ### Fuzzy match mejorado
 `consortiumFuzzyMatch()` ahora aplica `stripLeadingZeros` y `expandAbbreviations` en ambos lados antes de tokenizar. Esto permite que "ALMIRANTE BROWN 00706 018" matchee con "ALMIRANTE BROWN 706".
 
-### Alias match mejorado
-`consortiumAliasMatch()` soporta matching en ambas direcciones (fuzzy directo + fuzzy inverso).
+### Match por matchNames
+`consortiumAliasMatch()` soporta matching en ambas direcciones (fuzzy directo + fuzzy inverso) contra los valores en `matchNames`.
 
 **Número distinto entre factura y DB (ej: Edesur 708 vs DB 706):**
-No se puede resolver automáticamente. Registrar alias en Supabase:
+No se puede resolver automáticamente. Registrar en `matchNames` via Supabase:
 ```sql
 UPDATE "Consortium"
-SET aliases = 'BROWN ALMTE AV 708|ALMIRANTE BROWN 708'
+SET "matchNames" = 'BROWN ALMTE AV 708|ALMIRANTE BROWN 708'
 WHERE "canonicalName" = 'ALMIRANTE BROWN 706';
 ```
 
@@ -359,17 +387,17 @@ WHERE "canonicalName" = 'ALMIRANTE BROWN 706';
 **Template:** `GET /api/client/import/template` (descarga .xlsx de ejemplo)
 
 Hoja `Edificios`:
-| Nombre | CUIT | Aliases |
-|--------|------|---------|
-| ARENALES 2154 | 30-52312872-4 | CONS PROP ARENALES\|ARENALES 56 |
+| Nombre | CUIT | Aliases | Alias de pago |
+|--------|------|---------|---------------|
+| ARENALES 2154 | 30-52312872-4 | CONS PROP ARENALES\|ARENALES 56 | ARENALES |
 
 Hoja `Proveedores`:
-| Nombre | CUIT | Alias |
-|--------|------|-------|
-| TIGRE ASCENSORES S.A. | 27-33906838-6 | TIGRE ASCENSORES |
+| Nombre | CUIT | Alias | Alias de pago |
+|--------|------|-------|---------------|
+| TIGRE ASCENSORES S.A. | 27-33906838-6 | TIGRE ASCENSORES | TIGRE |
 
-- Alias en edificios: separados por `|`
-- Alias en proveedores: campo único opcional (celda vacía = null)
+- Aliases en edificios/proveedores: separados por `|`, mapean a `matchNames` (interno)
+- Alias de pago: campo único opcional, mapea a `paymentAlias` (visible en UI y Sheets)
 - Duplicados: se omiten (skip), no sobreescriben
 
 ---
@@ -422,9 +450,9 @@ Diagnóstico: `npx tsx scripts/fix-client-folders.ts`
 A = boletaNumber     G = dueDate
 B = provider         H = amount  (formato: "$ 118.000,00")
 C = consortium       I = alias
-D = providerTaxId    J = sourceFileUrl
-E = detail           K = isDuplicate
-F = observation
+D = providerTaxId    J = clientNumber  (NRO CLIENTE)
+E = detail           K = sourceFileUrl
+F = observation      L = isDuplicate
 ```
 
 Customizable por cliente en `extractionConfigJson.columnMapping`.
@@ -447,11 +475,48 @@ Customizable por cliente en `extractionConfigJson.columnMapping`.
 ## Pendientes conocidos
 
 ### Features pendientes
-- [ ] UI de edición de aliases de consorcio (hoy solo via SQL en Supabase)
+- [ ] UI de edición de matchNames de consorcio (hoy solo via SQL en Supabase o archivo ALTA)
 - [ ] UI de gestión de carpetas Drive por cliente desde el panel
 - [ ] Resincronización automática con Sheets cuando Google falla
 - [ ] Agregar URL de recibo a columna de Google Sheets
 - [ ] UI para asignar Rubro y Coeficiente a invoices individuales desde el panel (Stage 2)
+- [ ] Columna paymentMethod en Sheets (Stage 2)
+- [ ] UI de gestión de LspServices desde el panel (hoy solo via archivo ALTA)
+
+---
+
+## Docker (producción)
+
+### Imagen
+- **Base:** `node:20-bookworm-slim` (Debian, NO Alpine — necesario para `@napi-rs/canvas`)
+- **Multi-stage:** deps → prod-deps → builder → runner
+- **Build:** `SKIP_ENV_VALIDATION=1` en builder para que no falle sin env vars
+- **Runtime:** incluye `tesseract-ocr` + idiomas `spa`/`eng`, usuario `nextjs` (no root)
+
+### docker-compose.yml (4 servicios)
+
+| Servicio | Comando | Descripción |
+|----------|---------|-------------|
+| `web` | `node server.js` | Next.js standalone, puerto 3000, healthcheck |
+| `scheduler` | `node dist/jobs/scheduler.js` | Escanea Drive, depende de web healthy |
+| `worker` | `node dist/jobs/jobWorkerMain.js` | Procesa cola, depende de web healthy |
+| `tunnel` | `cloudflared tunnel run` | Cloudflare Tunnel, token via env |
+
+Los 3 servicios comparten `image: drive-doc-processor:latest`. Solo `web` tiene `build:`.
+
+### Comandos Docker
+```bash
+docker compose up --build        # Build + levantar todo
+docker compose up -d             # Levantar en background (imagen ya buildeada)
+docker compose logs -f web       # Ver logs de un servicio
+docker compose down              # Bajar todo
+```
+
+### Variables adicionales para Docker
+```env
+CLOUDFLARE_TUNNEL_TOKEN=         # Token de Cloudflare Tunnel (servicio tunnel)
+HOSTNAME=0.0.0.0                 # Solo para web (ya configurado en compose)
+```
 
 ---
 

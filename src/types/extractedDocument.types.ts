@@ -8,6 +8,8 @@
   dueDate: string | null;
   amount: number | null;
   alias: string | null;
+  clientNumber: string | null;
+  paymentMethod: string | null;
   sourceFileUrl?: string | null;
   isDuplicate?: "YES" | "NO" | null;
 }

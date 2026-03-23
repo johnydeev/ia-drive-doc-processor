@@ -6,7 +6,7 @@ import { getPrismaClient } from "@/lib/prisma";
 const createSchema = z.object({
   canonicalName: z.string().min(2),
   cuit: z.string().min(11).max(13),
-  alias: z.string().optional(),
+  paymentAlias: z.string().optional(),
 });
 
 export async function GET(request: Request) {
@@ -58,7 +58,7 @@ export async function POST(request: Request) {
         clientId: auth.session.clientId,
         canonicalName: body.canonicalName.trim(),
         cuit: body.cuit.trim(),
-        alias: body.alias?.trim() || null,
+        paymentAlias: body.paymentAlias?.trim() || null,
       },
     });
 

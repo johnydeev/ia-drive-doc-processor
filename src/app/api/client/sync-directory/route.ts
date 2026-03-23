@@ -81,13 +81,14 @@ export async function POST(request: NextRequest) {
       for (const c of directory.consortiums) {
         await tx.consortium.upsert({
           where: { clientId_canonicalName: { clientId, canonicalName: c.canonicalName } },
-          update: { cuit: c.cuit, aliases: c.aliases },
+          update: { cuit: c.cuit, matchNames: c.matchNames, paymentAlias: c.paymentAlias },
           create: {
             clientId,
             canonicalName: c.canonicalName,
             rawName: c.canonicalName,
             cuit: c.cuit,
-            aliases: c.aliases,
+            matchNames: c.matchNames,
+            paymentAlias: c.paymentAlias,
           },
         });
       }
@@ -119,11 +120,11 @@ export async function POST(request: NextRequest) {
         if (existing) {
           await tx.provider.update({
             where: { id: existing.id },
-            data: { cuit: p.cuit, alias: p.alias },
+            data: { cuit: p.cuit, matchNames: p.matchNames, paymentAlias: p.paymentAlias },
           });
         } else {
           await tx.provider.create({
-            data: { clientId, canonicalName: p.canonicalName, cuit: p.cuit, alias: p.alias },
+            data: { clientId, canonicalName: p.canonicalName, cuit: p.cuit, matchNames: p.matchNames, paymentAlias: p.paymentAlias },
           });
         }
       }
@@ -146,6 +147,53 @@ export async function POST(request: NextRequest) {
           );
         }
       }
+
+      // --- LspServices (reemplazo total por cliente) ---
+      if (directory.lspServices.length > 0) {
+        await tx.lspService.deleteMany({ where: { clientId } });
+
+        // Obtener consorcios actuales para resolver consortiumId por canonicalName
+        const currentConsortiums = await tx.consortium.findMany({
+          where: { clientId },
+          select: { id: true, canonicalName: true },
+        });
+        const consortiumMap = new Map(currentConsortiums.map((c) => [c.canonicalName, c.id]));
+
+        const validLspServices: Array<{
+          clientId: string;
+          consortiumId: string;
+          provider: string;
+          clientNumber: string;
+          description: string | null;
+        }> = [];
+
+        for (const ls of directory.lspServices) {
+          const consortiumId = consortiumMap.get(ls.consortiumName);
+          if (!consortiumId) {
+            warnings.push(
+              `LspService ignorado: consorcio "${ls.consortiumName}" no encontrado para proveedor ${ls.provider} nro ${ls.clientNumber}`
+            );
+            continue;
+          }
+          validLspServices.push({
+            clientId,
+            consortiumId,
+            provider: ls.provider,
+            clientNumber: ls.clientNumber,
+            description: ls.description,
+          });
+        }
+
+        if (validLspServices.length > 0) {
+          await tx.lspService.createMany({ data: validLspServices });
+        }
+      } else {
+        // Si no hay LspServices en el archivo ALTA, limpiar los existentes
+        await tx.lspService.deleteMany({ where: { clientId } });
+      }
+    }, {
+      maxWait: 10000,
+      timeout: 30000,
     });
 
     // Guardar fecha de última sincronización
@@ -161,6 +209,7 @@ export async function POST(request: NextRequest) {
       providersCount: directory.providers.length,
       rubrosCount: directory.rubros.length,
       coeficientesCount: directory.coeficientes.length,
+      lspServicesCount: directory.lspServices.length,
       syncedAt,
       ...(warnings.length > 0 && { warnings }),
     });

@@ -7,8 +7,8 @@ import { getPrismaClient } from "@/lib/prisma";
  *
  * Importa edificios y proveedores desde un archivo Excel.
  * Hojas esperadas:
- *   - "Edificios":   Nombre | CUIT | Aliases
- *   - "Proveedores": Nombre | CUIT | Alias
+ *   - "Edificios":   Nombre | CUIT | Aliases | Alias de pago
+ *   - "Proveedores": Nombre | CUIT | Alias | Alias de pago
  *
  * Comportamiento con duplicados: skip (no sobreescribe existentes).
  */
@@ -74,8 +74,9 @@ export async function POST(request: NextRequest) {
           continue;
         }
 
-        const cuit    = pickCell(row, ["CUIT", "cuit", "Cuit"])?.trim() || null;
-        const aliases = pickCell(row, ["Aliases", "aliases", "Alias", "alias"])?.trim() || null;
+        const cuit         = pickCell(row, ["CUIT", "cuit", "Cuit"])?.trim() || null;
+        const matchNames   = pickCell(row, ["Aliases", "aliases", "Alias", "alias", "Nombres alternativos"])?.trim() || null;
+        const paymentAlias = pickCell(row, ["Alias de pago", "alias de pago", "PaymentAlias", "paymentAlias"])?.trim() || null;
 
         // Verificar si ya existe
         const existing = await prisma.consortium.findUnique({
@@ -96,7 +97,8 @@ export async function POST(request: NextRequest) {
               canonicalName: nombre,
               rawName:       nombre,
               cuit:          cuit || null,
-              aliases:       aliases || null,
+              matchNames:    matchNames || null,
+              paymentAlias:  paymentAlias || null,
               cutoffDay:     5,
             },
           });
@@ -133,8 +135,9 @@ export async function POST(request: NextRequest) {
           continue;
         }
 
-        const cuit  = pickCell(row, ["CUIT", "cuit", "Cuit"])?.trim() || null;
-        const alias = pickCell(row, ["Alias", "alias", "ALIAS"])?.trim() || null;
+        const cuit         = pickCell(row, ["CUIT", "cuit", "Cuit"])?.trim() || null;
+        const matchNames   = pickCell(row, ["Alias", "alias", "ALIAS", "Nombres alternativos"])?.trim() || null;
+        const paymentAlias = pickCell(row, ["Alias de pago", "alias de pago", "PaymentAlias", "paymentAlias"])?.trim() || null;
 
         // Verificar si ya existe por nombre
         const existingByName = await prisma.provider.findFirst({
@@ -160,8 +163,9 @@ export async function POST(request: NextRequest) {
           data: {
             clientId,
             canonicalName: nombre,
-            cuit:  cuit  || null,
-            alias: alias || null,
+            cuit:          cuit || null,
+            matchNames:    matchNames || null,
+            paymentAlias:  paymentAlias || null,
           },
         });
 

@@ -4,6 +4,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+    image: drive-doc-processor:latest
     restart: unless-stopped
     env_file: .env
     environment:
@@ -20,9 +21,7 @@ services:
 
   # ── Scheduler: escanea Drive y crea ProcessingJobs ─────────────
   scheduler:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: drive-doc-processor:latest
     restart: unless-stopped
     env_file: .env
     environment:
@@ -34,9 +33,7 @@ services:
 
   # ── Worker: procesa la cola de jobs ────────────────────────────
   worker:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: drive-doc-processor:latest
     restart: unless-stopped
     env_file: .env
     environment:

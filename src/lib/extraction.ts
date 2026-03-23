@@ -44,6 +44,8 @@ export const EXTRACTED_DOCUMENT_SCHEMA = z
       .default(null)
       .transform((value) => normalizeAmount(value)),
     alias: z.string().nullable().default(null),
+    clientNumber: z.string().nullable().default(null),
+    paymentMethod: z.enum(["DEBITO_AUTOMATICO", "TRANSFERENCIA", "EFECTIVO"]).nullable().default(null),
   })
   .strict();
 
@@ -57,6 +59,8 @@ const OUTPUT_JSON_TEMPLATE = {
   dueDate: "YYYY-MM-DD | null",
   amount: "number | null",
   alias: "string | null",
+  clientNumber: "string | null",
+  paymentMethod: "DEBITO_AUTOMATICO | TRANSFERENCIA | EFECTIVO | null",
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -72,6 +76,7 @@ export type LSPProvider =
   | "CAMUZZI"
   | "LITORAL_GAS"
   | "ABSA"
+  | "PERSONAL"
   | "GENERIC_LSP";
 
 /**
@@ -107,6 +112,8 @@ export function identifyLSPProvider(text: string): LSPProvider | null {
   if (upper.includes("ABSA") || (upper.includes("AGUAS") && upper.includes("ARGENTINAS"))) {
     return "ABSA";
   }
+
+  if (upper.includes("PERSONAL") || upper.includes("TELECOM")) return "PERSONAL";
 
   return "GENERIC_LSP";
 }
@@ -153,7 +160,9 @@ function isUtilityBill(textOrUpper: string): boolean {
     upper.includes("CAMUZZI") ||
     upper.includes("LITORAL GAS") ||
     upper.includes("ABSA") ||
-    (upper.includes("AGUAS") && upper.includes("ARGENTINAS"))
+    (upper.includes("AGUAS") && upper.includes("ARGENTINAS")) ||
+    upper.includes("PERSONAL") ||
+    upper.includes("TELECOM")
   );
 }
 
@@ -182,6 +191,8 @@ export function buildExtractionPrompt(text: string): string {
     case "CAMUZZI":
     case "LITORAL_GAS":
       return buildGasPrompt(relevantText, lspProvider);
+    case "PERSONAL":
+      return buildPersonalPrompt(relevantText);
     default:
       return buildGenericUtilityBillPrompt(relevantText);
   }
@@ -223,6 +234,17 @@ const INVALID_DATE_RULES = [
   "    ✗ Fechas de 2° o 3° vencimiento con recargo.",
   "    ✗ 'Inicio de actividades' — antigüedad del emisor en AFIP.",
   "  Si no existe ningún caso válido: null. No deducir, no calcular, no suponer.",
+].join("\n");
+
+const PAYMENT_METHOD_RULES = [
+  "- paymentMethod: método de pago detectado. Valores posibles: DEBITO_AUTOMATICO, TRANSFERENCIA, EFECTIVO, null.",
+  "  • DEBITO_AUTOMATICO si detectás: 'débito automático', 'débito directo', 'pago directo',",
+  "    'a debitar el', 'se debitará', 'DEBITO AUTOMATICO', 'FACTURA CON DÉBITO AUTOMÁTICO',",
+  "    'Abona por Pago Directo', 'DEBITO POR PAGO DIRECTO'.",
+  "  • TRANSFERENCIA si detectás: 'transferencia', 'CVU', 'CBU'.",
+  "  • EFECTIVO si detectás: 'Rapipago', 'Pago Fácil', 'efectivo', 'cobro express'",
+  "    SIN mención de débito automático.",
+  "  • null si no se puede determinar con certeza.",
 ].join("\n");
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -272,6 +294,9 @@ function buildInvoicePrompt(relevantText: string): string {
 
     "- detail: descripción breve del producto o servicio facturado (máx 120 caracteres).",
 
+    "- clientNumber: null (no aplica a facturas normales).",
+    "- paymentMethod: null (no aplica a facturas normales).",
+
     "- Usa null si un dato falta o es incierto. No inventes datos.",
 
     "Texto del comprobante:",
@@ -306,7 +331,7 @@ function buildEdesurPrompt(relevantText: string): string {
 
     "- provider: siempre 'EDESUR S.A.'",
 
-    "- providerTaxId: CUIT de EDESUR → '30-71079642-7'.",
+    "- providerTaxId: CUIT de EDESUR → '30-65511651-2'.",
     "  CUIDADO: en la factura aparece prominente el CUIT del CLIENTE (consorcio) en la sección",
     "  de datos del titular/receptor. Ese CUIT NO es de Edesur. Ignorarlo completamente.",
     "  El CUIT de Edesur suele estar junto al nombre 'EDESUR S.A.' en el bloque del emisor.",
@@ -331,6 +356,15 @@ function buildEdesurPrompt(relevantText: string): string {
 
     "- detail: 'Energía eléctrica' o descripción del servicio.",
 
+    "- clientNumber: número de cliente de Edesur.",
+    "  Buscar 'Su número de cliente es XXXXXXXX', 'Nro de cliente T2 XXXXXXXX',",
+    "  o 'Cliente N° XXXXXXXX'. Mantener formato exacto incluyendo ceros a la izquierda.",
+
+    "- paymentMethod:",
+    "  • 'Esta factura posee débito automático' → DEBITO_AUTOMATICO",
+    "  • 'Pago por transferencia CVU' → TRANSFERENCIA",
+    "  • Sin mención → null",
+
     "- Usa null si un dato no se puede extraer con certeza.",
 
     "Texto de la factura Edesur:",
@@ -351,7 +385,7 @@ function buildEdenorPrompt(relevantText: string): string {
 
     "- provider: siempre 'EDENOR S.A.'",
 
-    "- providerTaxId: CUIT de EDENOR → '30-65651651-4'.",
+    "- providerTaxId: CUIT de EDENOR → '30-65511620-2'.",
     "  CUIDADO: el CUIT del CLIENTE (consorcio) aparece en la sección del titular.",
     "  NO es el providerTaxId. Ignorarlo.",
 
@@ -369,6 +403,13 @@ function buildEdenorPrompt(relevantText: string): string {
     INVALID_DATE_RULES,
 
     "- detail: 'Energía eléctrica'.",
+
+    "- clientNumber: número de cuenta de Edenor.",
+    "  Buscar 'Cuenta X XXX XXX XXX' (puede tener espacios). Normalizar eliminando espacios.",
+
+    "- paymentMethod:",
+    "  • 'Abona por Pago Directo' o 'DEBITO POR PAGO DIRECTO' → DEBITO_AUTOMATICO",
+    "  • Sin mención → null",
 
     "Texto de la factura Edenor:",
     relevantText,
@@ -432,6 +473,13 @@ function buildAysaPrompt(relevantText: string): string {
 
     "- detail: 'Agua y cloacas' o 'Servicio de agua y saneamiento'.",
 
+    "- clientNumber: número de cuenta de servicios AySA.",
+    "  Buscar 'Cuenta de Servicios XXXXX'. Mantener formato exacto.",
+
+    "- paymentMethod:",
+    "  • 'A debitar el DD/MM/YYYY' o 'Esta liquidación será debitada' → DEBITO_AUTOMATICO",
+    "  • Sin mención → null",
+
     "Texto de la factura AySA:",
     relevantText,
   ].join("\n\n");
@@ -493,6 +541,11 @@ function buildGasPrompt(relevantText: string, provider: LSPProvider): string {
 
     "- detail: 'Gas natural'.",
 
+    "- clientNumber: número de cliente de la empresa de gas.",
+    "  Buscar 'Número de cliente XXXXXXXX' o similar. Mantener formato exacto.",
+
+    PAYMENT_METHOD_RULES,
+
     `Texto de la factura ${providerName}:`,
     relevantText,
   ].join("\n\n");
@@ -536,7 +589,54 @@ function buildGenericUtilityBillPrompt(relevantText: string): string {
 
     "- detail: tipo de servicio (ej: 'Agua y cloacas', 'Energía eléctrica', 'Gas natural').",
 
+    "- clientNumber: número de cliente/cuenta si aparece en el documento. null si no se encuentra.",
+
+    PAYMENT_METHOD_RULES,
+
     "Texto de la liquidación:",
+    relevantText,
+  ].join("\n\n");
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PERSONAL (Telecom Argentina) prompt
+// ═══════════════════════════════════════════════════════════════════════════
+
+function buildPersonalPrompt(relevantText: string): string {
+  return [
+    "Extrae datos de una factura de PERSONAL / Telecom Argentina.",
+    JSON_RESPONSE_INSTRUCTION,
+
+    "=== REGLAS ESPECÍFICAS PERSONAL ===",
+
+    "- provider: siempre 'PERSONAL'.",
+
+    "- providerTaxId: CUIT de Telecom Argentina → '30-63945373-8'.",
+    "  CUIDADO: el CUIT del CLIENTE (consorcio) aparece en la sección del titular.",
+    "  NO es el providerTaxId. Ignorarlo.",
+
+    "- boletaNumber: buscar 'N° de Factura XXXXX-XXXXXXXX'. Tomar el formato completo.",
+
+    CONSORTIUM_ADDRESS_RULES,
+
+    "- amount: total a pagar del mes. Formato numérico.",
+
+    "- dueDate: fecha de vencimiento. YYYY-MM-DD.",
+    "  VÁLIDO:",
+    "    ✓ 'Vencimiento [fecha]' junto a un monto.",
+    "    ✓ 'Fecha de vencimiento [fecha]'",
+    INVALID_DATE_RULES,
+
+    "- detail: 'Telecomunicaciones' o descripción del servicio.",
+
+    "- clientNumber: buscar 'N° de Referencia de Pago XXXXXXXXXXXXXXXX'.",
+    "  Mantener formato exacto incluyendo todos los dígitos.",
+
+    "- paymentMethod:",
+    "  • 'DEBITO AUTOMATICO' o 'FACTURA CON DÉBITO AUTOMÁTICO' → DEBITO_AUTOMATICO",
+    "  • Sin mención → null",
+
+    "Texto de la factura Personal:",
     relevantText,
   ].join("\n\n");
 }

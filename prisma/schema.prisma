@@ -33,6 +33,12 @@ enum TipoGasto {
   PARTICULAR
 }
 
+enum PaymentMethod {
+  DEBITO_AUTOMATICO
+  TRANSFERENCIA
+  EFECTIVO
+}
+
 model Client {
   id                   String           @id @default(cuid())
   name                 String
@@ -52,6 +58,7 @@ model Client {
   receipts             Receipt[]
   coeficientes         Coeficiente[]
   rubros               Rubro[]
+  lspServices          LspService[]
   processingLogs       ProcessingLog[]
   processingJobs       ProcessingJob[]
   schedulerStates      SchedulerState[]
@@ -100,6 +107,8 @@ model Invoice {
   rubroId             String?
   tipoGasto           TipoGasto    @default(ORDINARIO)
   tipoComprobante     String?
+  lspServiceId        String?
+  paymentMethod       PaymentMethod?
   driveFileId         String?
   sourceFileUrl       String?
   isDuplicate         Boolean      @default(false)
@@ -118,6 +127,7 @@ model Invoice {
   periodRef           Period?      @relation(fields: [periodId], references: [id], onDelete: SetNull)
   coeficienteRef      Coeficiente? @relation(fields: [coeficienteId], references: [id], onDelete: SetNull)
   rubroRef            Rubro?       @relation(fields: [rubroId], references: [id], onDelete: SetNull)
+  lspServiceRef       LspService?  @relation(fields: [lspServiceId], references: [id], onDelete: SetNull)
   receipt             Receipt?     @relation("InvoiceReceipt")
 
   @@unique([clientId, documentHash], map: "uq_invoice_document_hash")
@@ -256,10 +266,13 @@ model Consortium {
   cuit                   String?
   cutoffDay              Int                  @default(5)
   driveFolderProcessedId String?
-  /// Nombres alternativos separados por | para matching con facturas de servicios.
+  /// Nombres alternativos separados por | para matching interno con facturas de servicios.
   /// Ej: "BROWN ALMTE AV 708|ALMTE BROWN 706" permite que Edesur encuentre
   /// el consorcio aunque use una dirección distinta a la canónica.
-  aliases                String?
+  /// Campo interno — no se muestra en la UI.
+  matchNames             String?
+  /// Alias visible en la UI y en la columna "ALIAS" de Google Sheets.
+  paymentAlias           String?
   createdAt              DateTime             @default(now())
   updatedAt              DateTime             @updatedAt
   client                 Client               @relation(fields: [clientId], references: [id], onDelete: Cascade)
@@ -267,6 +280,7 @@ model Consortium {
   consortiumProviders    ConsortiumProvider[]
   invoices               Invoice[]
   receipts               Receipt[]
+  lspServices            LspService[]
 
   @@unique([clientId, canonicalName])
   @@index([clientId])
@@ -277,7 +291,11 @@ model Provider {
   clientId            String
   canonicalName       String
   cuit                String?
-  alias               String?
+  /// Nombres alternativos separados por | para matching interno.
+  /// Campo interno — no se muestra en la UI.
+  matchNames          String?
+  /// Alias visible en la UI y en la columna "ALIAS" de Google Sheets.
+  paymentAlias        String?
   createdAt           DateTime             @default(now())
   updatedAt           DateTime             @updatedAt
   client              Client               @relation(fields: [clientId], references: [id], onDelete: Cascade)
@@ -318,4 +336,21 @@ model Period {
 
   @@unique([consortiumId, year, month])
   @@index([consortiumId, status])
+}
+
+model LspService {
+  id            String     @id @default(cuid())
+  clientId      String
+  consortiumId  String
+  provider      String
+  clientNumber  String
+  description   String?
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+  client        Client     @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  consortium    Consortium @relation(fields: [consortiumId], references: [id], onDelete: Cascade)
+  invoices      Invoice[]
+
+  @@unique([consortiumId, provider, clientNumber])
+  @@index([clientId, provider, clientNumber])
 }

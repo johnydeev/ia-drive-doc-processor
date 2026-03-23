@@ -28,6 +28,7 @@ export function resolveMapping(client: ProcessingClient): SheetsRowMapping | und
     "dueDate",
     "amount",
     "alias",
+    "clientNumber",
     "sourceFileUrl",
     "isDuplicate",
   ];

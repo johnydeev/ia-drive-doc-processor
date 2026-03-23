@@ -20,7 +20,7 @@ type Period      = { id: string; year: number; month: number; status: "ACTIVE" |
 type Coeficiente = { id: string; name: string; value: number; };
 type Rubro       = { id: string; name: string; };
 type Consortium  = { id: string; canonicalName: string; rawName: string; cuit: string | null; cutoffDay: number; periods: Period[]; _count: { invoices: number }; };
-type Provider    = { id: string; canonicalName: string; cuit: string | null; alias: string | null; };
+type Provider    = { id: string; canonicalName: string; cuit: string | null; paymentAlias: string | null; };
 type Invoice     = {
   id: string; boletaNumber: string | null; provider: string | null; providerTaxId: string | null;
   detail: string | null; observation: string | null; issueDate: string | null; dueDate: string | null;
@@ -74,7 +74,7 @@ function matchProvider(providers: Provider[], extracted: ScannedData): Provider 
   if (extracted.provider) {
     const norm = normName(extracted.provider);
     if (norm.length >= 3) {
-      const hit = providers.find((p) => normName(p.canonicalName) === norm || (p.alias && normName(p.alias) === norm));
+      const hit = providers.find((p) => normName(p.canonicalName) === norm || (p.paymentAlias && normName(p.paymentAlias) === norm));
       if (hit) return hit;
     }
   }
@@ -139,7 +139,7 @@ export default function ConsortiumsPage() {
   const [mismatchFoundConsortium, setMismatchFoundConsortium] = useState<string | null>(null);
 
   const [showProviderModal, setShowProviderModal] = useState(false);
-  const [providerForm, setProviderForm] = useState({ canonicalName: "", cuit: "", alias: "" });
+  const [providerForm, setProviderForm] = useState({ canonicalName: "", cuit: "", paymentAlias: "" });
   const [savingProvider, setSavingProvider] = useState(false);
   const [providerError, setProviderError] = useState<string | null>(null);
   const [providerSuccess, setProviderSuccess] = useState<string | null>(null);
@@ -400,7 +400,7 @@ export default function ConsortiumsPage() {
       setProviders((prev) => [...prev, data.provider]);
       const requeuedMsg = data.requeued > 0 ? ` Se reencolarán ${data.requeued} boleta(s) para revalidación.` : "";
       setProviderSuccess(`Proveedor creado correctamente.${requeuedMsg}`);
-      setProviderForm({ canonicalName: "", cuit: "", alias: "" });
+      setProviderForm({ canonicalName: "", cuit: "", paymentAlias: "" });
     } catch (err) {
       setProviderError(err instanceof Error ? err.message : "Error al guardar el proveedor");
     } finally { setSavingProvider(false); }
@@ -709,7 +709,7 @@ export default function ConsortiumsPage() {
                   <option value="">Seleccioná un proveedor</option>
                   {providers.map((p) => (
                     <option key={p.id} value={p.id}>
-                      {p.canonicalName}{p.alias ? ` (${p.alias})` : ""}
+                      {p.canonicalName}{p.paymentAlias ? ` (${p.paymentAlias})` : ""}
                     </option>
                   ))}
                 </select>
@@ -837,7 +837,7 @@ export default function ConsortiumsPage() {
               </div>
               <div className={`${styles.formField} ${styles.formFieldFull}`}>
                 <label>Alias (opcional)</label>
-                <input className={styles.formInput} value={providerForm.alias} onChange={(e) => setProviderForm((f) => ({ ...f, alias: e.target.value }))} placeholder="Nombre corto o abreviación" />
+                <input className={styles.formInput} value={providerForm.paymentAlias} onChange={(e) => setProviderForm((f) => ({ ...f, paymentAlias: e.target.value }))} placeholder="Nombre corto o abreviación" />
               </div>
             </div>
             {providerError && <p className={styles.errorMsg}>{providerError}</p>}

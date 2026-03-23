@@ -1,5 +1,37 @@
 # Changelog
 
+## 2026-03-23 (sesión 4)
+
+Highlights
+- **Nuevo modelo LspService**: tabla para registrar servicios de empresas públicas por consorcio (provider + clientNumber + description). Permite lookup automático en el pipeline.
+- **Nuevo enum PaymentMethod**: DEBITO_AUTOMATICO, TRANSFERENCIA, EFECTIVO. Campo nullable en Invoice.
+- **Campos lspServiceId y paymentMethod en Invoice**: FK nullable a LspService y método de pago detectado por IA.
+- **Prompts LSP actualizados**: todos los prompts LSP ahora extraen `clientNumber` y `paymentMethod` con reglas específicas por empresa.
+- **Nuevo prompt buildPersonalPrompt**: soporte para facturas de Personal/Telecom Argentina (CUIT 30-63945373-8, keywords PERSONAL/TELECOM en router).
+- **Extracción limitada a página 1 para LSP**: reduce ruido en la extracción IA re-extrayendo solo la primera página cuando se detecta un documento LSP.
+- **Lookup LspService en pipeline**: después de extraer clientNumber, busca en la tabla LspService para vincular la factura al servicio correspondiente.
+- **Nueva columna NRO CLIENTE en Sheets**: columna J con el número de cliente extraído. Las columnas URL_ARCHIVO e ES_DUPLICADO se desplazaron a K y L.
+- **Hoja _LspServices en archivo ALTA**: nueva hoja con 4 columnas (NOMBRE CANÓNICO, PROVEEDOR, NRO CLIENTE, DESCRIPCIÓN) sincronizada con reemplazo total.
+- **Eliminación de isAutoCreated**: campo removido de Provider y Consortium (ya no existía en el schema actual).
+- Migración: `20260323000200_add_lspservice_paymentmethod`.
+
+## 2026-03-23 (sesión 3)
+
+Highlights
+- **Auditoría completa pre-producción Docker**: revisión de dependencias, build, variables de entorno, migraciones y Docker setup.
+- **Optimización docker-compose**: eliminado triple build redundante. Solo `web` tiene `build:`, los 3 servicios comparten `image: drive-doc-processor:latest`.
+- **`.env.example` mejorado**: agregada `GOOGLE_CREDENTIALS_ENCRYPTION_KEY`, comentarios descriptivos, variables agrupadas por categoría.
+- **Smoke test del pipeline**: verificación completa de los 10 pasos del pipeline, router LSP, normalización de consorcios, sync-directory. Todo coincide con la documentación.
+- **Resultados de auditoría**: TypeScript 0 errores, ESLint 0 errores (8 warnings menores), `build:jobs` OK, 14 migraciones aplicadas (schema up to date).
+- **README.md creado** para GitHub con descripción del proyecto, arquitectura, setup Docker, y desarrollo local.
+- **Renombrado `alias`/`aliases` → `matchNames` + nuevo campo `paymentAlias`** en Provider y Consortium.
+  - `matchNames`: campo interno para matching de PDFs (separado por `|`), no visible en UI.
+  - `paymentAlias`: alias visible en UI y en columna "ALIAS" de Google Sheets.
+  - Pipeline: columna ALIAS de Sheets ahora escribe `provider.paymentAlias` (vacío si no tiene).
+  - Sync ALTA: hojas ampliadas a 4 columnas (NOMBRE CANÓNICO, CUIT, NOMBRES ALTERNATIVOS, ALIAS).
+  - Import Excel: nueva columna "Alias de pago" en ambas hojas.
+  - Migración: `20260323000100_rename_alias_to_matchnames_add_paymentalias`.
+
 ## 2026-03-21 (sesión 2)
 
 Highlights
