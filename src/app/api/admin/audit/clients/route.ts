@@ -14,6 +14,7 @@ export async function GET(request: Request) {
       select: {
         id: true,
         name: true,
+        consortiumsEnabled: true,
         schedulerStates: {
           take: 1,
           select: {
@@ -42,6 +43,7 @@ export async function GET(request: Request) {
         return {
           clientId: client.id,
           name: client.name,
+          consortiumsEnabled: client.consortiumsEnabled,
           scheduler: {
             enabled: state?.enabled ?? false,
             isRunning: state?.isRunning ?? false,

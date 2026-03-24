@@ -1,5 +1,24 @@
 # Changelog
 
+## 2026-03-23 (sesión 6)
+
+Highlights
+- **Asignación automática de período a invoices**: el pipeline ahora busca el período ACTIVE del consorcio matcheado y asigna `periodId` al Invoice en DB.
+- **Nueva columna `period` en Google Sheets**: formato `MM/YYYY` en posición M (columna nueva al final, sin mover las existentes).
+- **Invoices manuales**: también incluyen el período en Sheets al ser creados desde la UI.
+
+## 2026-03-23 (sesión 5)
+
+Highlights
+- **Nuevo campo `consortiumsEnabled`**: booleano en Client (default false) para habilitar/deshabilitar la feature de consorcios por cliente.
+- **Toggle Premium en panel admin**: columna "Premium" con toggle ON/OFF optimista en la tabla de métricas por cliente. Reemplaza la columna ClientId.
+- **Botón Consorcios condicionado**: en el panel CLIENT, el botón "Consorcios" se deshabilita con badge "Premium" si `consortiumsEnabled` es false.
+- **Guard en página Consorcios**: la página `/admin/consortiums` verifica `consortiumsEnabled` via `/api/auth/me` y redirige al panel si no está habilitado.
+- **Endpoint `/api/auth/me` ampliado**: ahora retorna `consortiumsEnabled` en el user.
+- **Endpoint `/api/admin/clients/[id]` ampliado**: GET retorna y PATCH acepta `consortiumsEnabled`.
+- **Endpoint `/api/admin/audit/clients` ampliado**: retorna `consortiumsEnabled` por cliente.
+- Migración: `20260323000300_add_consortiums_enabled`.
+
 ## 2026-03-23 (sesión 4)
 
 Highlights

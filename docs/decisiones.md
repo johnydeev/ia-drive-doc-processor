@@ -4,6 +4,53 @@ Registro de decisiones tomadas ante problemas reales encontrados en producción.
 
 ---
 
+## 2026-03-23 — Asignación automática de período activo a invoices
+
+### Problema
+Las boletas procesadas no quedaban asociadas a ningún período, lo que impedía filtrar y generar reportes por mes/año. El campo `periodId` ya existía en el schema de Invoice pero no se estaba populando durante el pipeline automático.
+
+### Decisión
+- Se busca el período ACTIVE del consorcio matcheado en `resolveAssignment()` (tanto en el path normal como en el LSP fast path).
+- Se asigna `periodId` al Invoice al guardarlo en DB.
+- Se agrega columna `period` (formato `MM/YYYY`) a Google Sheets en posición M (nueva columna al final).
+- Las columnas existentes (A–L incluyendo `clientNumber` en J) no se modificaron.
+- Si no hay período activo (caso defensivo), se loguea un warning y `periodId` queda null — el pipeline no falla.
+
+### Alternativas descartadas
+- Crear el período automáticamente si no existe: descartado porque eso podría generar períodos con mes/año incorrectos si el consorcio nunca tuvo uno.
+- Usar la fecha del documento para inferir el período: complejo y propenso a errores — mejor confiar en el período ACTIVE del consorcio.
+
+### Impacto
+- `src/jobs/processPendingDocuments.job.ts` — `resolveAssignment()` ahora devuelve `periodLabel`, `processDriveFile()` lo asigna a `extracted.period`, `DEFAULT_MAPPING` agrega `period: "M"`
+- `src/services/googleSheets.service.ts` — `SheetsRowMapping` agrega campo `period` al final (sin remover `clientNumber`)
+- `src/lib/clientProcessingConfig.ts` — `requiredKeys` agrega `"period"` al final
+- `src/app/api/client/consortiums/[id]/invoices/route.ts` — invoice manual incluye período en Sheets
+- `src/types/extractedDocument.types.ts` — campo `period` agregado
+
+---
+
+## 2026-03-23 — Feature consortiumsEnabled (Premium) para control de acceso a consorcios
+
+### Problema
+Todos los clientes tenían acceso a la funcionalidad de gestión de consorcios. Se necesitaba un mecanismo para habilitar/deshabilitar esta feature por cliente, permitiendo ofrecer planes diferenciados (free vs premium).
+
+### Decisión
+- Nuevo campo `consortiumsEnabled Boolean @default(false)` en el modelo Client.
+- El panel admin muestra un toggle "Premium" por cliente con actualización optimista (PATCH a `/api/admin/clients/[id]`).
+- El panel cliente condiciona el botón "Consorcios": deshabilitado con badge dorado "Premium" si `consortiumsEnabled` es false.
+- La página `/admin/consortiums` verifica acceso via `/api/auth/me` al montar y redirige a `/admin` si no está habilitado.
+- Se removió la columna ClientId de la tabla de métricas (innecesaria para el admin) y se reemplazó por la columna Premium.
+
+### Alternativas descartadas
+- **Middleware de Next.js para bloquear `/admin/consortiums`**: requiere acceso a DB desde Edge Runtime, más complejo y no compatible con el patrón actual de autenticación.
+- **Campo `plan` con enum**: over-engineering para una sola feature gate. Si en el futuro se necesitan más features, se puede migrar a un sistema de plans.
+
+### Impacto
+- Migración: `20260323000300_add_consortiums_enabled`
+- Archivos modificados: `schema.prisma`, `admin/page.tsx`, `admin/page.module.css`, `admin/consortiums/page.tsx`, `api/admin/clients/[id]/route.ts`, `api/admin/audit/clients/route.ts`, `api/auth/me/route.ts`
+
+---
+
 ## 2026-03-23 — Modelo LspService para lookup automático de servicios públicos
 
 ### Problema

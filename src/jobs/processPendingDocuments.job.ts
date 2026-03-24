@@ -74,6 +74,7 @@ const DEFAULT_MAPPING: SheetsRowMapping = {
   clientNumber: "J",
   sourceFileUrl: "K",
   isDuplicate: "L",
+  period: "M",
 };
 
 function createBaseSummary(totalFound: number): ProcessJobSummary {
@@ -109,6 +110,10 @@ function buildOcrOnlyPayload(): ExtractedDocumentData {
     clientNumber: null,
     paymentMethod: null,
   };
+}
+
+function formatPeriodLabel(month: number, year: number): string {
+  return `${String(month).padStart(2, "0")}/${year}`;
 }
 
 function normCuit(v: string | null | undefined): string {
@@ -155,6 +160,7 @@ interface AssignmentResult {
   consortiumId: string | undefined;
   providerId: string | undefined;
   periodId: string | undefined;
+  periodLabel: string | null;
   lspServiceId: string | null;
   unassigned: boolean;
   unassignedReason: string | null;
@@ -174,7 +180,7 @@ async function resolveAssignment(
 ): Promise<AssignmentResult> {
   const base: AssignmentResult = {
     consortiumId: undefined, providerId: undefined, periodId: undefined,
-    lspServiceId: null,
+    periodLabel: null, lspServiceId: null,
     unassigned: true, unassignedReason: null,
     canonicalConsortium: null, canonicalProvider: null, canonicalProviderTaxId: null,
     providerPaymentAlias: null,
@@ -206,6 +212,7 @@ async function resolveAssignment(
           consortiumId: lspService.consortiumId,
           providerId: undefined,
           periodId: activePeriod?.id,
+          periodLabel: activePeriod ? formatPeriodLabel(activePeriod.month, activePeriod.year) : null,
           lspServiceId: lspService.id,
           unassigned: false,
           unassignedReason: null,
@@ -277,8 +284,12 @@ async function resolveAssignment(
   }
 
   const activePeriod = await consortiumRepository.findActivePeriod(consortium.id);
+  if (!activePeriod) {
+    pipelineLog.stepStart(clientId, `⚠️ No se encontró período activo para consorcio ${consortium.canonicalName}`);
+  }
   base.consortiumId = consortium.id;
   base.periodId = activePeriod?.id;
+  base.periodLabel = activePeriod ? formatPeriodLabel(activePeriod.month, activePeriod.year) : null;
   base.canonicalConsortium = consortium.rawName;
 
   const consortiumCuitNorm = normCuit((consortium as any).cuit);
@@ -346,6 +357,7 @@ async function resolveAssignment(
     consortiumId: consortium.id,
     providerId: matched.id,
     periodId: activePeriod?.id,
+    periodLabel: activePeriod ? formatPeriodLabel(activePeriod.month, activePeriod.year) : null,
     lspServiceId: null,
     unassigned: false,
     unassignedReason: null,
@@ -489,6 +501,7 @@ async function processDriveFile(
       if (assignment.canonicalProvider)      extracted.provider      = assignment.canonicalProvider;
       extracted.alias = assignment.providerPaymentAlias || null;
       if (assignment.canonicalProviderTaxId) extracted.providerTaxId = assignment.canonicalProviderTaxId;
+      extracted.period = assignment.periodLabel || null;
       pipelineLog.canonized(cid, extracted.consortium ?? "?", extracted.provider ?? "?", extracted.providerTaxId ?? "?");
     }
 

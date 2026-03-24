@@ -46,6 +46,7 @@ model Client {
   passwordHash         String
   role                 ClientRole       @default(CLIENT)
   isActive             Boolean          @default(true)
+  consortiumsEnabled   Boolean          @default(false)
   driveFoldersJson     Json?
   googleConfigJson     Json?
   extractionConfigJson Json?

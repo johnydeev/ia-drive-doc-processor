@@ -152,7 +152,7 @@ src/
 ## Schema de base de datos
 
 ```
-Client          → Tenant. Roles: ADMIN / CLIENT / VIEWER
+Client          → Tenant. Roles: ADMIN / CLIENT / VIEWER. consortiumsEnabled (feature gate)
   ├── Consortium  → Edificio. canonicalName + rawName + cuit + matchNames + paymentAlias
   │   ├── Period    → Período mensual. status: ACTIVE / CLOSED
   │   └── LspService → Servicio de empresa pública. provider + clientNumber + description
@@ -258,10 +258,10 @@ Siempre usar `resolveGoogleConfig(client)` para construir el `GoogleSheetsServic
 3. **Extracción texto** → pdf-parse → fallback OCR (tesseract)
 4. **Extracción IA** → Gemini → fallback OpenAI → fallback OCR_ONLY
 5. **Dedup business key** → boletaNumber + providerTaxId + dueDate + amount
-6. **Resolve assignment** → match consorcio + proveedor
+6. **Resolve assignment** → match consorcio + proveedor + período activo del consorcio
 7. **Canonización** → reemplazar datos OCR por datos canónicos de DB
 8. **LspService lookup** → si es LSP y tiene clientNumber, buscar en tabla LspService
-9. **Insert Sheets** → fila con monto formateado en es-AR ($ 118.000,00) + NRO CLIENTE
+9. **Insert Sheets** → fila con monto formateado en es-AR ($ 118.000,00) + período (MM/YYYY)
 10. **Mover archivo** → Escaneados (ok) / Sin Asignar (no matcheó)
 11. **Guardar Invoice** + métricas (con lspServiceId y paymentMethod si aplica)
 
@@ -447,12 +447,13 @@ Diagnóstico: `npx tsx scripts/fix-client-folders.ts`
 ## Google Sheets — columnas por defecto
 
 ```
-A = boletaNumber     G = dueDate
-B = provider         H = amount  (formato: "$ 118.000,00")
-C = consortium       I = alias
-D = providerTaxId    J = clientNumber  (NRO CLIENTE)
-E = detail           K = sourceFileUrl
-F = observation      L = isDuplicate
+A = boletaNumber     H = amount  (formato: "$ 118.000,00")
+B = provider         I = alias
+C = consortium       J = clientNumber  (NRO CLIENTE)
+D = providerTaxId    K = sourceFileUrl
+E = detail           L = isDuplicate
+F = observation      M = period  (formato: "MM/YYYY")
+G = dueDate
 ```
 
 Customizable por cliente en `extractionConfigJson.columnMapping`.

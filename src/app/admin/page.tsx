@@ -19,7 +19,7 @@ type SchedulerStatusResponse = {
 };
 
 type ClientMetricRow = {
-  clientId: string; name: string;
+  clientId: string; name: string; consortiumsEnabled: boolean;
   scheduler: { enabled: boolean; isRunning: boolean };
   totals: { runs: number; found: number; processed: number; duplicates: number; failed: number };
   tokensUsed: number; quota: { gemini: string; openai: string };
@@ -69,6 +69,7 @@ export default function AdminPage() {
   const [state, setState] = useState<SchedulerRuntimeState | null>(null);
   const [authEmail, setAuthEmail] = useState<string | null>(null);
   const [authRole, setAuthRole] = useState<AuthRole | null>(null);
+  const [consortiumsEnabled, setConsortiumsEnabled] = useState(false);
   const [scope, setScope] = useState<"all-clients" | "single-client">("single-client");
   const [providers, setProviders] = useState({ geminiConfigured: false, openaiConfigured: false });
   const [loading, setLoading] = useState(true);
@@ -112,6 +113,13 @@ export default function AdminPage() {
       setState(data.state);
       setAuthEmail(data.auth.email);
       setAuthRole(data.auth.role);
+      if (data.auth.role === "CLIENT") {
+        try {
+          const meRes = await guardedFetch("/api/auth/me", { method: "GET", cache: "no-store" });
+          const meData = (await meRes.json()) as { ok: boolean; user?: { consortiumsEnabled?: boolean } };
+          if (meData.ok && meData.user) setConsortiumsEnabled(meData.user.consortiumsEnabled ?? false);
+        } catch { /* ignore */ }
+      }
       setScope(data.scope ?? "single-client");
       setProviders(data.providers ?? { geminiConfigured: false, openaiConfigured: false });
       setServerOnline(true);
@@ -233,6 +241,32 @@ export default function AdminPage() {
     } finally { setBusyAction(null); }
   };
 
+  const handleTogglePremium = async (clientId: string, current: boolean) => {
+    const next = !current;
+    setClientMetrics((prev) =>
+      prev.map((c) => (c.clientId === clientId ? { ...c, consortiumsEnabled: next } : c))
+    );
+    try {
+      const res = await guardedFetch(`/api/admin/clients/${clientId}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ consortiumsEnabled: next }),
+      });
+      const data = (await res.json()) as { ok?: boolean; error?: string };
+      if (!res.ok || !data.ok) {
+        setClientMetrics((prev) =>
+          prev.map((c) => (c.clientId === clientId ? { ...c, consortiumsEnabled: current } : c))
+        );
+        setError(data.error ?? "No se pudo cambiar Premium");
+      }
+    } catch {
+      setClientMetrics((prev) =>
+        prev.map((c) => (c.clientId === clientId ? { ...c, consortiumsEnabled: current } : c))
+      );
+      setError("No se pudo cambiar Premium");
+    }
+  };
+
   const paused = state ? !state.enabled : false;
 
   return (
@@ -266,8 +300,10 @@ export default function AdminPage() {
                   {busyAction === "sync-directory" ? "Sincronizando..." : "Sincronizar directorio"}
                 </button>
                 <button type="button" className={styles.ghostBtn}
-                  onClick={() => router.push("/admin/consortiums")} disabled={busyAction !== null}>
-                  Consorcios
+                  onClick={() => router.push("/admin/consortiums")}
+                  disabled={busyAction !== null || !consortiumsEnabled}
+                  title={!consortiumsEnabled ? "Funcion Premium" : undefined}>
+                  Consorcios{!consortiumsEnabled && <span className={styles.premiumBadge}>Premium</span>}
                 </button>
               </>
             )}
@@ -303,16 +339,25 @@ export default function AdminPage() {
                   <table className={styles.auditTable}>
                     <thead>
                       <tr>
-                        <th>ClientId</th><th>Nombre</th><th>Scheduler</th>
+                        <th>Nombre</th><th>Premium</th><th>Scheduler</th>
                         <th>Totales Acumulados</th><th>Tokens Usados</th><th>Cuota</th><th>Edificios</th><th></th>
                       </tr>
                     </thead>
                     <tbody>
-                      {clientMetrics.length === 0 && <tr><td colSpan={7}>No hay clientes con metricas todavia.</td></tr>}
+                      {clientMetrics.length === 0 && <tr><td colSpan={8}>No hay clientes con metricas todavia.</td></tr>}
                       {clientMetrics.map((client) => (
                         <tr key={client.clientId}>
-                          <td>{client.clientId}</td>
                           <td>{client.name}</td>
+                          <td>
+                            <button
+                              type="button"
+                              className={`${styles.statusBadge} ${client.consortiumsEnabled ? styles.badgeOn : styles.badgeOff}`}
+                              style={{ cursor: "pointer", border: "none" }}
+                              onClick={() => handleTogglePremium(client.clientId, client.consortiumsEnabled)}
+                            >
+                              {client.consortiumsEnabled ? "ON" : "OFF"}
+                            </button>
+                          </td>
                           <td>
                             <div className={styles.badgeRow}>
                               <span className={`${styles.statusBadge} ${client.scheduler.enabled ? styles.badgeOn : styles.badgeOff}`}>{client.scheduler.enabled ? "ON" : "OFF"}</span>

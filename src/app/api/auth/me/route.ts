@@ -18,6 +18,7 @@ export async function GET(request: Request) {
         name: true,
         role: true,
         isActive: true,
+        consortiumsEnabled: true,
       },
     });
 

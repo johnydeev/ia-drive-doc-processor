@@ -1,6 +1,6 @@
 # Progreso del proyecto — drive-doc-processor
 
-Actualizado al 23/03/2026 (sesión 4).
+Actualizado al 23/03/2026 (sesión 6).
 
 ---
 
@@ -68,6 +68,19 @@ El sistema core está funcionando en producción. Pipeline de PDFs, extracción 
   - Sync directory: reemplazo total de LspServices por cliente
   - Migración: `20260323000200_add_lspservice_paymentmethod` (pendiente de aplicar)
   - Eliminado campo `isAutoCreated` (ya no existía en schema)
+- **Feature `consortiumsEnabled` (Premium)** (23/03/2026)
+  - Nuevo campo `consortiumsEnabled Boolean @default(false)` en Client
+  - Panel admin: columna "Premium" con toggle ON/OFF optimista (reemplaza columna ClientId)
+  - Panel cliente: botón "Consorcios" deshabilitado con badge "Premium" si `consortiumsEnabled` es false
+  - Página `/admin/consortiums`: guard que verifica acceso y redirige si no está habilitado
+  - Endpoints actualizados: `/api/auth/me`, `/api/admin/clients/[id]`, `/api/admin/audit/clients`
+  - Migración: `20260323000300_add_consortiums_enabled` (pendiente de aplicar)
+- **Asignación automática de período a invoices** (23/03/2026)
+  - Pipeline: al matchear consorcio, busca su período ACTIVE y asigna `periodId` al Invoice
+  - Google Sheets: nueva columna `period` (formato `MM/YYYY`) agregada en posición M (después de isDuplicate)
+  - Columnas existentes (A–L) sin cambios, `clientNumber` permanece en J
+  - Invoices manuales: también escriben el período en Sheets
+  - Si no hay período activo: warning en logs, `periodId` queda null (no rompe el pipeline)
 
 ---
 

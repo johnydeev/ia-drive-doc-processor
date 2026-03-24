@@ -31,6 +31,7 @@ export async function GET(
       name: client.name,
       email: client.email,
       isActive: client.isActive,
+      consortiumsEnabled: client.consortiumsEnabled,
       sheetsId: (google.sheetsId as string) ?? "",
       altaSheetsId: (google.altaSheetsId as string) ?? "",
       sheetName: (extraction.sheetName as string) ?? "",
@@ -51,6 +52,7 @@ export async function GET(
 const patchSchema = z.object({
   name: z.string().min(2).optional(),
   isActive: z.boolean().optional(),
+  consortiumsEnabled: z.boolean().optional(),
   sheetsId: z.string().min(10).optional(),
   altaSheetsId: z.string().min(10).optional().nullable(),
   sheetName: z.string().min(1).optional(),
@@ -122,6 +124,7 @@ export async function PATCH(
       data: {
         ...(body.name !== undefined && { name: body.name }),
         ...(body.isActive !== undefined && { isActive: body.isActive }),
+        ...(body.consortiumsEnabled !== undefined && { consortiumsEnabled: body.consortiumsEnabled }),
         googleConfigJson: google as Prisma.InputJsonValue,
         extractionConfigJson: extraction as Prisma.InputJsonValue,
         driveFoldersJson: drive as Prisma.InputJsonValue,

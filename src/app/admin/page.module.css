@@ -407,6 +407,25 @@
   background: rgba(69, 80, 124, 0.35);
 }
 
+.premiumBadge {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 6px;
+  padding: 2px 7px;
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  border-radius: 4px;
+  background: linear-gradient(135deg, #ffd700, #ffaa00);
+  color: #3a2500;
+}
+
+.page[data-theme="light"] .premiumBadge {
+  background: linear-gradient(135deg, #f0c800, #e69500);
+  color: #4a3000;
+}
+
 .metricPills {
   display: flex;
   flex-wrap: wrap;

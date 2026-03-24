@@ -100,6 +100,23 @@ const EMPTY_INVOICE_FORM: InvoiceForm = {
 export default function ConsortiumsPage() {
   const router = useRouter();
   const { guardedFetch } = useAuthGuard();
+  const [accessChecked, setAccessChecked] = useState(false);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await guardedFetch("/api/auth/me", { method: "GET", cache: "no-store" });
+        const data = (await res.json()) as { ok: boolean; user?: { consortiumsEnabled?: boolean } };
+        if (!data.ok || !data.user?.consortiumsEnabled) {
+          router.replace("/admin");
+          return;
+        }
+        setAccessChecked(true);
+      } catch {
+        router.replace("/admin");
+      }
+    })();
+  }, [guardedFetch, router]);
 
   const [consortiums, setConsortiums] = useState<Consortium[]>([]);
   const [loadingList, setLoadingList] = useState(true);
@@ -432,6 +449,8 @@ export default function ConsortiumsPage() {
 
   const totalAmount = filteredInvoices.reduce((s, i) => s + (i.amount ?? 0), 0);
   const duplicates = filteredInvoices.filter((i) => i.isDuplicate).length;
+
+  if (!accessChecked) return null;
 
   return (
     <div className={styles.page}>

@@ -21,6 +21,7 @@ const DEFAULT_MAPPING: SheetsRowMapping = {
   clientNumber: "J",
   sourceFileUrl: "K",
   isDuplicate: "L",
+  period: "M",
 };
 
 const TIPO_GASTO_VALUES = ["ORDINARIO", "EXTRAORDINARIO", "PARTICULAR"] as const;
@@ -109,7 +110,7 @@ export async function POST(
 
     const period = await prisma.period.findFirst({
       where: { id: body.periodId, consortiumId },
-      select: { id: true },
+      select: { id: true, month: true, year: true },
     });
     if (!period) {
       return NextResponse.json({ ok: false, error: "Período no encontrado" }, { status: 404 });
@@ -192,6 +193,7 @@ export async function POST(
             alias:         null,
             clientNumber:  null,
             paymentMethod: null,
+            period:        period ? `${String(period.month).padStart(2, "0")}/${period.year}` : null,
             sourceFileUrl: null,
             isDuplicate:   "NO",
           };
