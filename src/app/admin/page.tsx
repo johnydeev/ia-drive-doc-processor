@@ -37,6 +37,10 @@ type CreateClientForm = {
   googleProjectId: string; googleClientEmail: string; googlePrivateKey: string;
 };
 
+type PurgeTarget = { clientId: string; clientName: string } | null;
+type PurgeStep = "preview" | "confirm" | "result";
+type PurgeResult = { deleted: number; driveMovedBack: number; driveFailed: number; sheetsCleared: boolean } | null;
+
 const EMPTY_DASH = "-";
 
 const INITIAL_FORM: CreateClientForm = {
@@ -83,6 +87,11 @@ export default function AdminPage() {
   const [createForm, setCreateForm] = useState<CreateClientForm>(INITIAL_FORM);
   const [isCreateClientOpen, setIsCreateClientOpen] = useState(false);
   const [theme, setTheme] = useState<ThemeMode>("dark");
+  const [purgeTarget, setPurgeTarget] = useState<PurgeTarget>(null);
+  const [purgeStep, setPurgeStep] = useState<PurgeStep>("preview");
+  const [purgeCount, setPurgeCount] = useState(0);
+  const [purgeResult, setPurgeResult] = useState<PurgeResult>(null);
+  const [purgeLoading, setPurgeLoading] = useState(false);
 
   const isAdmin = authRole === "ADMIN";
   const canControlScheduler = authRole === "CLIENT";
@@ -267,6 +276,50 @@ export default function AdminPage() {
     }
   };
 
+  const handlePurgeOpen = async (clientId: string, clientName: string) => {
+    setPurgeTarget({ clientId, clientName });
+    setPurgeStep("preview");
+    setPurgeResult(null);
+    setPurgeLoading(true);
+    try {
+      const res = await guardedFetch(`/api/admin/clients/${clientId}/purge`, { method: "GET", cache: "no-store" });
+      const data = (await res.json()) as { ok: boolean; count?: number; error?: string };
+      if (!res.ok || !data.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
+      setPurgeCount(data.count ?? 0);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "No se pudo obtener preview de purga");
+      setPurgeTarget(null);
+    } finally { setPurgeLoading(false); }
+  };
+
+  const handlePurgeExecute = async () => {
+    if (!purgeTarget) return;
+    setPurgeLoading(true);
+    try {
+      const res = await guardedFetch(`/api/admin/clients/${purgeTarget.clientId}/purge`, {
+        method: "DELETE", headers: { "content-type": "application/json" },
+      });
+      const data = (await res.json()) as { ok: boolean; error?: string; deleted?: number; driveMovedBack?: number; driveFailed?: number; sheetsCleared?: boolean };
+      if (!res.ok || !data.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
+      setPurgeResult({
+        deleted: data.deleted ?? 0,
+        driveMovedBack: data.driveMovedBack ?? 0,
+        driveFailed: data.driveFailed ?? 0,
+        sheetsCleared: data.sheetsCleared ?? false,
+      });
+      setPurgeStep("result");
+      await fetchClientMetrics();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Error al ejecutar la purga");
+      setPurgeTarget(null);
+    } finally { setPurgeLoading(false); }
+  };
+
+  const handlePurgeClose = () => {
+    setPurgeTarget(null);
+    setPurgeResult(null);
+  };
+
   const paused = state ? !state.enabled : false;
 
   return (
@@ -382,14 +435,24 @@ export default function AdminPage() {
                           </td>
                           <td><span className={styles.metricPill}>🏢 {formatNumber(client.consortiumCount)}</span></td>
                           <td>
-                            <button
-                              type="button"
-                              className={styles.ghostBtn}
-                              style={{ padding: "5px 12px", fontSize: "12px" }}
-                              onClick={() => router.push(`/admin/clients/${client.clientId}`)}
-                            >
-                              Editar
-                            </button>
+                            <div style={{ display: "flex", gap: "6px" }}>
+                              <button
+                                type="button"
+                                className={styles.ghostBtn}
+                                style={{ padding: "5px 12px", fontSize: "12px" }}
+                                onClick={() => router.push(`/admin/clients/${client.clientId}`)}
+                              >
+                                Editar
+                              </button>
+                              <button
+                                type="button"
+                                className={styles.purgeBtn}
+                                disabled={busyAction !== null || purgeTarget !== null}
+                                onClick={() => handlePurgeOpen(client.clientId, client.name)}
+                              >
+                                Purgar
+                              </button>
+                            </div>
                           </td>
                         </tr>
                       ))}
@@ -536,6 +599,63 @@ export default function AdminPage() {
             )}
           </div>
         </section>
+        {purgeTarget && (
+          <div className={styles.purgeOverlay}>
+            <div className={styles.purgeModal}>
+              {purgeStep === "preview" && (
+                <>
+                  <h3 className={styles.purgeTitle}>Purgar boletas</h3>
+                  {purgeLoading ? (
+                    <p className={styles.purgeBody}>Cargando...</p>
+                  ) : (
+                    <>
+                      <p className={styles.purgeBody}>
+                        El cliente <strong>{purgeTarget.clientName}</strong> tiene <strong>{purgeCount}</strong> boletas.
+                        Se eliminaran de la base de datos, se limpiaran las filas de Google Sheets
+                        y se moveran los archivos de Drive de vuelta a Pendientes.
+                      </p>
+                      <div className={styles.purgeActions}>
+                        <button type="button" className={styles.ghostBtn} onClick={handlePurgeClose}>Cancelar</button>
+                        <button type="button" className={styles.purgeConfirmBtn} onClick={() => setPurgeStep("confirm")}>
+                          Continuar
+                        </button>
+                      </div>
+                    </>
+                  )}
+                </>
+              )}
+              {purgeStep === "confirm" && (
+                <>
+                  <h3 className={styles.purgeTitle}>Confirmar purga</h3>
+                  <p className={styles.purgeBody}>
+                    Esta accion <strong>no se puede deshacer</strong>. Se eliminaran {purgeCount} boletas
+                    de <strong>{purgeTarget.clientName}</strong>.
+                  </p>
+                  <div className={styles.purgeActions}>
+                    <button type="button" className={styles.ghostBtn} onClick={handlePurgeClose} disabled={purgeLoading}>Cancelar</button>
+                    <button type="button" className={styles.purgeConfirmBtn} onClick={handlePurgeExecute} disabled={purgeLoading}>
+                      {purgeLoading ? "Purgando..." : "Purgar todo"}
+                    </button>
+                  </div>
+                </>
+              )}
+              {purgeStep === "result" && purgeResult && (
+                <>
+                  <h3 className={styles.purgeTitle}>Purga completada</h3>
+                  <ul className={styles.purgeBody}>
+                    <li>Boletas eliminadas: <strong>{purgeResult.deleted}</strong></li>
+                    <li>Archivos movidos a Pendientes: <strong>{purgeResult.driveMovedBack}</strong></li>
+                    <li>Fallos de Drive: <strong>{purgeResult.driveFailed}</strong></li>
+                    <li>Sheets limpiado: <strong>{purgeResult.sheetsCleared ? "Si" : "No"}</strong></li>
+                  </ul>
+                  <div className={styles.purgeActions}>
+                    <button type="button" className={styles.ghostBtn} onClick={handlePurgeClose}>Cerrar</button>
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        )}
       </main>
     </div>
   );

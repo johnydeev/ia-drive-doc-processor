@@ -113,6 +113,7 @@ src/
 │   │   ├── admin/
 │   │   │   ├── clients/       # CRUD clientes (admin)
 │   │   │   │   └── [id]/      # GET + PATCH edición de cliente
+│   │   │   │       └── purge/ # GET (preview count) + DELETE (purga completa)
 │   │   │   ├── audit/         # logs de auditoría
 │   │   │   └── scheduler/     # control scheduler
 │   │   └── client/
@@ -418,6 +419,25 @@ Sube PDF de recibo a Drive en:
 
 Si no hay `receipts` folder → usa `scanned` como raíz.
 Los campos `receiptDriveFileId` y `receiptDriveFileUrl` se guardan en Invoice.
+
+---
+
+## Purga de boletas por cliente (Admin)
+
+**Preview:** `GET /api/admin/clients/[id]/purge` — retorna `{ ok, count, clientName }`
+**Ejecutar:** `DELETE /api/admin/clients/[id]/purge` — purga completa
+
+Flujo del DELETE (en orden):
+1. Obtener invoices del cliente (`driveFileId` de cada una)
+2. Mover archivos de Drive: `scanned → pending` (fallback `unassigned → pending`). Si falla → `driveFailed++`, continúa
+3. Limpiar Sheets: `clearAllDataRows(sheetName)` borra fila 2+ preservando headers
+4. Borrar DB en transacción: `ProcessingJob.deleteMany` + `Invoice.deleteMany`
+
+**NO borra:** Consorcios, Proveedores, Períodos, Rubros, Coeficientes, LspServices.
+**NO borra archivos de Drive** — solo los mueve de vuelta a pendientes.
+**Tolerancia a fallos:** Drive/Sheets fallan → warning + continúa. DB se borra siempre.
+
+Respuesta: `{ ok, deleted, driveMovedBack, driveFailed, sheetsCleared }`
 
 ---
 

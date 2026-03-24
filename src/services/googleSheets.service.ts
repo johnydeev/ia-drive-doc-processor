@@ -369,6 +369,13 @@ export class GoogleSheetsService {
     };
   }
 
+  async clearAllDataRows(sheetName: string): Promise<void> {
+    await this.sheets.spreadsheets.values.clear({
+      spreadsheetId: this.spreadsheetId,
+      range: `${sheetName}!A2:Z`,
+    });
+  }
+
   async insertRow(
     sheetName: string,
     data: ExtractedDocumentData,

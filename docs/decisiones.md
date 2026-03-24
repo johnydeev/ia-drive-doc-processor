@@ -4,6 +4,28 @@ Registro de decisiones tomadas ante problemas reales encontrados en producción.
 
 ---
 
+## 2026-03-24 — Purga completa de boletas por cliente (Admin)
+
+### Problema
+No existía forma de revertir el pipeline completo para un cliente. Si se necesitaba reprocesar todas las boletas (por cambios en prompts, configuración incorrecta, etc.), había que limpiar manualmente la DB, Sheets y mover archivos en Drive.
+
+### Decisión
+- Endpoint `DELETE /api/admin/clients/[id]/purge` con flujo tolerante a fallos: Drive → Sheets → DB.
+- Los archivos de Drive se mueven (no borran) de vuelta a `pending` intentando primero desde `scanned`, luego `unassigned`.
+- La carpeta `failed` no se toca.
+- Sheets se limpia con `clearAllDataRows()` (borra fila 2+, preserva headers).
+- Solo se borran Invoices y ProcessingJobs. NO se tocan Consorcios, Proveedores, Períodos, Rubros, Coeficientes ni LspServices.
+- Si Drive o Sheets fallan, se loguea warning y se continúa. El borrado de DB se ejecuta siempre.
+- Modal de 3 pasos en la UI (preview → confirmación → resultado) para prevenir purgas accidentales.
+
+### Impacto
+- Nuevo archivo: `src/app/api/admin/clients/[id]/purge/route.ts`
+- Nuevo método: `GoogleSheetsService.clearAllDataRows()`
+- Modificado: `src/app/admin/page.tsx` (botón Purgar + modal)
+- Modificado: `src/app/admin/page.module.css` (estilos purge)
+
+---
+
 ## 2026-03-24 — Sidebar colapsable + menú hamburguesa en panel cliente
 
 ### Problema

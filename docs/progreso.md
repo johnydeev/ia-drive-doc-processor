@@ -1,6 +1,6 @@
 # Progreso del proyecto — drive-doc-processor
 
-Actualizado al 24/03/2026 (sesión 7).
+Actualizado al 24/03/2026 (sesión 8).
 
 ---
 
@@ -97,6 +97,13 @@ El sistema core está funcionando en producción. Pipeline de PDFs, extracción 
   - `ConsortiumRepository.resolveMajorityMonth()`: usa mes mayoritario o mes actual si no hay consorcios
   - `createManual()`, import Excel, sync-directory usan la misma lógica
   - Sync-directory ahora crea período activo para consorcios nuevos que no tenían uno
+- **Purga completa de boletas por cliente (Admin)** (24/03/2026)
+  - `GET /api/admin/clients/[id]/purge`: preview con count de boletas
+  - `DELETE /api/admin/clients/[id]/purge`: purga completa (Drive → Sheets → DB)
+  - Flujo: mueve archivos Drive a pendientes (scanned/unassigned → pending), limpia Sheets (fila 2+), borra Invoices + ProcessingJobs en transacción
+  - Tolerancia a fallos: Drive/Sheets fallan → warning, DB se borra igual
+  - UI: botón "Purgar" en tabla de métricas admin, modal de 3 pasos (preview → confirm → result)
+  - Método `clearAllDataRows(sheetName)` en GoogleSheetsService
 
 ---
 

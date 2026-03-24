@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-03-24 (sesión 8)
+
+Highlights
+- **Purga completa de boletas por cliente (Admin)**: botón "Purgar" en la tabla de métricas del panel admin con modal de 3 pasos (preview → confirmación → resultado).
+- **Endpoint GET /api/admin/clients/[id]/purge**: preview que retorna cantidad de boletas del cliente.
+- **Endpoint DELETE /api/admin/clients/[id]/purge**: ejecuta purga completa — mueve archivos de Drive a pendientes, limpia Sheets (fila 2+), borra Invoices y ProcessingJobs de DB.
+- **Tolerancia a fallos**: si Drive o Sheets fallan, loguea warning y continúa. El borrado de DB se ejecuta siempre.
+
 ## 2026-03-24 (sesión 7)
 
 Highlights

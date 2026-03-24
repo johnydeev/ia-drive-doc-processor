@@ -671,3 +671,61 @@
   background: rgba(218, 248, 236, 0.86);
   color: #1f5941;
 }
+
+/* ── Purge button & modal ── */
+.purgeBtn {
+  padding: 5px 12px; font-size: 12px; font-weight: 600;
+  border: 1px solid rgba(255, 80, 80, 0.5);
+  border-radius: 8px; cursor: pointer;
+  background: rgba(255, 60, 60, 0.12);
+  color: #ff7070;
+  transition: background 0.15s, transform 0.15s;
+}
+.purgeBtn:hover:not(:disabled) { background: rgba(255, 60, 60, 0.25); transform: translateY(-1px); }
+.purgeBtn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.purgeOverlay {
+  position: fixed; inset: 0;
+  background: rgba(4, 8, 20, 0.78);
+  backdrop-filter: blur(4px);
+  z-index: 100;
+  display: flex; align-items: center; justify-content: center;
+  padding: 20px;
+}
+
+.purgeModal {
+  background: #0f1629;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 16px; padding: 28px;
+  max-width: 480px; width: 100%;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+}
+
+.purgeTitle { font-size: 18px; font-weight: 700; color: #eef2ff; margin-bottom: 12px; }
+.purgeBody { font-size: 14px; color: #a6b4d0; line-height: 1.65; margin-bottom: 20px; list-style: none; padding: 0; }
+.purgeBody strong { color: #e4edff; }
+.purgeBody li { margin-bottom: 4px; }
+.purgeActions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 20px; }
+
+.purgeConfirmBtn {
+  background: linear-gradient(135deg, #ff4444, #ff6b6b);
+  color: #fff; border: none; border-radius: 10px;
+  padding: 10px 20px; font-size: 13px; font-weight: 700; cursor: pointer;
+  transition: transform 0.15s, opacity 0.15s;
+}
+.purgeConfirmBtn:hover:not(:disabled) { transform: translateY(-1px); }
+.purgeConfirmBtn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* Light theme overrides for purge */
+.page[data-theme="light"] .purgeBtn {
+  border-color: rgba(200, 50, 50, 0.4);
+  background: rgba(255, 60, 60, 0.08);
+  color: #c03030;
+}
+.page[data-theme="light"] .purgeModal {
+  background: #f8faff;
+  border-color: rgba(35, 58, 104, 0.2);
+}
+.page[data-theme="light"] .purgeTitle { color: #1c2638; }
+.page[data-theme="light"] .purgeBody { color: #3a506e; }
+.page[data-theme="light"] .purgeBody strong { color: #1a2740; }
