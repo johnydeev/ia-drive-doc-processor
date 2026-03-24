@@ -47,9 +47,9 @@ export async function POST(request: NextRequest) {
     }
 
     const prisma = getPrismaClient();
-    const now = new Date();
-    const year = now.getFullYear();
-    const month = now.getMonth() + 1;
+    const { ConsortiumRepository } = await import("@/repositories/consortium.repository");
+    const repo = new ConsortiumRepository();
+    const { year, month } = await repo.resolveMajorityMonth(clientId);
 
     const result = {
       edificios:   { imported: 0, skipped: 0, errors: [] as string[] },

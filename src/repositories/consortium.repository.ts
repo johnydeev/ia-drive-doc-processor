@@ -97,6 +97,42 @@ export class ConsortiumRepository {
     });
   }
 
+  /**
+   * Calcula el mes/año para el período inicial de un consorcio nuevo.
+   * Si hay otros consorcios con períodos activos → usa el mes mayoritario.
+   * Si no hay ninguno → usa el mes/año actual del sistema.
+   */
+  async resolveMajorityMonth(clientId: string): Promise<{ year: number; month: number }> {
+    const prisma = getPrismaClient();
+    const activePeriods = await prisma.period.findMany({
+      where: { consortium: { clientId }, status: "ACTIVE" },
+      select: { year: true, month: true },
+    });
+
+    if (activePeriods.length === 0) {
+      const now = new Date();
+      return { year: now.getFullYear(), month: now.getMonth() + 1 };
+    }
+
+    const freq = new Map<string, number>();
+    for (const p of activePeriods) {
+      const key = `${p.year}-${p.month}`;
+      freq.set(key, (freq.get(key) ?? 0) + 1);
+    }
+
+    let majorityKey = "";
+    let majorityCount = 0;
+    for (const [key, count] of freq) {
+      if (count > majorityCount) {
+        majorityKey = key;
+        majorityCount = count;
+      }
+    }
+
+    const [year, month] = majorityKey.split("-").map(Number);
+    return { year, month };
+  }
+
   async createManual(input: {
     clientId: string;
     canonicalName: string;
@@ -106,9 +142,7 @@ export class ConsortiumRepository {
     driveFolderProcessedId?: string;
   }): Promise<Consortium & { periods: Period[] }> {
     const prisma = getPrismaClient();
-    const now = new Date();
-    const year = now.getFullYear();
-    const month = now.getMonth() + 1;
+    const { year, month } = await this.resolveMajorityMonth(input.clientId);
 
     const created = await prisma.$transaction(async (tx) => {
       const consortium = await tx.consortium.create({

@@ -1,6 +1,6 @@
 # Progreso del proyecto — drive-doc-processor
 
-Actualizado al 23/03/2026 (sesión 6).
+Actualizado al 24/03/2026 (sesión 7).
 
 ---
 
@@ -51,7 +51,7 @@ El sistema core está funcionando en producción. Pipeline de PDFs, extracción 
 - **Renombrado alias/aliases → matchNames + nuevo campo paymentAlias** (23/03/2026)
   - Provider: `alias` → `matchNames` (interno, matching múltiple separado por `|`) + `paymentAlias` (visible en UI y Sheets)
   - Consortium: `aliases` → `matchNames` (interno, matching) + `paymentAlias` (visible en UI y Sheets)
-  - Migración: `20260323000100_rename_alias_to_matchnames_add_paymentalias` (pendiente de aplicar)
+  - Migración: `20260323000100_rename_alias_to_matchnames_add_paymentalias` (aplicada)
   - Pipeline: columna "ALIAS" de Sheets ahora escribe `provider.paymentAlias` (vacío si no tiene)
   - Sync ALTA: hojas `_Consorcios` y `_Proveedores` ampliadas a 4 columnas (A:D)
   - Import Excel: nueva columna "Alias de pago" en ambas hojas
@@ -66,7 +66,7 @@ El sistema core está funcionando en producción. Pipeline de PDFs, extracción 
   - Sheets: nueva columna NRO CLIENTE (J), sourceFileUrl→K, isDuplicate→L
   - Hoja `_LspServices` en archivo ALTA (4 columnas: NOMBRE CANÓNICO, PROVEEDOR, NRO CLIENTE, DESCRIPCIÓN)
   - Sync directory: reemplazo total de LspServices por cliente
-  - Migración: `20260323000200_add_lspservice_paymentmethod` (pendiente de aplicar)
+  - Migración: `20260323000200_add_lspservice_paymentmethod` (aplicada)
   - Eliminado campo `isAutoCreated` (ya no existía en schema)
 - **Feature `consortiumsEnabled` (Premium)** (23/03/2026)
   - Nuevo campo `consortiumsEnabled Boolean @default(false)` en Client
@@ -74,13 +74,29 @@ El sistema core está funcionando en producción. Pipeline de PDFs, extracción 
   - Panel cliente: botón "Consorcios" deshabilitado con badge "Premium" si `consortiumsEnabled` es false
   - Página `/admin/consortiums`: guard que verifica acceso y redirige si no está habilitado
   - Endpoints actualizados: `/api/auth/me`, `/api/admin/clients/[id]`, `/api/admin/audit/clients`
-  - Migración: `20260323000300_add_consortiums_enabled` (pendiente de aplicar)
+  - Migración: `20260323000300_add_consortiums_enabled` (aplicada)
 - **Asignación automática de período a invoices** (23/03/2026)
   - Pipeline: al matchear consorcio, busca su período ACTIVE y asigna `periodId` al Invoice
   - Google Sheets: nueva columna `period` (formato `MM/YYYY`) agregada en posición M (después de isDuplicate)
   - Columnas existentes (A–L) sin cambios, `clientNumber` permanece en J
   - Invoices manuales: también escriben el período en Sheets
   - Si no hay período activo: warning en logs, `periodId` queda null (no rompe el pipeline)
+- **Sidebar colapsable + menú hamburguesa en panel cliente** (24/03/2026)
+  - Sidebar global con: placeholder logo, nombre del cliente, botones (Sincronizar directorio, Consorcios con badge Premium, Cerrar Periodo General, Cerrar sesión)
+  - Colapsable en desktop (iconos / iconos + labels), menú hamburguesa para tablet/mobile
+  - Toolbar superior: Pausar/Ejecutar scheduler a la izquierda, toggle de tema a la derecha
+- **Toggle dark/light con iconos sol/luna** (24/03/2026)
+  - Reemplazado botón de texto por switch tipo interruptor con iconos
+  - Estado solo de sesión (no persiste en localStorage)
+- **Cerrar Periodo General** (24/03/2026)
+  - Botón solo visible para rol CLIENT en el sidebar
+  - `GET /api/client/periods/close-all/preview`: calcula mes mayoritario, retorna toClose + toSkip
+  - `POST /api/client/periods/close-all`: cierra períodos del mes mayoritario, crea siguiente
+  - Modal de 2 pasos: preview con lista de consorcios salteados → resultado con contadores
+- **Período por defecto con mes mayoritario** (24/03/2026)
+  - `ConsortiumRepository.resolveMajorityMonth()`: usa mes mayoritario o mes actual si no hay consorcios
+  - `createManual()`, import Excel, sync-directory usan la misma lógica
+  - Sync-directory ahora crea período activo para consorcios nuevos que no tenían uno
 
 ---
 

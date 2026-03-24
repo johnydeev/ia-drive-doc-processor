@@ -93,6 +93,59 @@ export async function POST(request: NextRequest) {
         });
       }
 
+      // Crear período activo para consorcios nuevos que no tengan uno
+      const allConsortiumsAfterUpsert = await tx.consortium.findMany({
+        where: { clientId },
+        select: { id: true, canonicalName: true },
+      });
+      const existingPeriods = await tx.period.findMany({
+        where: { consortiumId: { in: allConsortiumsAfterUpsert.map((c) => c.id) }, status: "ACTIVE" },
+        select: { consortiumId: true },
+      });
+      const consWithPeriod = new Set(existingPeriods.map((p) => p.consortiumId));
+      const consWithoutPeriod = allConsortiumsAfterUpsert.filter((c) => !consWithPeriod.has(c.id));
+
+      if (consWithoutPeriod.length > 0) {
+        // Resolver mes mayoritario (inline para no salir de la transacción)
+        const activePeriods = await tx.period.findMany({
+          where: { consortium: { clientId }, status: "ACTIVE" },
+          select: { year: true, month: true },
+        });
+
+        let periodYear: number;
+        let periodMonth: number;
+
+        if (activePeriods.length === 0) {
+          const now = new Date();
+          periodYear = now.getFullYear();
+          periodMonth = now.getMonth() + 1;
+        } else {
+          const freq = new Map<string, number>();
+          for (const p of activePeriods) {
+            const key = `${p.year}-${p.month}`;
+            freq.set(key, (freq.get(key) ?? 0) + 1);
+          }
+          let majorityKey = "";
+          let majorityCount = 0;
+          for (const [key, count] of freq) {
+            if (count > majorityCount) { majorityKey = key; majorityCount = count; }
+          }
+          const [y, m] = majorityKey.split("-").map(Number);
+          periodYear = y;
+          periodMonth = m;
+        }
+
+        await tx.period.createMany({
+          data: consWithoutPeriod.map((c) => ({
+            clientId,
+            consortiumId: c.id,
+            year: periodYear,
+            month: periodMonth,
+            status: "ACTIVE" as const,
+          })),
+        });
+      }
+
       const sheetsConsortiumNames = new Set(directory.consortiums.map((c) => c.canonicalName));
       const dbConsortiums = await tx.consortium.findMany({
         where: { clientId },

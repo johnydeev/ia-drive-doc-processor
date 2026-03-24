@@ -611,16 +611,295 @@
 }
 .periodBadge strong { color: #e4edff; }
 
+/* ── Premium badge ── */
+.premiumBadge {
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #ffd700;
+  border: 1px solid rgba(255,215,0,0.4);
+  background: rgba(180,150,0,0.2);
+  border-radius: 999px;
+  padding: 2px 8px;
+  margin-left: 6px;
+}
+
+/* ── Theme toggle switch ── */
+.themeToggle {
+  position: relative;
+  width: 48px;
+  height: 26px;
+  border-radius: 999px;
+  border: 1px solid rgba(255,255,255,0.2);
+  background: rgba(255,255,255,0.08);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  padding: 0 3px;
+  transition: background 0.2s, border-color 0.2s;
+  flex-shrink: 0;
+}
+.themeToggle:hover {
+  background: rgba(255,255,255,0.14);
+  border-color: rgba(255,255,255,0.3);
+}
+.themeToggleKnob {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #e4edff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  transition: transform 0.2s;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.3);
+}
+.themeToggleLight .themeToggleKnob {
+  transform: translateX(22px);
+}
+
+/* ── Global nav sidebar (left) ── */
+.navSidebar {
+  width: 220px;
+  flex-shrink: 0;
+  border-right: 1px solid rgba(255,255,255,0.1);
+  background: rgba(5,9,18,0.9);
+  display: flex;
+  flex-direction: column;
+  z-index: 20;
+  transition: width 0.2s;
+  overflow: hidden;
+}
+.navSidebarCollapsed {
+  width: 60px;
+}
+
+.navSidebarLogo {
+  padding: 18px 16px 8px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+.navSidebarLogoIcon {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  background: linear-gradient(135deg, #5b8cf7, #a78bfa);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  color: #fff;
+  flex-shrink: 0;
+}
+.navSidebarLogoText {
+  font-size: 13px;
+  font-weight: 600;
+  color: #dce6ff;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.navSidebarDivider {
+  height: 1px;
+  background: rgba(255,255,255,0.08);
+  margin: 8px 12px;
+  flex-shrink: 0;
+}
+
+.navSidebarNav {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 8px;
+  overflow-y: auto;
+}
+
+.navSidebarItem {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: none;
+  background: transparent;
+  color: #a6b4d0;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  border-radius: 8px;
+  transition: background 0.15s, color 0.15s;
+  white-space: nowrap;
+  width: 100%;
+  text-align: left;
+}
+.navSidebarItem:hover {
+  background: rgba(255,255,255,0.06);
+  color: #dce6ff;
+}
+.navSidebarItem:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.navSidebarItemIcon {
+  font-size: 16px;
+  flex-shrink: 0;
+  width: 20px;
+  text-align: center;
+}
+.navSidebarItemLabel {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.navSidebarCollapse {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 12px 8px;
+  border: none;
+  background: transparent;
+  color: #6a7fa8;
+  cursor: pointer;
+  font-size: 16px;
+  border-top: 1px solid rgba(255,255,255,0.06);
+  flex-shrink: 0;
+  transition: color 0.15s;
+}
+.navSidebarCollapse:hover { color: #dce6ff; }
+
+/* ── Top toolbar ── */
+.toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 20px;
+  border-bottom: 1px solid rgba(255,255,255,0.08);
+  background: rgba(9,13,27,0.6);
+  flex-shrink: 0;
+  z-index: 10;
+  gap: 12px;
+}
+.toolbarLeft {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.toolbarRight {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.toolbarBtn {
+  background: rgba(255,255,255,0.06);
+  color: #c0ccee;
+  border: 1px solid rgba(255,255,255,0.15);
+  border-radius: 8px;
+  padding: 7px 14px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s;
+  white-space: nowrap;
+}
+.toolbarBtn:hover { background: rgba(255,255,255,0.12); }
+.toolbarBtn:disabled { opacity: 0.45; cursor: not-allowed; }
+.toolbarBtnWarn {
+  composes: toolbarBtn;
+  background: rgba(255,140,66,0.15);
+  color: #ffb872;
+  border-color: rgba(255,140,66,0.4);
+}
+.toolbarBtnWarn:hover { background: rgba(255,140,66,0.25); }
+.toolbarBtnSuccess {
+  composes: toolbarBtn;
+  background: rgba(80,200,120,0.15);
+  color: #7dff9b;
+  border-color: rgba(80,200,120,0.4);
+}
+.toolbarBtnSuccess:hover { background: rgba(80,200,120,0.25); }
+
+/* ── Hamburger button for mobile ── */
+.hamburger {
+  display: none;
+  background: none;
+  border: none;
+  color: #c0ccee;
+  font-size: 22px;
+  cursor: pointer;
+  padding: 4px;
+}
+
+/* ── Mobile overlay for nav sidebar ── */
+.navSidebarOverlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(4,8,20,0.7);
+  z-index: 49;
+}
+
+/* ── Close all modal list ── */
+.closeAllList {
+  margin: 12px 0;
+  padding: 0;
+  list-style: none;
+}
+.closeAllList li {
+  padding: 6px 0;
+  font-size: 13px;
+  color: #a6b4d0;
+  border-bottom: 1px solid rgba(255,255,255,0.05);
+}
+.closeAllList li:last-child { border-bottom: none; }
+.closeAllList li strong { color: #e4edff; }
+.closeAllSkipReason {
+  font-size: 11px;
+  color: #ffb872;
+  margin-left: 6px;
+}
+
 /* ── Responsive ── */
+@media (max-width: 1024px) {
+  .navSidebar {
+    position: fixed;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    z-index: 50;
+    transform: translateX(-100%);
+    transition: transform 0.25s;
+    width: 240px;
+  }
+  .navSidebarOpen {
+    transform: translateX(0);
+  }
+  .navSidebarOverlay {
+    display: block;
+  }
+  .hamburger {
+    display: flex;
+  }
+  .navSidebarCollapse { display: none; }
+}
+
 @media (max-width: 768px) {
   .sidebar { width: 220px; }
   .statsStrip { grid-template-columns: repeat(2, minmax(0,1fr)); }
   .main { padding: 16px; }
   .invoiceFormGrid, .providerFormGrid { grid-template-columns: 1fr; }
+  .toolbar { padding: 8px 12px; }
+  .toolbarBtn { padding: 6px 10px; font-size: 11px; }
 }
 
 @media (max-width: 560px) {
   .layout { flex-direction: column; }
   .sidebar { width: 100%; max-height: 220px; border-right: none; border-bottom: 1px solid rgba(255,255,255,0.1); }
   .statsStrip { grid-column: 1fr 1fr; }
+  .header { flex-direction: column; gap: 8px; }
+  .headerActions { flex-wrap: wrap; }
 }

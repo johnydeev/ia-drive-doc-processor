@@ -97,26 +97,160 @@ const EMPTY_INVOICE_FORM: InvoiceForm = {
   tipoGasto: "ORDINARIO", tipoComprobante: "",
 };
 
+type ThemeMode = "dark" | "light";
+
+type CloseAllPreview = {
+  majorityMonth: string | null;
+  nextMonth: string | null;
+  toClose: { id: string; canonicalName: string; currentPeriod: string }[];
+  toSkip: { id: string; canonicalName: string; currentPeriod: string }[];
+};
+
 export default function ConsortiumsPage() {
   const router = useRouter();
   const { guardedFetch } = useAuthGuard();
   const [accessChecked, setAccessChecked] = useState(false);
+  const [userName, setUserName] = useState("");
+  const [userRole, setUserRole] = useState<string>("");
+  const [consortiumsEnabled, setConsortiumsEnabled] = useState(false);
+
+  // Theme (session-only, no localStorage)
+  const [theme, setTheme] = useState<ThemeMode>("dark");
+  const handleToggleTheme = () => setTheme((t) => (t === "dark" ? "light" : "dark"));
+
+  // Nav sidebar
+  const [navCollapsed, setNavCollapsed] = useState(false);
+  const [navMobileOpen, setNavMobileOpen] = useState(false);
+
+  // Close all periods
+  const [showCloseAllModal, setShowCloseAllModal] = useState(false);
+  const [closeAllStep, setCloseAllStep] = useState<"preview" | "result">("preview");
+  const [closeAllPreview, setCloseAllPreview] = useState<CloseAllPreview | null>(null);
+  const [closeAllLoading, setCloseAllLoading] = useState(false);
+  const [closeAllResult, setCloseAllResult] = useState<{ closed: number; skipped: number; warnings: string[] } | null>(null);
+  const [closeAllError, setCloseAllError] = useState<string | null>(null);
+
+  // Scheduler control
+  const [schedulerEnabled, setSchedulerEnabled] = useState<boolean | null>(null);
+  const [busyAction, setBusyAction] = useState<string | null>(null);
+  const [toolbarInfo, setToolbarInfo] = useState<string | null>(null);
+  const [toolbarError, setToolbarError] = useState<string | null>(null);
 
   useEffect(() => {
     (async () => {
       try {
         const res = await guardedFetch("/api/auth/me", { method: "GET", cache: "no-store" });
-        const data = (await res.json()) as { ok: boolean; user?: { consortiumsEnabled?: boolean } };
+        const data = (await res.json()) as { ok: boolean; user?: { name?: string; role?: string; consortiumsEnabled?: boolean } };
         if (!data.ok || !data.user?.consortiumsEnabled) {
           router.replace("/admin");
           return;
         }
+        setUserName(data.user.name ?? data.user.role ?? "");
+        setUserRole(data.user.role ?? "");
+        setConsortiumsEnabled(data.user.consortiumsEnabled ?? false);
         setAccessChecked(true);
       } catch {
         router.replace("/admin");
       }
     })();
   }, [guardedFetch, router]);
+
+  // Fetch scheduler status for toolbar
+  useEffect(() => {
+    if (!accessChecked) return;
+    (async () => {
+      try {
+        const res = await guardedFetch("/api/admin/scheduler/status", { method: "GET", cache: "no-store" });
+        const data = await res.json();
+        if (data.ok && data.state) setSchedulerEnabled(data.state.enabled);
+      } catch { /* silent */ }
+    })();
+  }, [accessChecked, guardedFetch]);
+
+  const handleToggleScheduler = async () => {
+    if (schedulerEnabled === null) return;
+    setBusyAction("toggle"); setToolbarError(null); setToolbarInfo(null);
+    try {
+      const res = await guardedFetch("/api/admin/scheduler/toggle", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ enabled: !schedulerEnabled }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
+      setSchedulerEnabled(data.state.enabled);
+      setToolbarInfo(data.state.enabled ? "Scheduler encendido." : "Scheduler pausado.");
+    } catch (err) {
+      setToolbarError(err instanceof Error ? err.message : "Error");
+    } finally { setBusyAction(null); }
+  };
+
+  const handleRunNow = async () => {
+    setBusyAction("run"); setToolbarError(null); setToolbarInfo(null);
+    try {
+      const res = await guardedFetch("/api/admin/scheduler/run", {
+        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({}),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
+      setToolbarInfo("Ejecución manual completada.");
+    } catch (err) {
+      setToolbarError(err instanceof Error ? err.message : "Error");
+    } finally { setBusyAction(null); }
+  };
+
+  const handleSyncDirectory = async () => {
+    setBusyAction("sync"); setToolbarError(null); setToolbarInfo(null);
+    try {
+      const res = await guardedFetch("/api/client/sync-directory", {
+        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({}),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
+      const counts = `C: ${data.consortiumsCount ?? 0} | P: ${data.providersCount ?? 0} | R: ${data.rubrosCount ?? 0}`;
+      setToolbarInfo(`Directorio sincronizado. ${counts}`);
+      void fetchConsortiums();
+    } catch (err) {
+      setToolbarError(err instanceof Error ? err.message : "Error");
+    } finally { setBusyAction(null); }
+  };
+
+  const handleLogout = async () => {
+    try {
+      await fetch("/api/auth/logout", { method: "POST" });
+      router.push("/login");
+      router.refresh();
+    } catch { /* silent */ }
+  };
+
+  const handleCloseAllPreview = async () => {
+    setCloseAllLoading(true); setCloseAllError(null); setCloseAllResult(null); setCloseAllStep("preview");
+    try {
+      const res = await guardedFetch("/api/client/periods/close-all/preview", { cache: "no-store" });
+      const data = await res.json();
+      if (!res.ok || !data.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
+      setCloseAllPreview(data);
+      setShowCloseAllModal(true);
+    } catch (err) {
+      setCloseAllError(err instanceof Error ? err.message : "Error");
+      setShowCloseAllModal(true);
+    } finally { setCloseAllLoading(false); }
+  };
+
+  const handleCloseAllExecute = async () => {
+    setCloseAllLoading(true); setCloseAllError(null);
+    try {
+      const res = await guardedFetch("/api/client/periods/close-all", {
+        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({}),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
+      setCloseAllResult({ closed: data.closed, skipped: data.skipped, warnings: data.warnings ?? [] });
+      setCloseAllStep("result");
+      void fetchConsortiums();
+    } catch (err) {
+      setCloseAllError(err instanceof Error ? err.message : "Error");
+    } finally { setCloseAllLoading(false); }
+  };
 
   const [consortiums, setConsortiums] = useState<Consortium[]>([]);
   const [loadingList, setLoadingList] = useState(true);
@@ -452,8 +586,11 @@ export default function ConsortiumsPage() {
 
   if (!accessChecked) return null;
 
+  const isClient = userRole === "CLIENT";
+  const paused = schedulerEnabled === false;
+
   return (
-    <div className={styles.page}>
+    <div className={styles.page} data-theme={theme}>
       <div className={styles.gridBackdrop} />
 
       {/* Input oculto compartido para subir recibos */}
@@ -469,26 +606,97 @@ export default function ConsortiumsPage() {
         }}
       />
 
-      <header className={styles.header}>
-        <div>
-          <p className={styles.eyebrow}>Gestión de consorcios</p>
-          <h1>Edificios</h1>
-        </div>
-        <div className={styles.headerActions}>
-          <button type="button" className={styles.consortiumBtn} onClick={() => { setShowConsortiumModal(true); setConsortiumError(null); setConsortiumSuccess(null); }}>
-            + Nuevo consorcio
-          </button>
-          <button type="button" className={styles.providerBtn} onClick={() => { setShowProviderModal(true); setProviderError(null); setProviderSuccess(null); }}>
-            + Nuevo proveedor
-          </button>
-          <button type="button" className={styles.ghostBtn} onClick={() => router.push("/admin")}>
-            ← Volver al panel
-          </button>
-        </div>
-      </header>
+      {/* Mobile overlay */}
+      {navMobileOpen && (
+        <div className={styles.navSidebarOverlay} onClick={() => setNavMobileOpen(false)} />
+      )}
 
-      <div className={styles.layout}>
-        <aside className={styles.sidebar}>
+      {/* Global nav sidebar */}
+      <aside className={`${styles.navSidebar} ${navCollapsed ? styles.navSidebarCollapsed : ""} ${navMobileOpen ? styles.navSidebarOpen : ""}`}>
+        <div className={styles.navSidebarLogo}>
+          <div className={styles.navSidebarLogoIcon}>🏢</div>
+          {!navCollapsed && <span className={styles.navSidebarLogoText}>{userName || "Cliente"}</span>}
+        </div>
+        <div className={styles.navSidebarDivider} />
+        <nav className={styles.navSidebarNav}>
+          <button type="button" className={styles.navSidebarItem} onClick={() => { handleSyncDirectory(); setNavMobileOpen(false); }} disabled={busyAction !== null}>
+            <span className={styles.navSidebarItemIcon}>🔄</span>
+            {!navCollapsed && <span className={styles.navSidebarItemLabel}>{busyAction === "sync" ? "Sincronizando..." : "Sincronizar directorio"}</span>}
+          </button>
+          <button type="button" className={styles.navSidebarItem} disabled={!consortiumsEnabled} title={!consortiumsEnabled ? "Función Premium" : undefined}>
+            <span className={styles.navSidebarItemIcon}>🏢</span>
+            {!navCollapsed && (
+              <span className={styles.navSidebarItemLabel}>
+                Consorcios
+                {!consortiumsEnabled && <span className={styles.premiumBadge}>Premium</span>}
+              </span>
+            )}
+          </button>
+          {isClient && (
+            <button type="button" className={styles.navSidebarItem} onClick={() => { handleCloseAllPreview(); setNavMobileOpen(false); }} disabled={closeAllLoading || busyAction !== null}>
+              <span className={styles.navSidebarItemIcon}>📅</span>
+              {!navCollapsed && <span className={styles.navSidebarItemLabel}>{closeAllLoading ? "Cargando..." : "Cerrar Periodo General"}</span>}
+            </button>
+          )}
+          <button type="button" className={styles.navSidebarItem} onClick={() => { handleLogout(); setNavMobileOpen(false); }}>
+            <span className={styles.navSidebarItemIcon}>🚪</span>
+            {!navCollapsed && <span className={styles.navSidebarItemLabel}>Cerrar sesión</span>}
+          </button>
+        </nav>
+        <button type="button" className={styles.navSidebarCollapse} onClick={() => setNavCollapsed((c) => !c)}>
+          {navCollapsed ? "»" : "«"}
+        </button>
+      </aside>
+
+      {/* Toolbar */}
+      <div style={{ display: "flex", flexDirection: "column", flex: 1, overflow: "hidden" }}>
+        <div className={styles.toolbar}>
+          <div className={styles.toolbarLeft}>
+            <button type="button" className={styles.hamburger} onClick={() => setNavMobileOpen(true)}>☰</button>
+            {isClient && schedulerEnabled !== null && (
+              <button type="button" className={paused ? styles.toolbarBtnSuccess : styles.toolbarBtnWarn}
+                onClick={handleToggleScheduler} disabled={busyAction !== null}>
+                {paused ? "Encender scheduler" : "Pausar scheduler"}
+              </button>
+            )}
+            {isClient && (
+              <button type="button" className={styles.toolbarBtn} onClick={handleRunNow} disabled={busyAction !== null}>
+                Ejecutar ahora
+              </button>
+            )}
+            {toolbarInfo && <span style={{ fontSize: "11px", color: "#7dff9b" }}>{toolbarInfo}</span>}
+            {toolbarError && <span style={{ fontSize: "11px", color: "#ff9999" }}>{toolbarError}</span>}
+          </div>
+          <div className={styles.toolbarRight}>
+            <button type="button"
+              onClick={handleToggleTheme}
+              aria-label={theme === "dark" ? "Cambiar a modo claro" : "Cambiar a modo oscuro"}
+              className={`${styles.themeToggle} ${theme === "light" ? styles.themeToggleLight : ""}`}>
+              <span className={styles.themeToggleKnob}>{theme === "dark" ? "☀️" : "🌙"}</span>
+            </button>
+          </div>
+        </div>
+
+        <header className={styles.header}>
+          <div>
+            <p className={styles.eyebrow}>Gestión de consorcios</p>
+            <h1>Edificios</h1>
+          </div>
+          <div className={styles.headerActions}>
+            <button type="button" className={styles.consortiumBtn} onClick={() => { setShowConsortiumModal(true); setConsortiumError(null); setConsortiumSuccess(null); }}>
+              + Nuevo consorcio
+            </button>
+            <button type="button" className={styles.providerBtn} onClick={() => { setShowProviderModal(true); setProviderError(null); setProviderSuccess(null); }}>
+              + Nuevo proveedor
+            </button>
+            <button type="button" className={styles.ghostBtn} onClick={() => router.push("/admin")}>
+              ← Volver al panel
+            </button>
+          </div>
+        </header>
+
+        <div className={styles.layout}>
+          <aside className={styles.sidebar}>
           <div className={styles.sidebarHeader}>
             <span className={styles.sidebarTitle}>Consorcios</span>
             <span className={styles.sidebarCount}>{loadingList ? "…" : consortiums.length}</span>
@@ -651,6 +859,7 @@ export default function ConsortiumsPage() {
           )}
         </main>
       </div>
+      </div>{/* close flex wrapper */}
 
       {/* ── Consortium mismatch modal — z-index 200 ── */}
       {showMismatchModal && (
@@ -895,6 +1104,72 @@ export default function ConsortiumsPage() {
                 {savingConsortium ? "Creando..." : "Crear consorcio"}
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Close All Periods modal ── */}
+      {showCloseAllModal && (
+        <div className={styles.modalOverlay} onClick={() => !closeAllLoading && setShowCloseAllModal(false)}>
+          <div className={styles.modal} onClick={(e) => e.stopPropagation()}>
+            {closeAllStep === "preview" && (
+              <>
+                <h3 className={styles.modalTitle}>Cerrar Periodo General</h3>
+                {closeAllError && <p className={styles.errorMsg}>{closeAllError}</p>}
+                {closeAllPreview && !closeAllPreview.majorityMonth && (
+                  <p className={styles.modalBody}>No hay períodos activos para cerrar.</p>
+                )}
+                {closeAllPreview && closeAllPreview.majorityMonth && (
+                  <>
+                    <p className={styles.modalBody}>
+                      Se cerrarán <strong>{closeAllPreview.toClose.length}</strong> consorcio(s).
+                      <br />Período: <strong>{closeAllPreview.majorityMonth}</strong> → <strong>{closeAllPreview.nextMonth}</strong>
+                    </p>
+                    {closeAllPreview.toSkip.length > 0 && (
+                      <>
+                        <p style={{ fontSize: "13px", color: "#ffb872", marginBottom: "6px" }}>
+                          Se saltearán {closeAllPreview.toSkip.length} consorcio(s):
+                        </p>
+                        <ul className={styles.closeAllList}>
+                          {closeAllPreview.toSkip.map((c) => (
+                            <li key={c.id}>
+                              <strong>{c.canonicalName}</strong> — {c.currentPeriod}
+                              <span className={styles.closeAllSkipReason}>Ya está en período más avanzado</span>
+                            </li>
+                          ))}
+                        </ul>
+                      </>
+                    )}
+                  </>
+                )}
+                <div className={styles.modalActions}>
+                  <button type="button" className={styles.ghostBtn} onClick={() => setShowCloseAllModal(false)} disabled={closeAllLoading}>Cancelar</button>
+                  {closeAllPreview?.majorityMonth && (
+                    <button type="button" className={styles.closePeriodConfirmBtn} onClick={handleCloseAllExecute} disabled={closeAllLoading}>
+                      {closeAllLoading ? "Cerrando..." : "Confirmar"}
+                    </button>
+                  )}
+                </div>
+              </>
+            )}
+            {closeAllStep === "result" && closeAllResult && (
+              <>
+                <h3 className={styles.modalTitle}>Resultado</h3>
+                <p className={styles.modalBody}>
+                  Cerrados: <strong>{closeAllResult.closed}</strong> | Salteados: <strong>{closeAllResult.skipped}</strong>
+                </p>
+                {closeAllResult.warnings.length > 0 && (
+                  <ul className={styles.closeAllList}>
+                    {closeAllResult.warnings.map((w, i) => (
+                      <li key={i} style={{ color: "#ffb872" }}>{w}</li>
+                    ))}
+                  </ul>
+                )}
+                <div className={styles.modalActions}>
+                  <button type="button" className={styles.ghostBtn} onClick={() => setShowCloseAllModal(false)}>Cerrar</button>
+                </div>
+              </>
+            )}
           </div>
         </div>
       )}

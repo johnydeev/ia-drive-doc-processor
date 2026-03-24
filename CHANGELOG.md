@@ -1,5 +1,16 @@
 # Changelog
 
+## 2026-03-24 (sesión 7)
+
+Highlights
+- **Sidebar colapsable + menú hamburguesa**: panel cliente con sidebar de navegación global (Sincronizar directorio, Consorcios, Cerrar Periodo General, Cerrar sesión). Colapsable en desktop (solo iconos), menú hamburguesa en tablet/mobile.
+- **Toggle dark/light con iconos**: reemplazado el botón de texto por switch tipo interruptor con iconos sol/luna. Estado solo de sesión (no persiste).
+- **Toolbar superior**: Pausar scheduler / Ejecutar ahora a la izquierda, toggle de tema a la derecha.
+- **Cerrar Periodo General**: botón solo visible para rol CLIENT. Modal de 2 pasos: preview con lista de consorcios a cerrar/saltear, luego resultado.
+- **Endpoints nuevos**: `GET /api/client/periods/close-all/preview` y `POST /api/client/periods/close-all` con lógica de mes mayoritario.
+- **Período por defecto mejorado**: al crear consorcio (manual, import Excel, sync-directory) usa el mes mayoritario entre los períodos activos existentes del cliente.
+- **Sync-directory crea períodos**: los consorcios nuevos creados via archivo ALTA ahora reciben período activo automáticamente.
+
 ## 2026-03-23 (sesión 6)
 
 Highlights

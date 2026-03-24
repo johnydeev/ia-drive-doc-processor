@@ -1,6 +1,6 @@
 # CLAUDE.md — drive-doc-processor
 
-Contexto completo del proyecto para Claude Code. Actualizado al 21/03/2026.
+Contexto completo del proyecto para Claude Code. Actualizado al 24/03/2026.
 
 ---
 
@@ -120,6 +120,8 @@ src/
 │   │       ├── providers/     # CRUD proveedores
 │   │       ├── rubros/        # CRUD rubros (nivel cliente)
 │   │       ├── coeficientes/  # CRUD coeficientes (nivel cliente)
+│   │       ├── periods/
+│   │       │   └── close-all/ # preview (GET) + execute (POST) cierre general
 │   │       ├── sync-directory/ # POST: sincroniza archivo ALTA (Sheets → DB)
 │   │       └── import/        # importación Excel (+ template)
 │   └── admin/
@@ -457,6 +459,25 @@ G = dueDate
 ```
 
 Customizable por cliente en `extractionConfigJson.columnMapping`.
+
+---
+
+## UI del panel cliente (`/admin/consortiums`)
+
+### Estructura visual
+- **Sidebar** colapsable en desktop (iconos / iconos + labels), menú hamburguesa en tablet/mobile (≤1024px).
+  - Logo placeholder, nombre del cliente, separador.
+  - Botones: Sincronizar directorio, Consorcios (con badge Premium si `consortiumsEnabled` es false), Cerrar Periodo General (solo rol CLIENT), Cerrar sesión.
+- **Toolbar superior**: Pausar/Ejecutar scheduler a la izquierda, toggle dark/light (switch con iconos sol/luna) a la derecha.
+- **Toggle de tema**: estado solo de sesión (no persiste en localStorage). Clase `dark` en `<html>`.
+
+### Cerrar Periodo General (modal de 2 pasos)
+1. **Preview** (`GET /api/client/periods/close-all/preview`): calcula mes mayoritario entre períodos ACTIVE del cliente. Retorna `{ majorityMonth, nextMonth, toClose, toSkip }`.
+2. **Execute** (`POST /api/client/periods/close-all`): recalcula mes mayoritario server-side, cierra períodos del mes mayoritario (ACTIVE→CLOSED) y crea el siguiente como ACTIVE. Retorna `{ closed, created, skipped, warnings }`.
+3. **Modal**: paso 1 muestra lista de consorcios a cerrar vs saltear (con razón). Paso 2 muestra resultado con contadores.
+
+### Período por defecto (mes mayoritario)
+`ConsortiumRepository.resolveMajorityMonth(clientId)`: retorna el mes más frecuente entre los períodos ACTIVE existentes del cliente, o el mes actual si no hay ninguno. Usado en: `createManual()`, import Excel, sync-directory.
 
 ---
 
