@@ -1,5 +1,6 @@
 import { Prisma, SchedulerState } from "@prisma/client";
 import {
+  type TokenUsageBreakdown,
   type TokenUsageSummary,
 } from "@/types/aiUsage.types";
 import { createEmptyTokenUsageSummary } from "@/lib/createEmptyTokenUsageSummary";
@@ -198,8 +199,8 @@ export class SchedulerControlService {
   }
 
   private async loadTokenBreakdown(clientIds: string[]): Promise<{
-    byProvider: Record<string, number>;
-    byModel: Record<string, number>;
+    byProvider: Record<string, TokenUsageBreakdown>;
+    byModel: Record<string, TokenUsageBreakdown>;
   }> {
     if (clientIds.length === 0) {
       return { byProvider: {}, byModel: {} };
@@ -211,25 +212,33 @@ export class SchedulerControlService {
       prisma.tokenUsage.groupBy({
         by: ["provider"],
         where: { clientId: { in: clientIds } },
-        _sum: { totalTokens: true },
+        _sum: { inputTokens: true, outputTokens: true, totalTokens: true },
       }),
       prisma.tokenUsage.groupBy({
         by: ["model"],
         where: { clientId: { in: clientIds }, model: { not: null } },
-        _sum: { totalTokens: true },
+        _sum: { inputTokens: true, outputTokens: true, totalTokens: true },
       }),
     ]);
 
-    const byProvider: Record<string, number> = {};
+    const byProvider: Record<string, TokenUsageBreakdown> = {};
     for (const row of providerRows) {
-      byProvider[row.provider] = Number(row._sum.totalTokens ?? 0);
+      byProvider[row.provider] = {
+        inputTokens: Number(row._sum.inputTokens ?? 0),
+        outputTokens: Number(row._sum.outputTokens ?? 0),
+        totalTokens: Number(row._sum.totalTokens ?? 0),
+      };
     }
 
-    const byModel: Record<string, number> = {};
+    const byModel: Record<string, TokenUsageBreakdown> = {};
     for (const row of modelRows) {
       const model = row.model;
       if (!model) continue;
-      byModel[model] = Number(row._sum.totalTokens ?? 0);
+      byModel[model] = {
+        inputTokens: Number(row._sum.inputTokens ?? 0),
+        outputTokens: Number(row._sum.outputTokens ?? 0),
+        totalTokens: Number(row._sum.totalTokens ?? 0),
+      };
     }
 
     return { byProvider, byModel };
@@ -238,7 +247,7 @@ export class SchedulerControlService {
   private toRuntimeState(
     states: SchedulerState[],
     intervalMinutes: number,
-    breakdown: { byProvider: Record<string, number>; byModel: Record<string, number> }
+    breakdown: { byProvider: Record<string, TokenUsageBreakdown>; byModel: Record<string, TokenUsageBreakdown> }
   ): SchedulerRuntimeState {
     if (states.length === 0) {
       return createDefaultState(intervalMinutes);
@@ -303,12 +312,12 @@ export class SchedulerControlService {
   ): Prisma.SchedulerStateUpdateManyMutationInput {
     const patch: Prisma.SchedulerStateUpdateManyMutationInput = {};
 
-    if ((summary.tokenUsage.byProvider.openai ?? 0) > 0) {
+    if ((summary.tokenUsage.byProvider.openai?.totalTokens ?? 0) > 0) {
       patch.quotaOpenAiStatus = "ok";
       patch.quotaOpenAiNote = "Consumo detectado en la ultima ejecucion.";
     }
 
-    if ((summary.tokenUsage.byProvider.gemini ?? 0) > 0) {
+    if ((summary.tokenUsage.byProvider.gemini?.totalTokens ?? 0) > 0) {
       patch.quotaGeminiStatus = "ok";
       patch.quotaGeminiNote = "Consumo detectado en la ultima ejecucion.";
     }
@@ -483,13 +492,22 @@ function aggregateLastSummary(states: SchedulerState[]): ProcessJobSummary | nul
     aggregate.tokenUsage.outputTokens += summary.tokenUsage.outputTokens;
     aggregate.tokenUsage.totalTokens += summary.tokenUsage.totalTokens;
 
-    for (const [provider, total] of Object.entries(summary.tokenUsage.byProvider)) {
-      aggregate.tokenUsage.byProvider[provider] =
-        (aggregate.tokenUsage.byProvider[provider] ?? 0) + total;
+    for (const [provider, bd] of Object.entries(summary.tokenUsage.byProvider)) {
+      const existing = aggregate.tokenUsage.byProvider[provider] ?? { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+      aggregate.tokenUsage.byProvider[provider] = {
+        inputTokens: existing.inputTokens + bd.inputTokens,
+        outputTokens: existing.outputTokens + bd.outputTokens,
+        totalTokens: existing.totalTokens + bd.totalTokens,
+      };
     }
 
-    for (const [model, total] of Object.entries(summary.tokenUsage.byModel)) {
-      aggregate.tokenUsage.byModel[model] = (aggregate.tokenUsage.byModel[model] ?? 0) + total;
+    for (const [model, bd] of Object.entries(summary.tokenUsage.byModel)) {
+      const existing = aggregate.tokenUsage.byModel[model] ?? { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+      aggregate.tokenUsage.byModel[model] = {
+        inputTokens: existing.inputTokens + bd.inputTokens,
+        outputTokens: existing.outputTokens + bd.outputTokens,
+        totalTokens: existing.totalTokens + bd.totalTokens,
+      };
     }
 
     aggregate.clientSummaries?.push(summary);
@@ -522,8 +540,8 @@ function toSummary(value: Prisma.JsonValue | null): ProcessJobSummary | null {
       inputTokens: asNumber(tokenUsageSource.inputTokens),
       outputTokens: asNumber(tokenUsageSource.outputTokens),
       totalTokens: asNumber(tokenUsageSource.totalTokens),
-      byProvider: asNumberRecord(tokenUsageSource.byProvider),
-      byModel: asNumberRecord(tokenUsageSource.byModel),
+      byProvider: asBreakdownRecord(tokenUsageSource.byProvider),
+      byModel: asBreakdownRecord(tokenUsageSource.byModel),
     },
   };
 }
@@ -553,14 +571,24 @@ function asErrorArray(value: unknown): ProcessJobErrorEntry[] {
     .filter((item): item is ProcessJobErrorEntry => Boolean(item));
 }
 
-function asNumberRecord(value: unknown): Record<string, number> {
+function asBreakdownRecord(value: unknown): Record<string, TokenUsageBreakdown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) return {};
 
   const source = value as Record<string, unknown>;
-  const result: Record<string, number> = {};
+  const result: Record<string, TokenUsageBreakdown> = {};
 
   for (const [key, entry] of Object.entries(source)) {
-    result[key] = asNumber(entry);
+    if (typeof entry === "number") {
+      // Backwards compat: old format stored just a number (totalTokens)
+      result[key] = { inputTokens: 0, outputTokens: 0, totalTokens: entry };
+    } else if (entry && typeof entry === "object" && !Array.isArray(entry)) {
+      const obj = entry as Record<string, unknown>;
+      result[key] = {
+        inputTokens: asNumber(obj.inputTokens),
+        outputTokens: asNumber(obj.outputTokens),
+        totalTokens: asNumber(obj.totalTokens),
+      };
+    }
   }
 
   return result;

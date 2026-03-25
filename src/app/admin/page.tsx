@@ -553,8 +553,8 @@ export default function AdminPage() {
                 <li>Input: <strong>{formatNumber(state?.totals.tokenUsage.inputTokens)}</strong></li>
                 <li>Output: <strong>{formatNumber(state?.totals.tokenUsage.outputTokens)}</strong></li>
                 <li>Total: <strong>{formatNumber(state?.totals.tokenUsage.totalTokens)}</strong></li>
-                <li>Gemini: <strong>{formatNumber(state?.totals.tokenUsage.byProvider.gemini)}</strong></li>
-                <li>OpenAI: <strong>{formatNumber(state?.totals.tokenUsage.byProvider.openai)}</strong></li>
+                <li>Gemini: <strong>In {formatNumber(state?.totals.tokenUsage.byProvider.gemini?.inputTokens)} | Out {formatNumber(state?.totals.tokenUsage.byProvider.gemini?.outputTokens)} | Total {formatNumber(state?.totals.tokenUsage.byProvider.gemini?.totalTokens)}</strong></li>
+                <li>OpenAI: <strong>In {formatNumber(state?.totals.tokenUsage.byProvider.openai?.inputTokens)} | Out {formatNumber(state?.totals.tokenUsage.byProvider.openai?.outputTokens)} | Total {formatNumber(state?.totals.tokenUsage.byProvider.openai?.totalTokens)}</strong></li>
               </ul>
             </article>
           )}

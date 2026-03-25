@@ -104,6 +104,13 @@ El sistema core está funcionando en producción. Pipeline de PDFs, extracción 
   - Tolerancia a fallos: Drive/Sheets fallan → warning, DB se borra igual
   - UI: botón "Purgar" en tabla de métricas admin, modal de 3 pasos (preview → confirm → result)
   - Método `clearAllDataRows(sheetName)` en GoogleSheetsService
+- **Tracking de tokens con desglose input/output por provider y modelo** (24/03/2026)
+  - `TokenUsageBreakdown` nuevo tipo: `{ inputTokens, outputTokens, totalTokens }`
+  - `TokenUsageSummary.byProvider` y `byModel` cambiados de `Record<string, number>` a `Record<string, TokenUsageBreakdown>`
+  - `accumulateTokenUsage()` ahora acumula input/output/total dentro de cada provider y modelo
+  - `processingPersistence.service.ts`: filas por provider/model ahora graban input/output reales (antes eran 0)
+  - `schedulerControl.service.ts`: `loadTokenBreakdown()` suma input/output/total desde DB; `toSummary()` compatible con formato viejo (number) y nuevo (object)
+  - UI: sección "Tokens usados" muestra In/Out/Total por Gemini y OpenAI
 
 ---
 

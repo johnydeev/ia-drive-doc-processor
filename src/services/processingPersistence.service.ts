@@ -99,14 +99,14 @@ export class ProcessingPersistenceService {
       });
     }
 
-    for (const [provider, totalTokens] of Object.entries(input.summary.tokenUsage.byProvider)) {
+    for (const [provider, breakdown] of Object.entries(input.summary.tokenUsage.byProvider)) {
       tokenRows.push({
         clientId: input.clientId,
         provider,
         model: null,
-        inputTokens: 0,
-        outputTokens: 0,
-        totalTokens,
+        inputTokens: breakdown.inputTokens,
+        outputTokens: breakdown.outputTokens,
+        totalTokens: breakdown.totalTokens,
         runAt: input.endedAt,
         metaJson: {
           trigger: input.trigger,
@@ -114,14 +114,14 @@ export class ProcessingPersistenceService {
       });
     }
 
-    for (const [model, totalTokens] of Object.entries(input.summary.tokenUsage.byModel)) {
+    for (const [model, breakdown] of Object.entries(input.summary.tokenUsage.byModel)) {
       tokenRows.push({
         clientId: input.clientId,
         provider: inferProviderFromModel(model),
         model,
-        inputTokens: 0,
-        outputTokens: 0,
-        totalTokens,
+        inputTokens: breakdown.inputTokens,
+        outputTokens: breakdown.outputTokens,
+        totalTokens: breakdown.totalTokens,
         runAt: input.endedAt,
         metaJson: {
           trigger: input.trigger,

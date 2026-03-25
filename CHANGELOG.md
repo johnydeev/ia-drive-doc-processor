@@ -7,6 +7,7 @@ Highlights
 - **Endpoint GET /api/admin/clients/[id]/purge**: preview que retorna cantidad de boletas del cliente.
 - **Endpoint DELETE /api/admin/clients/[id]/purge**: ejecuta purga completa — mueve archivos de Drive a pendientes, limpia Sheets (fila 2+), borra Invoices y ProcessingJobs de DB.
 - **Tolerancia a fallos**: si Drive o Sheets fallan, loguea warning y continúa. El borrado de DB se ejecuta siempre.
+- **Tracking de tokens con desglose input/output por provider y modelo**: `TokenUsageSummary.byProvider` y `byModel` ahora son `Record<string, TokenUsageBreakdown>` con `inputTokens`, `outputTokens`, `totalTokens`. Persistencia, carga y UI actualizados. Compatible hacia atrás con registros viejos (ceros se suman como 0).
 
 ## 2026-03-24 (sesión 7)
 

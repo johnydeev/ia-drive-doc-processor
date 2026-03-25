@@ -177,11 +177,21 @@ function addSummary(target: ProcessJobSummary, incoming: ProcessJobSummary): voi
   target.tokenUsage.outputTokens += incoming.tokenUsage.outputTokens;
   target.tokenUsage.totalTokens += incoming.tokenUsage.totalTokens;
 
-  for (const [provider, total] of Object.entries(incoming.tokenUsage.byProvider)) {
-    target.tokenUsage.byProvider[provider] = (target.tokenUsage.byProvider[provider] ?? 0) + total;
+  for (const [provider, bd] of Object.entries(incoming.tokenUsage.byProvider)) {
+    const existing = target.tokenUsage.byProvider[provider] ?? { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+    target.tokenUsage.byProvider[provider] = {
+      inputTokens: existing.inputTokens + bd.inputTokens,
+      outputTokens: existing.outputTokens + bd.outputTokens,
+      totalTokens: existing.totalTokens + bd.totalTokens,
+    };
   }
 
-  for (const [model, total] of Object.entries(incoming.tokenUsage.byModel)) {
-    target.tokenUsage.byModel[model] = (target.tokenUsage.byModel[model] ?? 0) + total;
+  for (const [model, bd] of Object.entries(incoming.tokenUsage.byModel)) {
+    const existing = target.tokenUsage.byModel[model] ?? { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+    target.tokenUsage.byModel[model] = {
+      inputTokens: existing.inputTokens + bd.inputTokens,
+      outputTokens: existing.outputTokens + bd.outputTokens,
+      totalTokens: existing.totalTokens + bd.totalTokens,
+    };
   }
 }
