@@ -121,7 +121,13 @@ function normCuit(v: string | null | undefined): string {
 }
 
 function normName(v: string | null | undefined): string {
-  return (v ?? "").toLowerCase().replace(/[.,\-_]/g, " ").replace(/\s+/g, " ").trim();
+  const LEGAL_SUFFIXES = /\b(s\.?r\.?l\.?|s\.?a\.?|s\.?a\.?s\.?|s\.?c\.?s?\.?|s\.?h\.?|ltda?\.?|e\.?i\.?r\.?l\.?|s\.?a\.?u\.?)\b/gi;
+  return (v ?? "")
+    .toLowerCase()
+    .replace(LEGAL_SUFFIXES, " ")
+    .replace(/[.,\-_]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 async function createProcessingContext(
@@ -337,7 +343,7 @@ async function resolveAssignment(
   }
 
   if (!matched) {
-    pipelineLog.providerNotFound(clientId, rawCuit, rawName);
+    pipelineLog.providerNotFound(clientId, rawCuit, rawName, normOcrCuit, normOcrName);
     return {
       ...base,
       unassigned: true,

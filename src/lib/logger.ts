@@ -218,8 +218,8 @@ export const pipelineLog = {
     log("success", "job", `  Proveedor: match ${method} → "${canonical}"`, shortId(clientId));
   },
 
-  providerNotFound(clientId: string, rawCuit: string | null, rawName: string | null) {
-    log("error", "job", `  Proveedor NO encontrado — CUIT="${rawCuit ?? "null"}" nombre="${rawName ?? "null"}"`, shortId(clientId));
+  providerNotFound(clientId: string, rawCuit: string | null, rawName: string | null, normCuit: string, normName: string) {
+    log("error", "job", `  Proveedor NO encontrado — CUIT="${rawCuit ?? "null"}" normCuit="${normCuit}" nombre="${rawName ?? "null"}" normNombre="${normName}"`, shortId(clientId));
   },
 
   providerCuitMatchesConsortium(clientId: string, cuit: string) {

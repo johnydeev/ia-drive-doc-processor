@@ -115,10 +115,25 @@ export async function DELETE(
     sheetsCleared = false;
   }
 
-  // 5. Borrar de DB en transacción
+  // 5. Borrar de DB y resetear métricas en transacción
   await prisma.$transaction(async (tx) => {
     await tx.processingJob.deleteMany({ where: { clientId: id } });
     await tx.invoice.deleteMany({ where: { clientId: id } });
+    await tx.tokenUsage.deleteMany({ where: { clientId: id } });
+    await tx.schedulerState.updateMany({
+      where: { clientId: id },
+      data: {
+        totalInputTokens: 0,
+        totalOutputTokens: 0,
+        totalTokens: 0,
+        totalRuns: 0,
+        totalFound: 0,
+        totalProcessed: 0,
+        totalSkipped: 0,
+        totalFailed: 0,
+        totalDuplicates: 0,
+      },
+    });
   });
 
   return NextResponse.json({

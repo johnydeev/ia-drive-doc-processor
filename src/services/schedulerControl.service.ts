@@ -211,7 +211,7 @@ export class SchedulerControlService {
     const [providerRows, modelRows] = await Promise.all([
       prisma.tokenUsage.groupBy({
         by: ["provider"],
-        where: { clientId: { in: clientIds } },
+        where: { clientId: { in: clientIds }, model: null, provider: { not: "aggregate" } },
         _sum: { inputTokens: true, outputTokens: true, totalTokens: true },
       }),
       prisma.tokenUsage.groupBy({
