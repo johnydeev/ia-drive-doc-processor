@@ -1,6 +1,6 @@
 # Progreso del proyecto — drive-doc-processor
 
-Actualizado al 24/03/2026 (sesión 8).
+Actualizado al 26/03/2026 (sesión 9).
 
 ---
 
@@ -111,20 +111,23 @@ El sistema core está funcionando en producción. Pipeline de PDFs, extracción 
   - `processingPersistence.service.ts`: filas por provider/model ahora graban input/output reales (antes eran 0)
   - `schedulerControl.service.ts`: `loadTokenBreakdown()` suma input/output/total desde DB; `toSummary()` compatible con formato viejo (number) y nuevo (object)
   - UI: sección "Tokens usados" muestra In/Out/Total por Gemini y OpenAI
+- **Validación en producción** (26/03/2026)
+  - Deploy Docker completo funcionando: Docker Desktop + Cloudflare Tunnel + dominio propio
+  - Los 3 servicios (web, scheduler, worker) operativos en producción
+  - Prompts LSP validados con PDFs reales: Edesur y AySA extracción correcta
+- **Aclaración flujo matchNames** (26/03/2026)
+  - matchNames de consorcios y proveedores se cargan/editan desde hojas `_Consorcios` y `_Proveedores` del archivo ALTA en Google Sheets
+  - Se sincronizan a la DB desde el panel con botón "Sincronizar directorio"
+  - No requiere UI adicional de edición de matchNames
+- **Procedimiento de deploy documentado** (26/03/2026)
+  - Deploy estándar: `docker compose up --build -d`
+  - Deploy con migraciones: `down → prisma migrate deploy → prisma generate → up --build -d`
 
 ---
 
 ## En progreso 🔄
 
-- **Preparación para producción Docker** — auditoría completa en curso (23/03/2026)
-  - [x] Sección 1: Auditoría de dependencias y build — OK
-  - [x] Sección 2: Variables de entorno — OK, `.env.example` actualizado
-  - [x] Sección 3: Migraciones pendientes — OK, todas aplicadas
-  - [x] Sección 4: Docker — OK, docker-compose optimizado (imagen compartida)
-  - [x] Sección 5: Smoke test del pipeline (solo lectura) — OK, código coincide con docs
 - **Configurar self-hosted GitHub Actions runner** en la máquina local para deploy automático
-- **Validación en producción de cambios del 21/03**
-  - Prompts LSP refactorizados: probar con PDFs reales de Edesur, AySA, Metrogas
 
 ---
 
@@ -132,9 +135,7 @@ El sistema core está funcionando en producción. Pipeline de PDFs, extracción 
 
 ### Alta prioridad
 - [ ] Configurar self-hosted runner de GitHub Actions en la máquina local
-- [ ] Probar docker-compose up completo con .env y CLOUDFLARE_TUNNEL_TOKEN
-- [ ] Probar extracción LSP refactorizada con PDFs reales en producción
-- [ ] UI de edición de aliases de consorcio desde el panel (hoy solo via SQL en Supabase)
+- [ ] Validar prompts LSP restantes con PDFs reales (Metrogas, Naturgy, Camuzzi, Litoral Gas, Personal)
 
 ### Media prioridad
 - [ ] UI de gestión de carpetas Drive por cliente desde el panel admin
@@ -148,10 +149,10 @@ El sistema core está funcionando en producción. Pipeline de PDFs, extracción 
 
 ## Próximos pasos sugeridos
 
-1. Probar `docker compose up` completo con .env y CLOUDFLARE_TUNNEL_TOKEN
-2. Configurar self-hosted runner de GitHub Actions
-3. Probar extracción LSP con PDFs reales
-4. Construir UI de edición de aliases de consorcio
+1. Configurar self-hosted runner de GitHub Actions
+2. Validar prompts LSP restantes (Metrogas, Naturgy, Camuzzi, Litoral Gas, Personal)
+3. UI de gestión de carpetas Drive por cliente
+4. Agregar URL de recibo a columna de Google Sheets
 
 ---
 

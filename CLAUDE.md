@@ -1,6 +1,6 @@
 # CLAUDE.md — drive-doc-processor
 
-Contexto completo del proyecto para Claude Code. Actualizado al 24/03/2026.
+Contexto completo del proyecto para Claude Code. Actualizado al 26/03/2026.
 
 ---
 
@@ -517,7 +517,6 @@ Customizable por cliente en `extractionConfigJson.columnMapping`.
 ## Pendientes conocidos
 
 ### Features pendientes
-- [ ] UI de edición de matchNames de consorcio (hoy solo via SQL en Supabase o archivo ALTA)
 - [ ] UI de gestión de carpetas Drive por cliente desde el panel
 - [ ] Resincronización automática con Sheets cuando Google falla
 - [ ] Agregar URL de recibo a columna de Google Sheets

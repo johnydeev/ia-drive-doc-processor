@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-03-26 (sesión 9)
+
+Highlights
+- **Validación en producción**: Deploy Docker completo funcionando (Docker Desktop + Cloudflare Tunnel + dominio propio). Los 3 servicios (web, scheduler, worker) operativos.
+- **Prompts LSP validados**: Edesur y AySA probados con PDFs reales en producción. Extracción correcta.
+- **Aclaración de flujo matchNames**: los matchNames de consorcios y proveedores se cargan y editan desde las hojas `_Consorcios` y `_Proveedores` del archivo ALTA en Google Sheets, y se sincronizan a la DB desde el panel. No requiere UI adicional.
+- **Procedimiento de deploy documentado**: deploy estándar con `docker compose up --build -d` y procedimiento completo para migraciones de DB (down → migrate deploy → generate → up --build -d).
+- **Documentación actualizada**: progreso.md, CHANGELOG.md y CLAUDE.md al día con el estado real del proyecto.
+
 ## 2026-03-24 (sesión 8)
 
 Highlights
