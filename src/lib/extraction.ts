@@ -46,8 +46,9 @@ export const EXTRACTED_DOCUMENT_SCHEMA = z
     alias: z.string().nullable().default(null),
     clientNumber: z.string().nullable().default(null),
     paymentMethod: z.enum(["DEBITO_AUTOMATICO", "TRANSFERENCIA", "EFECTIVO"]).nullable().default(null),
+    allTaxIds: z.array(z.string()).nullable().default(null),
   })
-  .strict();
+  .passthrough();
 
 const OUTPUT_JSON_TEMPLATE = {
   boletaNumber: "string | null",
@@ -61,6 +62,7 @@ const OUTPUT_JSON_TEMPLATE = {
   alias: "string | null",
   clientNumber: "string | null",
   paymentMethod: "DEBITO_AUTOMATICO | TRANSFERENCIA | EFECTIVO | null",
+  allTaxIds: "string[] (todos los CUITs encontrados) | []",
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -254,6 +256,14 @@ const PROVIDER_NAME_RULES = [
   "  Ejemplo: 'ASCENSORES POTENZA S.R.L.' → 'ASCENSORES POTENZA S.R.L.' (NO 'ASCENSORES POTENZA').",
 ].join("\n");
 
+const ALL_TAX_IDS_RULES = [
+  "- allTaxIds: lista con TODOS los CUIT que aparezcan en el documento, sin clasificar ni interpretar su rol.",
+  "  Extraer el número limpio, solo dígitos, sin guiones ni espacios.",
+  "  Reconocer todos los formatos posibles: '30-52312872-4', '27339068386', 'CUIT: 30523128724'.",
+  "  Incluir TODOS los que aparezcan, aunque ya estén en providerTaxId.",
+  "  Si no se encuentra ninguno, retornar array vacío [].",
+].join("\n");
+
 // ═══════════════════════════════════════════════════════════════════════════
 // Invoice prompt (facturas normales A, B, C, etc.)
 // ═══════════════════════════════════════════════════════════════════════════
@@ -304,6 +314,8 @@ function buildInvoicePrompt(relevantText: string): string {
 
     "- clientNumber: null (no aplica a facturas normales).",
     "- paymentMethod: null (no aplica a facturas normales).",
+
+    ALL_TAX_IDS_RULES,
 
     "- Usa null si un dato falta o es incierto. No inventes datos.",
 
@@ -374,6 +386,8 @@ function buildEdesurPrompt(relevantText: string): string {
     "  • 'Pago por transferencia CVU' → TRANSFERENCIA",
     "  • Sin mención → null",
 
+    ALL_TAX_IDS_RULES,
+
     "- Usa null si un dato no se puede extraer con certeza.",
 
     "Texto de la factura Edesur:",
@@ -420,6 +434,8 @@ function buildEdenorPrompt(relevantText: string): string {
     "- paymentMethod:",
     "  • 'Abona por Pago Directo' o 'DEBITO POR PAGO DIRECTO' → DEBITO_AUTOMATICO",
     "  • Sin mención → null",
+
+    ALL_TAX_IDS_RULES,
 
     "Texto de la factura Edenor:",
     relevantText,
@@ -491,6 +507,8 @@ function buildAysaPrompt(relevantText: string): string {
     "  • 'A debitar el DD/MM/YYYY' o 'Esta liquidación será debitada' → DEBITO_AUTOMATICO",
     "  • Sin mención → null",
 
+    ALL_TAX_IDS_RULES,
+
     "Texto de la factura AySA:",
     relevantText,
   ].join("\n\n");
@@ -558,6 +576,8 @@ function buildGasPrompt(relevantText: string, provider: LSPProvider): string {
 
     PAYMENT_METHOD_RULES,
 
+    ALL_TAX_IDS_RULES,
+
     `Texto de la factura ${providerName}:`,
     relevantText,
   ].join("\n\n");
@@ -606,6 +626,8 @@ function buildGenericUtilityBillPrompt(relevantText: string): string {
 
     PAYMENT_METHOD_RULES,
 
+    ALL_TAX_IDS_RULES,
+
     "Texto de la liquidación:",
     relevantText,
   ].join("\n\n");
@@ -649,6 +671,8 @@ function buildPersonalPrompt(relevantText: string): string {
     "- paymentMethod:",
     "  • 'DEBITO AUTOMATICO' o 'FACTURA CON DÉBITO AUTOMÁTICO' → DEBITO_AUTOMATICO",
     "  • Sin mención → null",
+
+    ALL_TAX_IDS_RULES,
 
     "Texto de la factura Personal:",
     relevantText,

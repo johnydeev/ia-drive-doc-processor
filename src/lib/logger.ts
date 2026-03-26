@@ -189,11 +189,12 @@ export const pipelineLog = {
     log("warn", "job", "  IA: Ambos proveedores fallaron → OCR_ONLY", shortId(clientId));
   },
 
-  extractionResult(clientId: string, data: { consortium?: string | null; provider?: string | null; providerTaxId?: string | null; amount?: number | null; dueDate?: string | null }) {
+  extractionResult(clientId: string, data: { consortium?: string | null; provider?: string | null; providerTaxId?: string | null; amount?: number | null; dueDate?: string | null; allTaxIds?: string[] | null }) {
     log("info", "job", `  Extraído:`, shortId(clientId));
     log("info", "job", `    Consorcio:  ${data.consortium ?? "null"}`, shortId(clientId));
     log("info", "job", `    Proveedor:  ${data.provider ?? "null"}`, shortId(clientId));
     log("info", "job", `    CUIT:       ${data.providerTaxId ?? "null"}`, shortId(clientId));
+    log("info", "job", `    CUITs:      ${(data.allTaxIds ?? []).length > 0 ? (data.allTaxIds ?? []).join(", ") : "ninguno"}`, shortId(clientId));
     log("info", "job", `    Monto:      ${data.amount != null ? `$${data.amount}` : "null"}`, shortId(clientId));
     log("info", "job", `    Vto:        ${data.dueDate ?? "null"}`, shortId(clientId));
   },
@@ -228,6 +229,14 @@ export const pipelineLog = {
 
   providerCuitMatchesConsortium(clientId: string, cuit: string) {
     log("warn", "job", `  CUIT del OCR (${cuit}) coincide con consorcio — fallback a nombre`, shortId(clientId));
+  },
+
+  consortiumMatchedByCuit(clientId: string, consortiumName: string, cuit: string) {
+    log("success", "job", `  Consorcio: match CUIT (${cuit}) → "${consortiumName}"`, shortId(clientId));
+  },
+
+  providerMatchedByCuit(clientId: string, providerName: string, cuit: string) {
+    log("success", "job", `  Proveedor: match CUIT (${cuit}) → "${providerName}"`, shortId(clientId));
   },
 
   // Canonization

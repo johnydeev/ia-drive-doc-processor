@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-03-26 (sesión 11)
+
+Highlights
+- **CUIT como identificador primario en matching**: nuevo campo `allTaxIds` en la extracción IA — la IA extrae todos los CUITs del documento sin clasificarlos. El pipeline ahora busca por CUIT primero en consorcio y proveedor antes de caer al matching por nombre. Excluye automáticamente el CUIT del consorcio al buscar proveedor. Backward-compatible con extracciones viejas.
+- **Logger mejorado**: `extractionResult` muestra los CUITs extraídos. Nuevos métodos `consortiumMatchedByCuit` y `providerMatchedByCuit`.
+
 ## 2026-03-26 (sesión 10)
 
 Highlights

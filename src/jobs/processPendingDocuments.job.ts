@@ -109,6 +109,7 @@ function buildOcrOnlyPayload(): ExtractedDocumentData {
     alias: null,
     clientNumber: null,
     paymentMethod: null,
+    allTaxIds: [],
   };
 }
 
@@ -238,48 +239,68 @@ async function resolveAssignment(
   // ── 1. Consorcio ─────────────────────────────────────────────────────────
 
   const rawConsortium = extracted.consortium?.trim() ?? null;
-
-  if (!rawConsortium) {
-    return { ...base, unassignedReason: "No se pudo extraer el consorcio del PDF" };
-  }
+  const allTaxIds = (extracted.allTaxIds ?? []).map((c) => normCuit(c)).filter((c) => c.length >= 10);
 
   const allConsortiums = await prisma.consortium.findMany({
     where: { clientId },
     select: { id: true, canonicalName: true, rawName: true, cuit: true, matchNames: true },
   });
 
-  const canonicalName = normalizeConsortiumName(rawConsortium);
+  let consortiumRow: typeof allConsortiums[0] | undefined;
+  let matchMethod = "";
 
-  // Intento 1: match exacto por canonicalName
-  let consortiumRow = allConsortiums.find((c) => c.canonicalName === canonicalName);
-  let matchMethod = consortiumRow ? "exacto" : "";
-
-  // Intento 2: fuzzy match
-  if (!consortiumRow) {
-    const fuzzy = allConsortiums.find((c) => consortiumFuzzyMatch(rawConsortium, c.canonicalName));
-    if (fuzzy) { consortiumRow = fuzzy; matchMethod = "fuzzy"; }
+  // Intento 0: match por CUIT (allTaxIds)
+  if (allTaxIds.length > 0) {
+    for (const cuit of allTaxIds) {
+      const found = allConsortiums.find((c) => c.cuit && normCuit(c.cuit) === cuit);
+      if (found) {
+        consortiumRow = found;
+        matchMethod = `CUIT (${cuit})`;
+        pipelineLog.consortiumMatchedByCuit(clientId, found.canonicalName, cuit);
+        break;
+      }
+    }
   }
 
-  // Intento 3: alias match
-  if (!consortiumRow) {
-    const aliased = allConsortiums.find((c) => {
-      const names = (c.matchNames ?? "").split("|").map((a) => a.trim()).filter(Boolean);
-      return consortiumAliasMatch(rawConsortium, names);
-    });
-    if (aliased) { consortiumRow = aliased; matchMethod = "alias"; }
+  // Intentos por nombre requieren rawConsortium
+  if (!consortiumRow && rawConsortium) {
+    const canonicalName = normalizeConsortiumName(rawConsortium);
+
+    // Intento 1: match exacto por canonicalName
+    consortiumRow = allConsortiums.find((c) => c.canonicalName === canonicalName);
+    if (consortiumRow) matchMethod = "exacto";
+
+    // Intento 2: fuzzy match
+    if (!consortiumRow) {
+      const fuzzy = allConsortiums.find((c) => consortiumFuzzyMatch(rawConsortium, c.canonicalName));
+      if (fuzzy) { consortiumRow = fuzzy; matchMethod = "fuzzy"; }
+    }
+
+    // Intento 3: alias match
+    if (!consortiumRow) {
+      const aliased = allConsortiums.find((c) => {
+        const names = (c.matchNames ?? "").split("|").map((a) => a.trim()).filter(Boolean);
+        return consortiumAliasMatch(rawConsortium, names);
+      });
+      if (aliased) { consortiumRow = aliased; matchMethod = "alias"; }
+    }
+
+    if (!consortiumRow) {
+      pipelineLog.consortiumNotFound(
+        clientId,
+        rawConsortium,
+        canonicalName,
+        allConsortiums.map((c) => c.canonicalName)
+      );
+      return {
+        ...base,
+        unassignedReason: `Consorcio no encontrado: "${rawConsortium}" → norm: "${canonicalName}"`,
+      };
+    }
   }
 
   if (!consortiumRow) {
-    pipelineLog.consortiumNotFound(
-      clientId,
-      rawConsortium,
-      canonicalName,
-      allConsortiums.map((c) => c.canonicalName)
-    );
-    return {
-      ...base,
-      unassignedReason: `Consorcio no encontrado: "${rawConsortium}" → norm: "${canonicalName}"`,
-    };
+    return { ...base, unassignedReason: "No se pudo extraer el consorcio del PDF ni matchear por CUIT" };
   }
 
   pipelineLog.consortiumMatch(clientId, matchMethod, consortiumRow.canonicalName);
@@ -315,11 +336,25 @@ async function resolveAssignment(
   let matched: typeof allProviders[0] | undefined;
   let providerMatchMethod = "";
 
-  // Intento 1: CUIT normalizado, excluyendo CUIT del consorcio
-  if (normOcrCuit.length >= 10 && normOcrCuit !== consortiumCuitNorm) {
+  // Intento 0: CUIT match usando allTaxIds, excluyendo CUIT del consorcio
+  if (allTaxIds.length > 0) {
+    const providerCuits = allTaxIds.filter((c) => c !== consortiumCuitNorm);
+    for (const cuit of providerCuits) {
+      const found = allProviders.find((p) => normCuit(p.cuit) === cuit);
+      if (found) {
+        matched = found;
+        providerMatchMethod = `CUIT allTaxIds (${cuit})`;
+        pipelineLog.providerMatchedByCuit(clientId, found.canonicalName, cuit);
+        break;
+      }
+    }
+  }
+
+  // Intento 1: CUIT normalizado de providerTaxId (legacy), excluyendo CUIT del consorcio
+  if (!matched && normOcrCuit.length >= 10 && normOcrCuit !== consortiumCuitNorm) {
     matched = allProviders.find((p) => normCuit(p.cuit) === normOcrCuit);
-    if (matched) providerMatchMethod = `CUIT (${normOcrCuit})`;
-  } else if (normOcrCuit.length >= 10 && normOcrCuit === consortiumCuitNorm) {
+    if (matched) providerMatchMethod = `CUIT providerTaxId (${normOcrCuit})`;
+  } else if (!matched && normOcrCuit.length >= 10 && normOcrCuit === consortiumCuitNorm) {
     pipelineLog.providerCuitMatchesConsortium(clientId, normOcrCuit);
   }
 
@@ -478,6 +513,7 @@ async function processDriveFile(
       providerTaxId: extracted.providerTaxId,
       amount: extracted.amount,
       dueDate: extracted.dueDate,
+      allTaxIds: extracted.allTaxIds,
     });
 
     if (!isDuplicate) {

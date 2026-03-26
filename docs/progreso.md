@@ -1,6 +1,6 @@
 # Progreso del proyecto — drive-doc-processor
 
-Actualizado al 26/03/2026 (sesión 10).
+Actualizado al 26/03/2026 (sesión 11).
 
 ---
 
@@ -128,6 +128,16 @@ El sistema core está funcionando en producción. Pipeline de PDFs, extracción 
   - UI: campo "Tamaño de lote" en la página de edición de cliente admin
   - API: endpoint PATCH `/api/admin/clients/[id]` acepta `batchSize` (int, 1-500)
   - Migración: `20260326000100_add_batch_size_and_invoice_tokens`
+- **CUIT como identificador primario en matching (allTaxIds)** (26/03/2026)
+  - Nuevo campo `allTaxIds: string[]` en `ExtractedDocumentData` — la IA extrae todos los CUITs del documento como lista plana
+  - Nueva constante `ALL_TAX_IDS_RULES` en `src/lib/extraction.ts`, incluida en los 7 prompts
+  - Schema Zod actualizado con campo `allTaxIds` (array de strings, nullable, default null)
+  - `OUTPUT_JSON_TEMPLATE` actualizado con el nuevo campo
+  - Matching de consorcio refactorizado: CUIT-first → exacto → fuzzy → alias
+  - Matching de proveedor refactorizado: CUIT allTaxIds → CUIT providerTaxId (legacy) → nombre exacto → nombre parcial
+  - CUITs del consorcio excluidos automáticamente al buscar proveedor
+  - Logger actualizado: `extractionResult` muestra allTaxIds; nuevos métodos `consortiumMatchedByCuit` y `providerMatchedByCuit`
+  - Backward-compatible: si `allTaxIds` viene vacío o null, el flujo de matching por nombre funciona igual que antes
 - **Razón social en nombre de proveedor (PROVIDER_NAME_RULES)** (26/03/2026)
   - Nueva constante compartida `PROVIDER_NAME_RULES` en `src/lib/extraction.ts`
   - Instruye a la IA a conservar la razón social (S.R.L., S.A., S.A.S., S.C., S.H., COOP., LTDA., etc.) como parte del nombre del proveedor

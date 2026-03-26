@@ -10,6 +10,7 @@
   alias: string | null;
   clientNumber: string | null;
   paymentMethod: string | null;
+  allTaxIds?: string[] | null;
   period?: string | null;
   sourceFileUrl?: string | null;
   isDuplicate?: "YES" | "NO" | null;
