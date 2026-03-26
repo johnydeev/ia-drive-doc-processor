@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-03-26 (sesión 12)
+
+Highlights
+- **Normalización de clientNumber para LspService**: el pipeline ahora normaliza `clientNumber` eliminando ceros a la izquierda antes del lookup de LspService (`00366037` → `366037`). Sync-directory también normaliza al guardar desde Sheets.
+
 ## 2026-03-26 (sesión 11)
 
 Highlights

@@ -232,7 +232,7 @@ export async function POST(request: NextRequest) {
             clientId,
             consortiumId,
             provider: ls.provider,
-            clientNumber: ls.clientNumber,
+            clientNumber: ls.clientNumber.replace(/^0+/, "") || ls.clientNumber,
             description: ls.description,
           });
         }

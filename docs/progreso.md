@@ -1,6 +1,6 @@
 # Progreso del proyecto — drive-doc-processor
 
-Actualizado al 26/03/2026 (sesión 11).
+Actualizado al 26/03/2026 (sesión 12).
 
 ---
 
@@ -128,6 +128,10 @@ El sistema core está funcionando en producción. Pipeline de PDFs, extracción 
   - UI: campo "Tamaño de lote" en la página de edición de cliente admin
   - API: endpoint PATCH `/api/admin/clients/[id]` acepta `batchSize` (int, 1-500)
   - Migración: `20260326000100_add_batch_size_and_invoice_tokens`
+- **Normalización de clientNumber para LspService lookup** (26/03/2026)
+  - Pipeline: `extracted.clientNumber` se normaliza con `.replace(/^0+/, "")` antes del lookup de LspService (ej: `00366037` → `366037`)
+  - Sync-directory: al sincronizar `_LspServices` desde Sheets, el `clientNumber` se guarda sin ceros a la izquierda
+  - Sin cambios en schema, migraciones ni prompts
 - **CUIT como identificador primario en matching (allTaxIds)** (26/03/2026)
   - Nuevo campo `allTaxIds: string[]` en `ExtractedDocumentData` — la IA extrae todos los CUITs del documento como lista plana
   - Nueva constante `ALL_TAX_IDS_RULES` en `src/lib/extraction.ts`, incluida en los 7 prompts

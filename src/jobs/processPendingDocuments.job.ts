@@ -197,13 +197,15 @@ async function resolveAssignment(
 
   // ── 0. LSP fast path: resolver por LspService si tenemos provider + clientNumber ──
 
-  if (lspProvider && lspProvider !== "GENERIC_LSP" && extracted.clientNumber) {
+  const normalizedClientNumber = extracted.clientNumber?.replace(/^0+/, "") || null;
+
+  if (lspProvider && lspProvider !== "GENERIC_LSP" && normalizedClientNumber) {
     try {
       const lspService = await prisma.lspService.findFirst({
         where: {
           clientId,
           provider: lspProvider,
-          clientNumber: extracted.clientNumber,
+          clientNumber: normalizedClientNumber,
         },
         include: {
           consortium: { select: { id: true, canonicalName: true, rawName: true } },
@@ -230,7 +232,7 @@ async function resolveAssignment(
         };
       }
 
-      pipelineLog.stepStart(clientId, `LspService no encontrado: ${lspProvider} clientNumber=${extracted.clientNumber} → fallback a matching normal`);
+      pipelineLog.stepStart(clientId, `LspService no encontrado: ${lspProvider} clientNumber=${normalizedClientNumber} → fallback a matching normal`);
     } catch (err) {
       pipelineLog.stepStart(clientId, `LspService lookup error: ${err instanceof Error ? err.message : "Unknown"} → fallback a matching normal`);
     }
