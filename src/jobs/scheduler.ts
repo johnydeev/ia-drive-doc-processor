@@ -90,6 +90,11 @@ const runOnce = async (): Promise<void> => {
           });
 
           created += 1;
+
+          if (created >= client.batchSize) {
+            schedulerLog.batchLimitReached(client.id, client.name, created, files.length);
+            break;
+          }
         }
 
         if (created > 0) {

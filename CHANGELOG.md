@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-03-26 (sesión 10)
+
+Highlights
+- **Razón social en nombre de proveedor**: nueva constante `PROVIDER_NAME_RULES` que instruye a la IA a conservar la razón social (S.R.L., S.A., S.A.S., etc.) en el campo `provider`. Incluida en los 7 prompts de extracción. Sin cambios en matching ni normalización.
+
 ## 2026-03-26 (sesión 9)
 
 Highlights
@@ -7,7 +12,10 @@ Highlights
 - **Prompts LSP validados**: Edesur y AySA probados con PDFs reales en producción. Extracción correcta.
 - **Aclaración de flujo matchNames**: los matchNames de consorcios y proveedores se cargan y editan desde las hojas `_Consorcios` y `_Proveedores` del archivo ALTA en Google Sheets, y se sincronizan a la DB desde el panel. No requiere UI adicional.
 - **Procedimiento de deploy documentado**: deploy estándar con `docker compose up --build -d` y procedimiento completo para migraciones de DB (down → migrate deploy → generate → up --build -d).
-- **Documentación actualizada**: progreso.md, CHANGELOG.md y CLAUDE.md al día con el estado real del proyecto.
+- **Límite de PDFs por lote (batchSize)**: nuevo campo `batchSize` en Client (default 10). Scheduler limita PDFs encolados por ciclo. Configurable desde el panel admin (campo "Tamaño de lote" en edición de cliente).
+- **Registro de tokens por factura**: nuevos campos en Invoice (`tokensInput`, `tokensOutput`, `tokensTotal`, `aiProvider`, `aiModel`). Pipeline guarda tokens consumidos por cada extracción IA.
+- **Página admin Invoices**: nueva ruta `/admin/invoices` (solo ADMIN) con tabla paginada de todas las invoices, filtro por cliente, y columnas de tokens/IA. Endpoint `GET /api/admin/invoices`.
+- Migración: `20260326000100_add_batch_size_and_invoice_tokens`.
 
 ## 2026-03-24 (sesión 8)
 

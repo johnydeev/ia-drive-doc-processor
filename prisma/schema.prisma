@@ -47,6 +47,7 @@ model Client {
   role                 ClientRole       @default(CLIENT)
   isActive             Boolean          @default(true)
   consortiumsEnabled   Boolean          @default(false)
+  batchSize            Int              @default(10)
   driveFoldersJson     Json?
   googleConfigJson     Json?
   extractionConfigJson Json?
@@ -114,6 +115,11 @@ model Invoice {
   sourceFileUrl       String?
   isDuplicate         Boolean      @default(false)
   isManual            Boolean      @default(false)
+  tokensInput         Int?
+  tokensOutput        Int?
+  tokensTotal         Int?
+  aiProvider          String?
+  aiModel             String?
   boletaNumberNorm    String       @default("")
   providerTaxIdNorm   String       @default("")
   dueDateNorm         String       @default("")

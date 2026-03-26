@@ -27,6 +27,11 @@ export interface SaveInvoiceInput {
   periodId?: string;
   lspServiceId?: string | null;
   paymentMethod?: string | null;
+  tokensInput?: number | null;
+  tokensOutput?: number | null;
+  tokensTotal?: number | null;
+  aiProvider?: string | null;
+  aiModel?: string | null;
 }
 
 export class InvoiceRepository {
@@ -146,6 +151,11 @@ export class InvoiceRepository {
           alias: input.extraction.alias,
           lspServiceId: input.lspServiceId ?? null,
           paymentMethod: input.paymentMethod as any ?? null,
+          tokensInput: input.tokensInput ?? null,
+          tokensOutput: input.tokensOutput ?? null,
+          tokensTotal: input.tokensTotal ?? null,
+          aiProvider: input.aiProvider ?? null,
+          aiModel: input.aiModel ?? null,
           boletaNumberNorm: parts.boletaNumberNorm,
           providerTaxIdNorm: parts.providerTaxIdNorm,
           dueDateNorm: parts.dueDateNorm,
@@ -169,6 +179,11 @@ export class InvoiceRepository {
           alias: input.extraction.alias,
           lspServiceId: input.lspServiceId ?? null,
           paymentMethod: input.paymentMethod as any ?? null,
+          tokensInput: input.tokensInput ?? null,
+          tokensOutput: input.tokensOutput ?? null,
+          tokensTotal: input.tokensTotal ?? null,
+          aiProvider: input.aiProvider ?? null,
+          aiModel: input.aiModel ?? null,
           boletaNumberNorm: parts.boletaNumberNorm,
           providerTaxIdNorm: parts.providerTaxIdNorm,
           dueDateNorm: parts.dueDateNorm,

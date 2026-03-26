@@ -1,6 +1,6 @@
 # Progreso del proyecto — drive-doc-processor
 
-Actualizado al 26/03/2026 (sesión 9).
+Actualizado al 26/03/2026 (sesión 10).
 
 ---
 
@@ -122,6 +122,25 @@ El sistema core está funcionando en producción. Pipeline de PDFs, extracción 
 - **Procedimiento de deploy documentado** (26/03/2026)
   - Deploy estándar: `docker compose up --build -d`
   - Deploy con migraciones: `down → prisma migrate deploy → prisma generate → up --build -d`
+- **Límite de PDFs por lote configurable (batchSize)** (26/03/2026)
+  - Nuevo campo `batchSize Int @default(10)` en modelo Client
+  - Scheduler respeta `batchSize` del cliente: si hay más PDFs pendientes que el límite, los deja para el próximo ciclo
+  - UI: campo "Tamaño de lote" en la página de edición de cliente admin
+  - API: endpoint PATCH `/api/admin/clients/[id]` acepta `batchSize` (int, 1-500)
+  - Migración: `20260326000100_add_batch_size_and_invoice_tokens`
+- **Razón social en nombre de proveedor (PROVIDER_NAME_RULES)** (26/03/2026)
+  - Nueva constante compartida `PROVIDER_NAME_RULES` en `src/lib/extraction.ts`
+  - Instruye a la IA a conservar la razón social (S.R.L., S.A., S.A.S., S.C., S.H., COOP., LTDA., etc.) como parte del nombre del proveedor
+  - Incluida en todos los prompts: `buildInvoicePrompt`, `buildEdesurPrompt`, `buildEdenorPrompt`, `buildAysaPrompt`, `buildGasPrompt`, `buildPersonalPrompt`, `buildGenericUtilityBillPrompt`
+  - No modifica lógica de matching ni normalización — solo la instrucción de extracción IA
+- **Registro de tokens por factura individual** (26/03/2026)
+  - Nuevos campos en Invoice: `tokensInput`, `tokensOutput`, `tokensTotal`, `aiProvider`, `aiModel`
+  - Pipeline: al completar la extracción IA guarda los tokens consumidos y el proveedor/modelo usado en cada Invoice
+  - Nueva página `/admin/invoices` (solo ADMIN): tabla paginada con filtro por cliente
+  - Columnas: Cliente, Consorcio, Proveedor, Período, Monto, Tokens In/Out/Total, Provider IA, Modelo IA, Fecha
+  - Endpoint `GET /api/admin/invoices` protegido con `requireAdminSession`
+  - Botón "Invoices" en el panel admin (solo visible para ADMIN)
+  - Migración: misma que batchSize (`20260326000100_add_batch_size_and_invoice_tokens`)
 
 ---
 

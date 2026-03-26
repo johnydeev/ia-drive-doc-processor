@@ -4,6 +4,60 @@ Registro de decisiones tomadas ante problemas reales encontrados en producción.
 
 ---
 
+## 2026-03-26 — Conservar razón social en nombre de proveedor (PROVIDER_NAME_RULES)
+
+### Problema
+La extracción IA a veces devolvía el nombre del proveedor sin la razón social (ej: "ASCENSORES POTENZA" en lugar de "ASCENSORES POTENZA S.R.L."). Esto generaba inconsistencias entre el nombre extraído y los datos registrados en DB/Sheets, dificultando el matching y la identificación visual del proveedor.
+
+### Decisión
+- Nueva constante `PROVIDER_NAME_RULES` en `src/lib/extraction.ts` con la instrucción de conservar S.R.L., S.A., S.A.S., S.C., S.H., COOP., LTDA., etc.
+- Se incluyó en los 7 prompts de extracción (facturas normales + 6 LSP) siguiendo el patrón existente de reglas compartidas (`CONSORTIUM_ADDRESS_RULES`, `INVALID_DATE_RULES`, `PAYMENT_METHOD_RULES`).
+- No se modificó la lógica de matching ni normalización. El matching existente funciona con el nombre completo incluyendo razón social.
+
+### Impacto
+- Modificado: `src/lib/extraction.ts` (nueva constante + inclusión en 7 prompts)
+
+---
+
+## 2026-03-26 — Límite de PDFs por lote configurable (batchSize)
+
+### Problema
+El scheduler agarraba todos los PDFs pendientes de un cliente en un solo ciclo. Con clientes que suben muchos PDFs a la vez, esto generaba lotes muy grandes que podían sobrecargar el worker y consumir tokens IA desproporcionadamente.
+
+### Decisión
+- Campo `batchSize Int @default(10)` en modelo Client, configurable desde el panel admin.
+- El scheduler respeta el límite: si encuentra 50 PDFs pero `batchSize=10`, encola 10 y loguea que el resto se procesará en el próximo ciclo.
+- Validación: entero entre 1 y 500 (Zod en API).
+- El campo se agrega a `ProcessingClient` para que el scheduler lo lea directamente.
+
+### Impacto
+- Migración: `20260326000100_add_batch_size_and_invoice_tokens`
+- Modificados: `schema.prisma`, `scheduler.ts`, `client.types.ts`, `client.repository.ts`, `jobWorkerMain.ts`, admin client API y UI
+
+---
+
+## 2026-03-26 — Registro de tokens por factura individual
+
+### Problema
+Los tokens se registraban solo a nivel de corrida/scheduler (tabla `TokenUsage`). No había forma de analizar el costo por boleta individual ni identificar qué tipo de documentos consumían más tokens.
+
+### Decisión
+- Campos nullable en Invoice: `tokensInput`, `tokensOutput`, `tokensTotal` (Int?), `aiProvider` (String?), `aiModel` (String?).
+- El pipeline captura `extractor.getLastUsage()` después de cada extracción exitosa (Gemini o OpenAI) y lo pasa a `saveProcessedInvoice`.
+- Los duplicados por hash (que reusan extracción anterior) quedan con tokens null — correcto, no consumieron IA.
+- Nueva página `/admin/invoices` accesible solo para ADMIN, con filtro por cliente y paginación server-side.
+
+### Alternativas descartadas
+- Tabla separada `InvoiceTokenUsage` (1:1) — overhead innecesario, los campos directamente en Invoice son más simples y eficientes para consultas.
+
+### Impacto
+- Misma migración que batchSize
+- Modificados: `schema.prisma`, `invoice.repository.ts`, `processPendingDocuments.job.ts`
+- Nuevos: `src/app/api/admin/invoices/route.ts`, `src/app/admin/invoices/page.tsx`, `src/app/admin/invoices/page.module.css`
+- Modificado: `src/app/admin/page.tsx` (botón Invoices para ADMIN)
+
+---
+
 ## 2026-03-24 — Purga completa de boletas por cliente (Admin)
 
 ### Problema

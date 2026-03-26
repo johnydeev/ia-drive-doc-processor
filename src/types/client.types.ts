@@ -28,6 +28,7 @@ export interface ProcessingClient {
   id: string;
   name: string;
   isActive: boolean;
+  batchSize: number;
   driveFoldersJson?: ClientDriveFolders | null;
   googleConfigJson?: ClientGoogleConfig | null;
   extractionConfigJson?: ClientExtractionConfig | null;

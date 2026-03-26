@@ -13,6 +13,7 @@ type ClientConfig = {
   name: string;
   email: string;
   isActive: boolean;
+  batchSize: number;
   sheetsId: string;
   altaSheetsId: string;
   sheetName: string;
@@ -31,6 +32,7 @@ type ClientConfig = {
 type FormState = {
   name: string;
   isActive: boolean;
+  batchSize: number;
   sheetsId: string;
   altaSheetsId: string;
   sheetName: string;
@@ -61,6 +63,7 @@ export default function EditClientPage() {
   const [form, setForm] = useState<FormState>({
     name: "",
     isActive: true,
+    batchSize: 10,
     sheetsId: "",
     altaSheetsId: "",
     sheetName: "",
@@ -98,6 +101,7 @@ export default function EditClientPage() {
       setForm({
         name: data.client.name,
         isActive: data.client.isActive,
+        batchSize: data.client.batchSize ?? 10,
         sheetsId: data.client.sheetsId,
         altaSheetsId: data.client.altaSheetsId,
         sheetName: data.client.sheetName,
@@ -130,6 +134,7 @@ export default function EditClientPage() {
       const payload: Record<string, unknown> = {
         name: form.name,
         isActive: form.isActive,
+        batchSize: Number(form.batchSize),
         sheetsId: form.sheetsId,
         altaSheetsId: form.altaSheetsId || null,
         sheetName: form.sheetName,
@@ -232,6 +237,18 @@ export default function EditClientPage() {
                       Cliente {form.isActive ? "activo" : "inactivo"} — el scheduler{form.isActive ? " procesa" : " no procesa"} sus archivos
                     </span>
                   </div>
+                </div>
+                <div className={styles.field}>
+                  <label className={styles.fieldLabel}>Tamano de lote</label>
+                  <input
+                    className={styles.input}
+                    type="number"
+                    min={1}
+                    max={500}
+                    value={form.batchSize}
+                    onChange={(e) => setForm((f) => ({ ...f, batchSize: Math.max(1, Number(e.target.value) || 1) }))}
+                  />
+                  <span className={styles.configuredHint}>PDFs procesados por ciclo del scheduler</span>
                 </div>
               </div>
             </section>

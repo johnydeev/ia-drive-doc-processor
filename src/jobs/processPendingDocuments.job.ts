@@ -408,6 +408,7 @@ async function processDriveFile(
 
     let extracted: ExtractedDocumentData | null = null;
     let isDuplicate = Boolean(existingByHash);
+    let fileAiUsage: import("@/types/aiUsage.types").AiUsageMetrics | null = null;
 
     let lspProvider: ReturnType<typeof identifyLSPProvider> = null;
 
@@ -439,7 +440,8 @@ async function processDriveFile(
         try {
           const extractor = new geminiModule.GeminiExtractorService({ apiKey: geminiApiKey, model: geminiModel });
           extracted = await runStep("Extracción IA (Gemini)", () => extractor.extractStructuredData(text));
-          accumulateTokenUsage(summary.tokenUsage, extractor.getLastUsage?.());
+          fileAiUsage = extractor.getLastUsage?.() ?? null;
+          accumulateTokenUsage(summary.tokenUsage, fileAiUsage);
           pipelineLog.aiExtraction(cid, "gemini", true);
         } catch (error) {
           const msg = error instanceof Error ? error.message : "Gemini unknown error";
@@ -452,7 +454,8 @@ async function processDriveFile(
         try {
           const extractor = new openAiModule.AiExtractorService({ apiKey: openaiApiKey, model: openaiModel });
           extracted = await runStep("Extracción IA (OpenAI)", () => extractor.extractStructuredData(text));
-          accumulateTokenUsage(summary.tokenUsage, extractor.getLastUsage?.());
+          fileAiUsage = extractor.getLastUsage?.() ?? null;
+          accumulateTokenUsage(summary.tokenUsage, fileAiUsage);
           pipelineLog.aiExtraction(cid, "openai", true);
         } catch (error) {
           const msg = error instanceof Error ? error.message : "OpenAI unknown error";
@@ -526,6 +529,11 @@ async function processDriveFile(
           sourceFileUrl, extraction: extractionFields, isDuplicate,
           consortiumId: assignment.consortiumId, providerId: undefined, periodId: assignment.periodId,
           lspServiceId: assignment.lspServiceId, paymentMethod: extracted!.paymentMethod,
+          tokensInput: fileAiUsage?.inputTokens ?? null,
+          tokensOutput: fileAiUsage?.outputTokens ?? null,
+          tokensTotal: fileAiUsage?.totalTokens ?? null,
+          aiProvider: fileAiUsage?.provider ?? null,
+          aiModel: fileAiUsage?.model ?? null,
         })
       );
       pipelineLog.invoiceSaved(cid, isDuplicate);
@@ -550,6 +558,11 @@ async function processDriveFile(
         sourceFileUrl, extraction: extractionFields, isDuplicate,
         consortiumId: assignment.consortiumId, providerId: assignment.providerId, periodId: assignment.periodId,
         lspServiceId: assignment.lspServiceId, paymentMethod: extracted!.paymentMethod,
+        tokensInput: fileAiUsage?.inputTokens ?? null,
+        tokensOutput: fileAiUsage?.outputTokens ?? null,
+        tokensTotal: fileAiUsage?.totalTokens ?? null,
+        aiProvider: fileAiUsage?.provider ?? null,
+        aiModel: fileAiUsage?.model ?? null,
       })
     );
     pipelineLog.invoiceSaved(cid, isDuplicate);

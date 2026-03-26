@@ -91,6 +91,10 @@ export const schedulerLog = {
     log("success", "scheduler", `${count} job(s) encolado(s) — "${clientName}" [${shortId(clientId)}]`);
   },
 
+  batchLimitReached(clientId: string, clientName: string, created: number, total: number) {
+    log("info", "scheduler", `Límite de lote alcanzado (${created}/${total} PDFs) — "${clientName}" [${shortId(clientId)}]. Resto se procesará en el próximo ciclo.`);
+  },
+
   clientError(clientId: string, clientName: string, error: string) {
     log("error", "scheduler", `Error en cliente "${clientName}" [${shortId(clientId)}]: ${error}`);
   },

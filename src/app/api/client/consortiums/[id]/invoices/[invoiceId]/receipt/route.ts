@@ -71,6 +71,7 @@ export async function POST(
       id: clientId,
       name: "",
       isActive: true,
+      batchSize: 10,
       driveFoldersJson: clientRow.driveFoldersJson as any,
       googleConfigJson: clientRow.googleConfigJson as any,
       extractionConfigJson: clientRow.extractionConfigJson as any,

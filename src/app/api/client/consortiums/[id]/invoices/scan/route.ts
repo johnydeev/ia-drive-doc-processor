@@ -65,6 +65,7 @@ export async function POST(
       id:                   auth.session.clientId,
       name:                 "",
       isActive:             true,
+      batchSize:            10,
       driveFoldersJson:     (clientRow?.driveFoldersJson     as ClientDriveFolders      | null) ?? null,
       googleConfigJson:     (clientRow?.googleConfigJson     as ClientGoogleConfig      | null) ?? null,
       extractionConfigJson: (clientRow?.extractionConfigJson as Record<string, unknown> | null) ?? null,

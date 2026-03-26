@@ -247,6 +247,13 @@ const PAYMENT_METHOD_RULES = [
   "  • null si no se puede determinar con certeza.",
 ].join("\n");
 
+const PROVIDER_NAME_RULES = [
+  "  Si el nombre del proveedor/emisor aparece acompañado de una razón social",
+  "  (S.R.L., S.A., S.A.S., S.C., S.H., COOP., LTDA., S.A.C.I., S.A.C.I.F.,",
+  "  S.A.I.C., u otras variantes), CONSERVARLA como parte del nombre.",
+  "  Ejemplo: 'ASCENSORES POTENZA S.R.L.' → 'ASCENSORES POTENZA S.R.L.' (NO 'ASCENSORES POTENZA').",
+].join("\n");
+
 // ═══════════════════════════════════════════════════════════════════════════
 // Invoice prompt (facturas normales A, B, C, etc.)
 // ═══════════════════════════════════════════════════════════════════════════
@@ -278,6 +285,7 @@ function buildInvoicePrompt(relevantText: string): string {
 
     "- provider: razón social del EMISOR (quien factura). Está en el bloque superior del documento,",
     "  generalmente con su domicilio, teléfono y CUIT. NO es el consorcio.",
+    PROVIDER_NAME_RULES,
 
     "- providerTaxId: CUIT del EMISOR. Está en el bloque del proveedor junto a su nombre/domicilio.",
     "  ATENCIÓN: en la sección del RECEPTOR puede aparecer 'Tipo y Nº de Doc.: CUIT XXXXXXXXXX'",
@@ -330,6 +338,7 @@ function buildEdesurPrompt(relevantText: string): string {
     "=== REGLAS ESPECÍFICAS EDESUR ===",
 
     "- provider: siempre 'EDESUR S.A.'",
+    PROVIDER_NAME_RULES,
 
     "- providerTaxId: CUIT de EDESUR → '30-65511651-2'.",
     "  CUIDADO: en la factura aparece prominente el CUIT del CLIENTE (consorcio) en la sección",
@@ -384,6 +393,7 @@ function buildEdenorPrompt(relevantText: string): string {
     "=== REGLAS ESPECÍFICAS EDENOR ===",
 
     "- provider: siempre 'EDENOR S.A.'",
+    PROVIDER_NAME_RULES,
 
     "- providerTaxId: CUIT de EDENOR → '30-65511620-2'.",
     "  CUIDADO: el CUIT del CLIENTE (consorcio) aparece en la sección del titular.",
@@ -440,6 +450,7 @@ function buildAysaPrompt(relevantText: string): string {
     "=== REGLAS ESPECÍFICAS AYSA ===",
 
     "- provider: siempre 'AYSA' (o 'AGUA Y SANEAMIENTOS ARGENTINOS S.A.' si aparece completo).",
+    PROVIDER_NAME_RULES,
 
     "- providerTaxId: CUIT de AySA → '30-70956507-5'.",
     "  El CUIT de AySA está en el encabezado junto a 'AySA', 'CUIT Nº' e inicio de actividades.",
@@ -522,6 +533,7 @@ function buildGasPrompt(relevantText: string, provider: LSPProvider): string {
     `=== REGLAS ESPECÍFICAS ${provider} ===`,
 
     `- provider: siempre '${providerName}'.`,
+    PROVIDER_NAME_RULES,
 
     cuitInstruction,
 
@@ -564,6 +576,7 @@ function buildGenericUtilityBillPrompt(relevantText: string): string {
 
     "- provider: nombre de la EMPRESA DE SERVICIOS emisora. Es el logo/encabezado principal.",
     "  Ejemplos: 'EDESUR', 'EDENOR', 'AYSA', 'METROGAS', 'NATURGY', 'CAMUZZI'.",
+    PROVIDER_NAME_RULES,
 
     "- providerTaxId: CUIT de la EMPRESA DE SERVICIOS, NO del cliente/consorcio.",
     "  El CUIT de la empresa está en su bloque de datos (junto a nombre, IIBB, inicio de actividades).",
@@ -610,6 +623,7 @@ function buildPersonalPrompt(relevantText: string): string {
     "=== REGLAS ESPECÍFICAS PERSONAL ===",
 
     "- provider: siempre 'PERSONAL'.",
+    PROVIDER_NAME_RULES,
 
     "- providerTaxId: CUIT de Telecom Argentina → '30-63945373-8'.",
     "  CUIDADO: el CUIT del CLIENTE (consorcio) aparece en la sección del titular.",

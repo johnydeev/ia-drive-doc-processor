@@ -360,6 +360,13 @@ export default function AdminPage() {
                 </button>
               </>
             )}
+            {isAdmin && (
+              <button type="button" className={styles.ghostBtn}
+                onClick={() => router.push("/admin/invoices")}
+                disabled={busyAction !== null}>
+                Invoices
+              </button>
+            )}
             <button type="button" className={`${styles.ghostBtn} ${styles.themeBtn}`}
               onClick={handleToggleTheme} disabled={busyAction !== null}>
               {theme === "dark" ? "Modo claro" : "Modo oscuro"}
