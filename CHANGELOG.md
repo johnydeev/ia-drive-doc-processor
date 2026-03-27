@@ -1,5 +1,20 @@
 # Changelog
 
+## 2026-03-27 (sesión 19)
+
+Highlights
+- **Boletas sin asignar ya no se guardan en DB**: el bloque `assignment.unassigned` del pipeline ahora solo mueve el archivo a Sin Asignar en Drive, sin crear Invoice en la DB ni persistir el hash. La DB queda limpia con solo boletas efectivamente asignadas.
+
+## 2026-03-27 (sesión 18)
+
+Highlights
+- **Sync-directory refactorizado**: transacción única dividida en 5 transacciones independientes por entidad (Rubros, Coeficientes, Consorcios+Períodos, Proveedores, LspServices). Cada una con timeout de 30s. Resuelve "Transaction not found" con datasets grandes.
+
+## 2026-03-27 (sesión 16)
+
+Highlights
+- **Prompt facturas normales**: aclaración sobre trampa CUIT emisor vs receptor en facturas B/C donde el CUIT del receptor tiene etiqueta prominente y el del emisor está en el encabezado sin etiqueta explícita.
+
 ## 2026-03-27 (sesión 15)
 
 Highlights

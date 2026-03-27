@@ -603,22 +603,8 @@ async function processDriveFile(
           driveService.moveFileToUnassigned(file.id, resolvedConfig.drivePendingFolderId!, resolvedConfig.driveUnassignedFolderId!)
         );
       }
-      await runStep("Guardar invoice", () =>
-        invoiceRepository.saveProcessedInvoice({
-          clientId: cid, documentHash: fileHash, fileId: file.id,
-          sourceFileUrl, extraction: extractionFields, isDuplicate,
-          consortiumId: assignment.consortiumId, providerId: undefined, periodId: assignment.periodId,
-          lspServiceId: assignment.lspServiceId, paymentMethod: extracted!.paymentMethod,
-          tokensInput: fileAiUsage?.inputTokens ?? null,
-          tokensOutput: fileAiUsage?.outputTokens ?? null,
-          tokensTotal: fileAiUsage?.totalTokens ?? null,
-          aiProvider: fileAiUsage?.provider ?? null,
-          aiModel: fileAiUsage?.model ?? null,
-        })
-      );
-      pipelineLog.invoiceSaved(cid, isDuplicate);
       summary.unassigned += 1;
-      pipelineLog.fileCompleted(cid, file.name, { processed: 0, unassigned: 1, duplicate: isDuplicate });
+      pipelineLog.fileCompleted(cid, file.name, { processed: 0, unassigned: 1, duplicate: false });
       return;
     }
 

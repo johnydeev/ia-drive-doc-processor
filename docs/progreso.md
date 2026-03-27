@@ -1,6 +1,6 @@
 # Progreso del proyecto — drive-doc-processor
 
-Actualizado al 27/03/2026 (sesión 15).
+Actualizado al 27/03/2026 (sesión 19).
 
 ---
 
@@ -128,6 +128,17 @@ El sistema core está funcionando en producción. Pipeline de PDFs, extracción 
   - UI: campo "Tamaño de lote" en la página de edición de cliente admin
   - API: endpoint PATCH `/api/admin/clients/[id]` acepta `batchSize` (int, 1-500)
   - Migración: `20260326000100_add_batch_size_and_invoice_tokens`
+- **Boletas sin asignar no se guardan en DB** (27/03/2026)
+  - Pipeline: cuando `assignment.unassigned === true`, el archivo se mueve a Sin Asignar pero ya NO se guarda como Invoice en la DB
+  - Eliminado `saveProcessedInvoice` y `pipelineLog.invoiceSaved` del bloque unassigned
+  - El hash tampoco se persiste (solo se persistía via `saveProcessedInvoice`)
+  - Beneficio: la DB solo contiene boletas efectivamente procesadas y asignadas
+- **Sync-directory: transacción única dividida en 5 transacciones por entidad** (27/03/2026)
+  - Rubros, Coeficientes, Consorcios+Períodos, Proveedores y LspServices en transacciones separadas
+  - Cada transacción con timeout de 30s (antes: una sola de 60s que podía excederse)
+  - Misma lógica interna, solo separada en bloques independientes
+- **Aclaración CUIT emisor vs receptor en facturas B/C** (27/03/2026)
+  - Prompt `buildInvoicePrompt`: agregada trampa común donde el CUIT del receptor tiene etiqueta 'CUIT:' prominente y el del emisor está en el encabezado sin etiqueta explícita
 - **Constante compartida LSP_LATERAL_CUIT_RULES para CUIT en margen lateral** (27/03/2026)
   - Nueva constante `LSP_LATERAL_CUIT_RULES` en reglas compartidas de `extraction.ts`
   - Reemplaza la aclaración inline de Edesur y se incluye también en Edenor

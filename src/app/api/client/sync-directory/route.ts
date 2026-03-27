@@ -51,9 +51,10 @@ export async function POST(request: NextRequest) {
 
     const syncedAt = new Date();
 
-    // Sincronizar en DB: upsert lo que está en Sheets, eliminar lo que no está
+    const txOpts = { maxWait: 10000, timeout: 30000 };
+
+    // Transacción 1: Rubros (reemplazo total)
     await prisma.$transaction(async (tx) => {
-      // --- Rubros (reemplazo total: sin FK que afecte invoices) ---
       await tx.rubro.deleteMany({ where: { clientId } });
       if (directory.rubros.length > 0) {
         await tx.rubro.createMany({
@@ -64,8 +65,10 @@ export async function POST(request: NextRequest) {
           })),
         });
       }
+    }, txOpts);
 
-      // --- Coeficientes (reemplazo total) ---
+    // Transacción 2: Coeficientes (reemplazo total)
+    await prisma.$transaction(async (tx) => {
       await tx.coeficiente.deleteMany({ where: { clientId } });
       if (directory.coeficientes.length > 0) {
         await tx.coeficiente.createMany({
@@ -76,8 +79,10 @@ export async function POST(request: NextRequest) {
           })),
         });
       }
+    }, txOpts);
 
-      // --- Consorcios (upsert + eliminar huérfanos) ---
+    // Transacción 3: Consorcios + Períodos
+    await prisma.$transaction(async (tx) => {
       for (const c of directory.consortiums) {
         await tx.consortium.upsert({
           where: { clientId_canonicalName: { clientId, canonicalName: c.canonicalName } },
@@ -106,7 +111,6 @@ export async function POST(request: NextRequest) {
       const consWithoutPeriod = allConsortiumsAfterUpsert.filter((c) => !consWithPeriod.has(c.id));
 
       if (consWithoutPeriod.length > 0) {
-        // Resolver mes mayoritario (inline para no salir de la transacción)
         const activePeriods = await tx.period.findMany({
           where: { consortium: { clientId }, status: "ACTIVE" },
           select: { year: true, month: true },
@@ -164,8 +168,10 @@ export async function POST(request: NextRequest) {
           );
         }
       }
+    }, txOpts);
 
-      // --- Proveedores (upsert + eliminar huérfanos) ---
+    // Transacción 4: Proveedores
+    await prisma.$transaction(async (tx) => {
       for (const p of directory.providers) {
         const existing = await tx.provider.findFirst({
           where: { clientId, canonicalName: p.canonicalName },
@@ -200,19 +206,19 @@ export async function POST(request: NextRequest) {
           );
         }
       }
+    }, txOpts);
 
-      // --- LspServices (reemplazo total por cliente) ---
+    // Transacción 5: LspServices (reemplazo total)
+    await prisma.$transaction(async (tx) => {
       if (directory.lspServices.length > 0) {
         await tx.lspService.deleteMany({ where: { clientId } });
 
-        // Obtener consorcios actuales para resolver consortiumId por canonicalName
         const currentConsortiums = await tx.consortium.findMany({
           where: { clientId },
           select: { id: true, canonicalName: true },
         });
         const consortiumMap = new Map(currentConsortiums.map((c) => [c.canonicalName, c.id]));
 
-        // Obtener proveedores actuales para resolver providerId por nombre canónico
         const currentProviders = await tx.provider.findMany({
           where: { clientId },
           select: { id: true, canonicalName: true },
@@ -236,7 +242,6 @@ export async function POST(request: NextRequest) {
             );
             continue;
           }
-          // Resolver providerId buscando por nombre en la tabla Provider
           const providerId = providerMap.get(ls.provider.toUpperCase()) ?? null;
           validLspServices.push({
             clientId,
@@ -252,13 +257,9 @@ export async function POST(request: NextRequest) {
           await tx.lspService.createMany({ data: validLspServices });
         }
       } else {
-        // Si no hay LspServices en el archivo ALTA, limpiar los existentes
         await tx.lspService.deleteMany({ where: { clientId } });
       }
-    }, {
-      maxWait: 10000,
-      timeout: 30000,
-    });
+    }, txOpts);
 
     // Guardar fecha de última sincronización
     await prisma.schedulerState.upsert({

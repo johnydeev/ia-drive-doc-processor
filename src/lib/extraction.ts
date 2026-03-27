@@ -327,6 +327,12 @@ function buildInvoicePrompt(relevantText: string): string {
     "  ATENCIÓN: en la sección del RECEPTOR puede aparecer 'Tipo y Nº de Doc.: CUIT XXXXXXXXXX'",
     "  o 'DNI: XXXXXXXXXX' que corresponde al consorcio. Ese valor NO es el providerTaxId.",
     "  Solo usar el CUIT del bloque del EMISOR. Si no podés identificarlo con certeza: null.",
+    "  ⚠️ TRAMPA COMÚN EN FACTURAS B/C: el CUIT del RECEPTOR (consorcio) suele aparecer",
+    "  con etiqueta 'CUIT:' explícita en el cuerpo de la factura (sección del destinatario).",
+    "  El CUIT del EMISOR (proveedor) puede estar en el encabezado superior derecho junto",
+    "  al número de factura, CUIT de ingresos brutos e inicio de actividades, sin etiqueta",
+    "  'CUIT:' tan prominente. Siempre identificar quién es el EMISOR (quien factura) y",
+    "  usar su CUIT, no el del receptor.",
 
     "- consortium: nombre del CONSORCIO receptor. Buscarlo en la sección del receptor:",
     "  'Razón Social:', 'Cliente:', 'Señores:', etc. Incluir el nombre completo con calle y número.",

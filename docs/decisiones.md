@@ -4,6 +4,51 @@ Registro de decisiones tomadas ante problemas reales encontrados en producción.
 
 ---
 
+## 2026-03-27 — Boletas sin asignar no se guardan en DB
+
+### Problema
+El pipeline guardaba un Invoice en la DB incluso cuando la boleta iba a "Sin Asignar" (sin consorcio o proveedor matcheado). Esto contaminaba la DB con registros incompletos que no tenían consorcio/proveedor asignado y complicaba las métricas y la purga.
+
+### Decisión
+Eliminar el paso `saveProcessedInvoice` del bloque `assignment.unassigned`. El archivo se sigue moviendo a la carpeta Sin Asignar en Drive, pero no se crea Invoice en la DB. El hash tampoco se persiste, por lo que si el usuario corrige el directorio y vuelve a procesar el mismo PDF, pasará como nuevo.
+
+### Alternativas descartadas
+- Guardar con un status especial (UNASSIGNED): agrega complejidad al schema y a las queries sin beneficio claro.
+
+### Impacto
+- Modificado: `src/jobs/processPendingDocuments.job.ts` (bloque unassigned)
+
+---
+
+## 2026-03-27 — Sync-directory: transacción única dividida en 5 por entidad
+
+### Problema
+La sincronización de directorio ALTA usaba una sola transacción Prisma para procesar todas las entidades (Rubros, Coeficientes, Consorcios, Proveedores, LspServices). Con muchos registros, la transacción excedía el timeout y fallaba con "Transaction not found".
+
+### Decisión
+Dividir en 5 transacciones independientes ejecutadas en secuencia, una por entidad. Cada una con timeout de 30s. La lógica interna de cada bloque es idéntica a la anterior. LspServices va última porque depende de Consorcios y Proveedores ya sincronizados.
+
+### Alternativas descartadas
+- Aumentar el timeout a 60s: solo patea el problema, no lo resuelve para datasets grandes.
+
+### Impacto
+- Modificado: `src/app/api/client/sync-directory/route.ts`
+
+---
+
+## 2026-03-27 — Aclaración CUIT emisor vs receptor en facturas B/C
+
+### Problema
+En facturas tipo B/C, la IA confundía el CUIT del receptor (consorcio) con el del emisor (proveedor) porque el receptor tiene etiqueta 'CUIT:' explícita en el cuerpo, mientras que el emisor tiene el CUIT en el encabezado superior derecho sin etiqueta tan prominente.
+
+### Decisión
+Agregar aclaración en `buildInvoicePrompt` advirtiendo sobre esta trampa y orientando a identificar el bloque del emisor (encabezado superior derecho, junto a número de factura, ingresos brutos e inicio de actividades).
+
+### Impacto
+- Modificado: `src/lib/extraction.ts` (solo prompt facturas normales)
+
+---
+
 ## 2026-03-27 — Constante LSP_LATERAL_CUIT_RULES para CUIT en margen lateral
 
 ### Problema
