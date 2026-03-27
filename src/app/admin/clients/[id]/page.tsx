@@ -14,6 +14,7 @@ type ClientConfig = {
   email: string;
   isActive: boolean;
   batchSize: number;
+  intervalMinutes: number;
   sheetsId: string;
   altaSheetsId: string;
   sheetName: string;
@@ -33,6 +34,7 @@ type FormState = {
   name: string;
   isActive: boolean;
   batchSize: number;
+  intervalMinutes: number;
   sheetsId: string;
   altaSheetsId: string;
   sheetName: string;
@@ -64,6 +66,7 @@ export default function EditClientPage() {
     name: "",
     isActive: true,
     batchSize: 10,
+    intervalMinutes: 60,
     sheetsId: "",
     altaSheetsId: "",
     sheetName: "",
@@ -102,6 +105,7 @@ export default function EditClientPage() {
         name: data.client.name,
         isActive: data.client.isActive,
         batchSize: data.client.batchSize ?? 10,
+        intervalMinutes: data.client.intervalMinutes ?? 60,
         sheetsId: data.client.sheetsId,
         altaSheetsId: data.client.altaSheetsId,
         sheetName: data.client.sheetName,
@@ -135,6 +139,7 @@ export default function EditClientPage() {
         name: form.name,
         isActive: form.isActive,
         batchSize: Number(form.batchSize),
+        intervalMinutes: Number(form.intervalMinutes),
         sheetsId: form.sheetsId,
         altaSheetsId: form.altaSheetsId || null,
         sheetName: form.sheetName,
@@ -249,6 +254,18 @@ export default function EditClientPage() {
                     onChange={(e) => setForm((f) => ({ ...f, batchSize: Math.max(1, Number(e.target.value) || 1) }))}
                   />
                   <span className={styles.configuredHint}>PDFs procesados por ciclo del scheduler</span>
+                </div>
+                <div className={styles.field}>
+                  <label className={styles.fieldLabel}>Intervalo del scheduler</label>
+                  <input
+                    className={styles.input}
+                    type="number"
+                    min={1}
+                    max={1440}
+                    value={form.intervalMinutes}
+                    onChange={(e) => setForm((f) => ({ ...f, intervalMinutes: Math.max(1, Number(e.target.value) || 60) }))}
+                  />
+                  <span className={styles.configuredHint}>Minutos entre cada ciclo de escaneo (1-1440)</span>
                 </div>
               </div>
             </section>

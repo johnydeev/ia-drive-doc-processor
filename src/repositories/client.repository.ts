@@ -19,6 +19,7 @@ export class ClientRepository {
       name: row.name,
       isActive: row.isActive,
       batchSize: row.batchSize,
+      intervalMinutes: row.intervalMinutes,
       driveFoldersJson: (row.driveFoldersJson as ClientDriveFolders | null | undefined) ?? null,
       googleConfigJson: (row.googleConfigJson as ClientGoogleConfig | null | undefined) ?? null,
       extractionConfigJson:

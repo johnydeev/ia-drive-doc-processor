@@ -66,6 +66,7 @@ export async function POST(
       name:                 "",
       isActive:             true,
       batchSize:            10,
+      intervalMinutes:      60,
       driveFoldersJson:     (clientRow?.driveFoldersJson     as ClientDriveFolders      | null) ?? null,
       googleConfigJson:     (clientRow?.googleConfigJson     as ClientGoogleConfig      | null) ?? null,
       extractionConfigJson: (clientRow?.extractionConfigJson as Record<string, unknown> | null) ?? null,

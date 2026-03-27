@@ -4,6 +4,24 @@ Registro de decisiones tomadas ante problemas reales encontrados en producción.
 
 ---
 
+## 2026-03-27 — Intervalo del scheduler configurable por cliente
+
+### Problema
+El intervalo del scheduler era global (`PROCESS_INTERVAL_MINUTES` en `.env`), igual para todos los clientes. Cambiar el intervalo requería modificar el `.env` y hacer rebuild del contenedor, afectando a todos los clientes por igual.
+
+### Decisión
+Nuevo campo `intervalMinutes` (Int, default 60) en el modelo Client. El scheduler mantiene un `Map<clientId, lastRunTimestamp>` y antes de procesar cada cliente verifica si pasó su intervalo individual. El `setInterval` global sigue usando el valor del `.env` como tick base (frecuencia mínima de chequeo). Si `client.intervalMinutes` es 0 o no está definido, se usa el fallback global.
+
+### Alternativas descartadas
+- **Un scheduler independiente por cliente**: excesiva complejidad, múltiples timers, difícil de monitorear.
+- **Cron expressions por cliente**: overengineering para un caso simple de intervalo en minutos.
+
+### Impacto
+- Migración: `20260327000200_add_interval_minutes`
+- Archivos modificados: `schema.prisma`, `client.types.ts`, `client.repository.ts`, `scheduler.ts`, `jobWorkerMain.ts`, `admin/clients/[id]/route.ts`, `admin/clients/[id]/page.tsx`, `receipt/route.ts`, `invoices/route.ts`, `scan/route.ts`
+
+---
+
 ## 2026-03-27 — Boletas sin asignar no se guardan en DB
 
 ### Problema

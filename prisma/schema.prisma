@@ -48,6 +48,7 @@ model Client {
   isActive             Boolean          @default(true)
   consortiumsEnabled   Boolean          @default(false)
   batchSize            Int              @default(10)
+  intervalMinutes      Int              @default(60)
   driveFoldersJson     Json?
   googleConfigJson     Json?
   extractionConfigJson Json?

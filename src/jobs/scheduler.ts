@@ -14,10 +14,11 @@ import {
 
 const clientRepository = new ClientRepository();
 const controlService = new SchedulerControlService();
-const minutes = parseProcessIntervalMinutes(env.PROCESS_INTERVAL_MINUTES);
-const intervalMs = minutes * 60 * 1000;
+const globalMinutes = parseProcessIntervalMinutes(env.PROCESS_INTERVAL_MINUTES);
+const globalIntervalMs = globalMinutes * 60 * 1000;
 
 let localRunning = false;
+const lastRunByClient = new Map<string, number>();
 
 const runOnce = async (): Promise<void> => {
   if (localRunning) {
@@ -36,11 +37,19 @@ const runOnce = async (): Promise<void> => {
 
     schedulerLog.cycleStart(clients.length);
 
+    const now = Date.now();
+
     for (const client of clients) {
+      const clientInterval = (client.intervalMinutes > 0 ? client.intervalMinutes : globalMinutes) * 60 * 1000;
+      const lastRun = lastRunByClient.get(client.id) ?? 0;
+      if (lastRun > 0 && now - lastRun < clientInterval) {
+        continue;
+      }
       try {
         const prisma = getPrismaClient();
-        await controlService.touchHeartbeat(minutes, client.id);
-        const state = await controlService.getState(minutes, client.id);
+        const clientMinutes = client.intervalMinutes > 0 ? client.intervalMinutes : globalMinutes;
+        await controlService.touchHeartbeat(clientMinutes, client.id);
+        const state = await controlService.getState(clientMinutes, client.id);
 
         if (!state.enabled) {
           schedulerLog.clientPaused(client.id, client.name);
@@ -100,6 +109,8 @@ const runOnce = async (): Promise<void> => {
         if (created > 0) {
           schedulerLog.jobsQueued(created, client.id, client.name);
         }
+
+        lastRunByClient.set(client.id, now);
       } catch (error) {
         schedulerLog.clientError(
           client.id,
@@ -117,7 +128,7 @@ const runOnce = async (): Promise<void> => {
   }
 };
 
-schedulerLog.starting(minutes);
+schedulerLog.starting(globalMinutes);
 
 void runOnce();
-setInterval(runOnce, intervalMs);
+setInterval(runOnce, globalIntervalMs);

@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-03-27 (sesión 20)
+
+Highlights
+- **Intervalo del scheduler configurable por cliente (`intervalMinutes`)**: nuevo campo en Client con default 60 minutos. Configurable desde el panel admin (1-1440 min). El scheduler respeta el intervalo individual de cada cliente sin necesidad de tocar `.env` ni hacer rebuild. Migración: `20260327000200_add_interval_minutes`.
+
 ## 2026-03-27 (sesión 19)
 
 Highlights

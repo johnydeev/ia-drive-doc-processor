@@ -1,6 +1,6 @@
 # Progreso del proyecto — drive-doc-processor
 
-Actualizado al 27/03/2026 (sesión 19).
+Actualizado al 27/03/2026 (sesión 20).
 
 ---
 
@@ -183,6 +183,13 @@ El sistema core está funcionando en producción. Pipeline de PDFs, extracción 
   - Endpoint `GET /api/admin/invoices` protegido con `requireAdminSession`
   - Botón "Invoices" en el panel admin (solo visible para ADMIN)
   - Migración: misma que batchSize (`20260326000100_add_batch_size_and_invoice_tokens`)
+- **Intervalo del scheduler configurable por cliente (`intervalMinutes`)** (27/03/2026)
+  - Nuevo campo `intervalMinutes Int @default(60)` en modelo Client
+  - Scheduler respeta intervalo individual: mantiene `Map<clientId, lastRunTimestamp>` y salta clientes cuyo intervalo no se cumplió
+  - `touchHeartbeat` y `getState` usan el intervalo del cliente (con fallback al global del `.env`)
+  - UI: campo "Intervalo del scheduler" en la página de edición de cliente admin (1-1440 min)
+  - API: endpoint PATCH `/api/admin/clients/[id]` acepta `intervalMinutes` (int, 1-1440)
+  - Migración: `20260327000200_add_interval_minutes`
 
 ---
 

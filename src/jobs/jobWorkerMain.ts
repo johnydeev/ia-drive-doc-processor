@@ -28,6 +28,7 @@ function mapClient(row: {
   name: string;
   isActive: boolean;
   batchSize: number;
+  intervalMinutes: number;
   driveFoldersJson: unknown;
   googleConfigJson: unknown;
   extractionConfigJson: unknown;
@@ -37,6 +38,7 @@ function mapClient(row: {
     name: row.name,
     isActive: row.isActive,
     batchSize: row.batchSize,
+    intervalMinutes: row.intervalMinutes,
     driveFoldersJson: (row.driveFoldersJson as ClientDriveFolders | null | undefined) ?? null,
     googleConfigJson: (row.googleConfigJson as ProcessingClient["googleConfigJson"]) ?? null,
     extractionConfigJson:
@@ -127,6 +129,7 @@ async function handleJob(job: {
       name: true,
       isActive: true,
       batchSize: true,
+      intervalMinutes: true,
       driveFoldersJson: true,
       googleConfigJson: true,
       extractionConfigJson: true,
