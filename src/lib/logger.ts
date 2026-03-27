@@ -239,6 +239,14 @@ export const pipelineLog = {
     log("success", "job", `  Proveedor: match CUIT (${cuit}) → "${providerName}"`, shortId(clientId));
   },
 
+  lspProviderResolvedFromDB(clientId: string, providerName: string, cuit: string) {
+    log("success", "job", `  LSP Proveedor resuelto desde DB: "${providerName}" CUIT=${cuit}`, shortId(clientId));
+  },
+
+  lspProviderNotInDB(clientId: string, lspType: string) {
+    log("warn", "job", `  LSP Proveedor "${lspType}" no encontrado en tabla Provider — usando nombre del router como fallback`, shortId(clientId));
+  },
+
   // Canonization
   canonized(clientId: string, consortium: string, provider: string, taxId: string) {
     log("info", "job", `  Canonizado → consorcio="${consortium}" proveedor="${provider}" CUIT="${taxId}"`, shortId(clientId));

@@ -1,6 +1,6 @@
 # Progreso del proyecto — drive-doc-processor
 
-Actualizado al 26/03/2026 (sesión 12).
+Actualizado al 27/03/2026 (sesión 15).
 
 ---
 
@@ -128,6 +128,23 @@ El sistema core está funcionando en producción. Pipeline de PDFs, extracción 
   - UI: campo "Tamaño de lote" en la página de edición de cliente admin
   - API: endpoint PATCH `/api/admin/clients/[id]` acepta `batchSize` (int, 1-500)
   - Migración: `20260326000100_add_batch_size_and_invoice_tokens`
+- **Constante compartida LSP_LATERAL_CUIT_RULES para CUIT en margen lateral** (27/03/2026)
+  - Nueva constante `LSP_LATERAL_CUIT_RULES` en reglas compartidas de `extraction.ts`
+  - Reemplaza la aclaración inline de Edesur y se incluye también en Edenor
+  - Indica que el CUIT aparece en el margen lateral izquierdo rotado/vertical
+- **Proveedor LSP resuelto por CUIT desde tabla Provider (elimina CUITs hardcodeados)** (27/03/2026)
+  - Nuevo campo `providerId String?` en modelo LspService con FK a Provider
+  - Relación inversa `lspServices LspService[]` en modelo Provider
+  - Migración: `20260327000100_lspservice_add_provider_fk`
+  - Eliminados CUITs hardcodeados de todos los prompts LSP (Edesur, Edenor, AySA, Gas, Personal)
+  - Nueva constante `LSP_PROVIDER_TAX_ID_RULES` reemplaza instrucciones de CUIT específicas por empresa
+  - Exportado `LSP_FALLBACK_NAMES` como mapa LSP → nombre para fallback cuando el proveedor no está en DB
+  - Pipeline: busca proveedor LSP por CUIT en `allTaxIds` contra tabla Provider antes del lookup de LspService
+  - LspService lookup: primero por `providerId` (FK), luego fallback a campo texto `provider` (backward compatible)
+  - Actualización progresiva: si LspService no tiene `providerId` pero se resuelve, se actualiza automáticamente
+  - Sync-directory: resuelve `providerId` al sincronizar `_LspServices` buscando por nombre canónico en Provider
+  - Logger: nuevos métodos `lspProviderResolvedFromDB` y `lspProviderNotInDB`
+  - Si el proveedor LSP no está cargado en Provider → warning + fallback al nombre del router (no rompe pipeline)
 - **Normalización de clientNumber para LspService lookup** (26/03/2026)
   - Pipeline: `extracted.clientNumber` se normaliza con `.replace(/^0+/, "")` antes del lookup de LspService (ej: `00366037` → `366037`)
   - Sync-directory: al sincronizar `_LspServices` desde Sheets, el `clientNumber` se guarda sin ceros a la izquierda

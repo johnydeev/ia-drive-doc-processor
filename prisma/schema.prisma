@@ -309,6 +309,7 @@ model Provider {
   consortiumProviders ConsortiumProvider[]
   invoices            Invoice[]
   receipts            Receipt[]
+  lspServices         LspService[]
 
   @@index([clientId, cuit])
   @@index([clientId])
@@ -350,12 +351,14 @@ model LspService {
   clientId      String
   consortiumId  String
   provider      String
+  providerId    String?
   clientNumber  String
   description   String?
   createdAt     DateTime   @default(now())
   updatedAt     DateTime   @updatedAt
   client        Client     @relation(fields: [clientId], references: [id], onDelete: Cascade)
   consortium    Consortium @relation(fields: [consortiumId], references: [id], onDelete: Cascade)
+  providerRef   Provider?  @relation(fields: [providerId], references: [id], onDelete: SetNull)
   invoices      Invoice[]
 
   @@unique([consortiumId, provider, clientNumber])

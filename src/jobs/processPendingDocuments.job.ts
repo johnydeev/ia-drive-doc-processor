@@ -1,6 +1,6 @@
 import { env } from "@/config/env";
 import { normalizeConsortiumName, consortiumFuzzyMatch, consortiumAliasMatch } from "@/lib/consortiumNormalizer";
-import { identifyLSPProvider, LSPProvider } from "@/lib/extraction";
+import { identifyLSPProvider, LSPProvider, LSP_FALLBACK_NAMES } from "@/lib/extraction";
 import { refineExtractionWithRawText } from "@/lib/extraction";
 import { createEmptyTokenUsageSummary } from "@/lib/createEmptyTokenUsageSummary";
 import { pipelineLog } from "@/lib/logger";
@@ -195,40 +195,83 @@ async function resolveAssignment(
 
   const prisma = getPrismaClient();
 
-  // ── 0. LSP fast path: resolver por LspService si tenemos provider + clientNumber ──
+  // ── 0. LSP fast path: resolver proveedor por CUIT + LspService por clientNumber ──
 
   const normalizedClientNumber = extracted.clientNumber?.replace(/^0+/, "") || null;
+  const allTaxIds = (extracted.allTaxIds ?? []).map((c) => normCuit(c)).filter((c) => c.length >= 10);
+
+  // Resolver proveedor LSP por CUIT en tabla Provider
+  let lspProviderId: string | null = null;
+  let lspProviderCanonical: string | null = null;
+  let lspProviderTaxId: string | null = null;
+  let lspProviderAlias: string | null = null;
+
+  if (lspProvider && allTaxIds.length > 0) {
+    const allProviders = await prisma.provider.findMany({
+      where: { clientId },
+      select: { id: true, canonicalName: true, cuit: true, paymentAlias: true },
+    });
+
+    for (const cuit of allTaxIds) {
+      const found = allProviders.find((p) => normCuit(p.cuit) === cuit);
+      if (found) {
+        lspProviderId = found.id;
+        lspProviderCanonical = found.canonicalName;
+        lspProviderTaxId = found.cuit;
+        lspProviderAlias = found.paymentAlias ?? null;
+        pipelineLog.lspProviderResolvedFromDB(clientId, found.canonicalName, cuit);
+        break;
+      }
+    }
+
+    if (!lspProviderId) {
+      pipelineLog.lspProviderNotInDB(clientId, lspProvider);
+    }
+  }
 
   if (lspProvider && lspProvider !== "GENERIC_LSP" && normalizedClientNumber) {
     try {
-      const lspService = await prisma.lspService.findFirst({
-        where: {
-          clientId,
-          provider: lspProvider,
-          clientNumber: normalizedClientNumber,
-        },
-        include: {
-          consortium: { select: { id: true, canonicalName: true, rawName: true } },
-        },
-      });
+      // Intento 1: buscar por providerId (FK) si lo tenemos
+      let lspService = lspProviderId
+        ? await prisma.lspService.findFirst({
+            where: { clientId, providerId: lspProviderId, clientNumber: normalizedClientNumber },
+            include: { consortium: { select: { id: true, canonicalName: true, rawName: true } } },
+          })
+        : null;
+
+      // Intento 2: fallback a campo texto provider (backward compatible)
+      if (!lspService) {
+        lspService = await prisma.lspService.findFirst({
+          where: { clientId, provider: lspProvider, clientNumber: normalizedClientNumber },
+          include: { consortium: { select: { id: true, canonicalName: true, rawName: true } } },
+        });
+      }
 
       if (lspService) {
         pipelineLog.stepStart(clientId, `LspService match: ${lspProvider} clientNumber=${lspService.clientNumber}`);
+
+        // Actualizar providerId si no estaba seteado y lo tenemos
+        if (lspProviderId && !lspService.providerId) {
+          await prisma.lspService.update({
+            where: { id: lspService.id },
+            data: { providerId: lspProviderId },
+          }).catch(() => { /* non-fatal */ });
+        }
 
         const activePeriod = await consortiumRepository.findActivePeriod(lspService.consortiumId);
 
         return {
           consortiumId: lspService.consortiumId,
-          providerId: undefined,
+          providerId: lspProviderId ?? undefined,
           periodId: activePeriod?.id,
           periodLabel: activePeriod ? formatPeriodLabel(activePeriod.month, activePeriod.year) : null,
           lspServiceId: lspService.id,
           unassigned: false,
           unassignedReason: null,
           canonicalConsortium: lspService.consortium.rawName,
-          canonicalProvider: lspProvider,
-          canonicalProviderTaxId: extracted.providerTaxId,
-          providerPaymentAlias: null,
+          canonicalProvider: lspProviderCanonical ?? LSP_FALLBACK_NAMES[lspProvider] ?? lspProvider,
+          canonicalProviderTaxId: lspProviderTaxId ?? extracted.providerTaxId,
+          providerPaymentAlias: lspProviderAlias,
         };
       }
 
@@ -241,7 +284,6 @@ async function resolveAssignment(
   // ── 1. Consorcio ─────────────────────────────────────────────────────────
 
   const rawConsortium = extracted.consortium?.trim() ?? null;
-  const allTaxIds = (extracted.allTaxIds ?? []).map((c) => normCuit(c)).filter((c) => c.length >= 10);
 
   const allConsortiums = await prisma.consortium.findMany({
     where: { clientId },

@@ -212,10 +212,18 @@ export async function POST(request: NextRequest) {
         });
         const consortiumMap = new Map(currentConsortiums.map((c) => [c.canonicalName, c.id]));
 
+        // Obtener proveedores actuales para resolver providerId por nombre canónico
+        const currentProviders = await tx.provider.findMany({
+          where: { clientId },
+          select: { id: true, canonicalName: true },
+        });
+        const providerMap = new Map(currentProviders.map((p) => [p.canonicalName.toUpperCase(), p.id]));
+
         const validLspServices: Array<{
           clientId: string;
           consortiumId: string;
           provider: string;
+          providerId: string | null;
           clientNumber: string;
           description: string | null;
         }> = [];
@@ -228,10 +236,13 @@ export async function POST(request: NextRequest) {
             );
             continue;
           }
+          // Resolver providerId buscando por nombre en la tabla Provider
+          const providerId = providerMap.get(ls.provider.toUpperCase()) ?? null;
           validLspServices.push({
             clientId,
             consortiumId,
             provider: ls.provider,
+            providerId,
             clientNumber: ls.clientNumber.replace(/^0+/, "") || ls.clientNumber,
             description: ls.description,
           });

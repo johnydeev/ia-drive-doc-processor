@@ -1,5 +1,22 @@
 # Changelog
 
+## 2026-03-27 (sesión 15)
+
+Highlights
+- **LSP_LATERAL_CUIT_RULES**: nueva constante compartida para indicar a la IA que el CUIT aparece en el margen lateral izquierdo rotado/vertical. Incluida en prompts de Edesur y Edenor.
+
+## 2026-03-27 (sesión 14)
+
+Highlights
+- **Prompt Edesur**: aclaración sobre ubicación del CUIT en margen lateral izquierdo (rotado/vertical) para mejorar extracción IA.
+
+## 2026-03-27 (sesión 13)
+
+Highlights
+- **Proveedor LSP resuelto por CUIT desde tabla Provider**: eliminados CUITs hardcodeados de todos los prompts LSP. El pipeline busca el proveedor por CUIT en `allTaxIds` contra la tabla Provider y usa el nombre canónico de la DB. LspService ahora tiene `providerId` FK a Provider. Lookup de LspService: primero por providerId, luego fallback a campo texto. Si el proveedor no está en DB → fallback al nombre del router + warning.
+- **Migración pendiente**: `20260327000100_lspservice_add_provider_fk` — agregar `providerId` FK nullable a LspService.
+- **Sync-directory mejorado**: resuelve `providerId` al sincronizar `_LspServices` buscando por nombre canónico en Provider.
+
 ## 2026-03-26 (sesión 12)
 
 Highlights

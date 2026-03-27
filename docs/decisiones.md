@@ -4,6 +4,42 @@ Registro de decisiones tomadas ante problemas reales encontrados en producción.
 
 ---
 
+## 2026-03-27 — Constante LSP_LATERAL_CUIT_RULES para CUIT en margen lateral
+
+### Problema
+En facturas de Edesur y Edenor el CUIT de la empresa no aparece en el encabezado sino en el margen lateral izquierdo, impreso de forma vertical/rotada. La instrucción genérica `LSP_PROVIDER_TAX_ID_RULES` solo indicaba buscar en el encabezado, lo que hacía que la IA no lo encontrara.
+
+### Decisión
+Crear constante compartida `LSP_LATERAL_CUIT_RULES` e incluirla en `buildEdesurPrompt` y `buildEdenorPrompt` después de `LSP_PROVIDER_TAX_ID_RULES`. Reemplaza la aclaración inline que existía solo en Edesur.
+
+### Impacto
+- Modificado: `src/lib/extraction.ts` (nueva constante + incluida en 2 prompts)
+
+---
+
+## 2026-03-27 — Proveedor LSP resuelto por CUIT desde tabla Provider
+
+### Problema
+Los prompts LSP (Edesur, Edenor, AySA, etc.) tenían CUITs hardcodeados en el código fuente. Esto significaba que agregar un nuevo proveedor LSP requería un cambio de código. Además, el pipeline LSP no resolvía `providerId` — la invoice quedaba sin vínculo al Provider, y el nombre del proveedor venía del router en vez de la DB.
+
+### Decisión
+- Eliminar CUITs hardcodeados de todos los prompts LSP. Reemplazar por `LSP_PROVIDER_TAX_ID_RULES` genérico que instruye a la IA a extraer el CUIT del encabezado.
+- El pipeline ahora busca el proveedor LSP por CUIT (via `allTaxIds`) contra la tabla Provider. Si lo encuentra, usa el nombre canónico de la DB y setea `providerId`.
+- El lookup de LspService intenta primero por `providerId` (FK) y luego por campo texto `provider` (backward compatible).
+- Si un LspService matchea y no tiene `providerId`, se actualiza automáticamente (migración progresiva de datos).
+- Sync-directory resuelve `providerId` al crear LspServices, buscando por nombre canónico en la tabla Provider.
+- Si el proveedor no está en la DB, se usa `LSP_FALLBACK_NAMES` como fallback (nombres hardcodeados del router) y se loguea un warning.
+
+### Alternativas descartadas
+- Mantener CUITs hardcodeados y solo agregar `providerId`: no resuelve el problema de mantenibilidad — cada nuevo proveedor LSP seguiría requiriendo cambio de código.
+- Eliminar el campo texto `provider` de LspService: prematuro, rompe backward compatibility con datos existentes.
+
+### Impacto
+- Migración: `20260327000100_lspservice_add_provider_fk`
+- Modificados: `prisma/schema.prisma`, `src/lib/extraction.ts`, `src/jobs/processPendingDocuments.job.ts`, `src/app/api/client/sync-directory/route.ts`, `src/lib/logger.ts`
+
+---
+
 ## 2026-03-26 — Normalización de clientNumber para LspService lookup
 
 ### Problema

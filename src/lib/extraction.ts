@@ -81,6 +81,19 @@ export type LSPProvider =
   | "PERSONAL"
   | "GENERIC_LSP";
 
+/** Nombres de fallback para proveedores LSP cuando no se encuentran en la DB */
+export const LSP_FALLBACK_NAMES: Partial<Record<LSPProvider, string>> = {
+  EDESUR: "EDESUR S.A.",
+  EDENOR: "EDENOR S.A.",
+  AYSA: "AYSA",
+  METROGAS: "METROGAS S.A.",
+  NATURGY: "NATURGY BAN S.A.",
+  CAMUZZI: "CAMUZZI GAS PAMPEANA S.A.",
+  LITORAL_GAS: "LITORAL GAS S.A.",
+  ABSA: "ABSA",
+  PERSONAL: "PERSONAL",
+};
+
 /**
  * Identifica qué empresa de servicios públicos emitió la factura.
  * Analiza los primeros 4000 caracteres del texto del PDF.
@@ -256,6 +269,19 @@ const PROVIDER_NAME_RULES = [
   "  Ejemplo: 'ASCENSORES POTENZA S.R.L.' → 'ASCENSORES POTENZA S.R.L.' (NO 'ASCENSORES POTENZA').",
 ].join("\n");
 
+const LSP_PROVIDER_TAX_ID_RULES = [
+  "- providerTaxId: CUIT de la EMPRESA DE SERVICIOS emisora (NO del cliente/consorcio).",
+  "  Buscar en el encabezado del documento, junto al nombre/logo de la empresa, etiquetas como 'CUIT', 'CUIT Nº'.",
+  "  ⚠️ TRAMPA COMÚN: el CUIT del CLIENTE (consorcio) aparece prominente en la sección del titular",
+  "  o al final del documento. Ese CUIT NO es el de la empresa emisora. IGNORARLO SIEMPRE.",
+  "  Si no podés identificar con certeza el CUIT de la empresa emisora: null.",
+].join("\n");
+
+const LSP_LATERAL_CUIT_RULES =
+  "  ⚠️ EN ESTA EMPRESA: el CUIT aparece en el margen lateral izquierdo del documento, " +
+  "impreso de manera vertical/rotada junto a datos como 'IVA Responsable Inscripto', " +
+  "'Ingresos Brutos' y 'Fecha de inicio de actividades'. Buscarlo ahí si no aparece en el encabezado.";
+
 const ALL_TAX_IDS_RULES = [
   "- allTaxIds: lista con TODOS los CUIT que aparezcan en el documento, sin clasificar ni interpretar su rol.",
   "  Extraer el número limpio, solo dígitos, sin guiones ni espacios.",
@@ -352,10 +378,8 @@ function buildEdesurPrompt(relevantText: string): string {
     "- provider: siempre 'EDESUR S.A.'",
     PROVIDER_NAME_RULES,
 
-    "- providerTaxId: CUIT de EDESUR → '30-65511651-2'.",
-    "  CUIDADO: en la factura aparece prominente el CUIT del CLIENTE (consorcio) en la sección",
-    "  de datos del titular/receptor. Ese CUIT NO es de Edesur. Ignorarlo completamente.",
-    "  El CUIT de Edesur suele estar junto al nombre 'EDESUR S.A.' en el bloque del emisor.",
+    LSP_PROVIDER_TAX_ID_RULES,
+    LSP_LATERAL_CUIT_RULES,
 
     "- boletaNumber: extraer de la línea tipo 'LSP B PPPP-NNNNNNNN NN'.",
     "  Tomar SOLO la parte PPPP-NNNNNNNN (ej: de 'LSP B 0501-73540975 18' → '0501-73540975').",
@@ -409,9 +433,8 @@ function buildEdenorPrompt(relevantText: string): string {
     "- provider: siempre 'EDENOR S.A.'",
     PROVIDER_NAME_RULES,
 
-    "- providerTaxId: CUIT de EDENOR → '30-65511620-2'.",
-    "  CUIDADO: el CUIT del CLIENTE (consorcio) aparece en la sección del titular.",
-    "  NO es el providerTaxId. Ignorarlo.",
+    LSP_PROVIDER_TAX_ID_RULES,
+    LSP_LATERAL_CUIT_RULES,
 
     "- boletaNumber: buscar formato LSP similar a Edesur: 'LSP B PPPP-NNNNNNNN'.",
     "  Extraer solo PPPP-NNNNNNNN. Si no hay ese formato, buscar 'Nro. Factura' o similar.",
@@ -468,12 +491,7 @@ function buildAysaPrompt(relevantText: string): string {
     "- provider: siempre 'AYSA' (o 'AGUA Y SANEAMIENTOS ARGENTINOS S.A.' si aparece completo).",
     PROVIDER_NAME_RULES,
 
-    "- providerTaxId: CUIT de AySA → '30-70956507-5'.",
-    "  El CUIT de AySA está en el encabezado junto a 'AySA', 'CUIT Nº' e inicio de actividades.",
-    "  ⚠️ TRAMPA COMÚN: al FINAL del documento aparece:",
-    "    'IVA RESPONSABLE INSCRIPTO - CUIT No. XX-XXXXXXXX-X'",
-    "    Ese es el CUIT del CLIENTE (consorcio). NO es de AySA. IGNORARLO SIEMPRE.",
-    "  Si no podés confirmar 30-70956507-5 en el texto: usar null, nunca el del cliente.",
+    LSP_PROVIDER_TAX_ID_RULES,
 
     "- boletaNumber: número alfanumérico largo, formato típico '0106A11487223'.",
     "  Tomarlo tal cual aparece. Puede estar etiquetado como 'Nro.' o en el código de barras.",
@@ -518,13 +536,6 @@ function buildAysaPrompt(relevantText: string): string {
 // Gas companies prompt (Metrogas, Naturgy, Camuzzi, Litoral Gas)
 // ═══════════════════════════════════════════════════════════════════════════
 
-const GAS_PROVIDER_CUITS: Record<string, string> = {
-  METROGAS: "30-65786442-4",
-  NATURGY: "30-53330905-7",
-  CAMUZZI: "30-65786613-3",
-  LITORAL_GAS: "30-66176173-2",
-};
-
 const GAS_PROVIDER_NAMES: Record<string, string> = {
   METROGAS: "METROGAS S.A.",
   NATURGY: "NATURGY BAN S.A.",
@@ -534,15 +545,6 @@ const GAS_PROVIDER_NAMES: Record<string, string> = {
 
 function buildGasPrompt(relevantText: string, provider: LSPProvider): string {
   const providerName = GAS_PROVIDER_NAMES[provider] ?? provider;
-  const providerCuit = GAS_PROVIDER_CUITS[provider] ?? null;
-  const cuitInstruction = providerCuit
-    ? `- providerTaxId: CUIT de ${providerName} → '${providerCuit}'.\n` +
-      "  CUIDADO: el CUIT del CLIENTE (consorcio) aparece en la sección del titular.\n" +
-      "  NO es el providerTaxId. Ignorarlo.\n" +
-      `  Si no podés confirmar '${providerCuit}' en el texto: usar null.`
-    : "- providerTaxId: CUIT de la EMPRESA DE GAS (NO del cliente).\n" +
-      "  Buscar en el bloque del emisor junto al nombre de la empresa.\n" +
-      "  El CUIT del cliente/consorcio NO es el providerTaxId. Ignorarlo.";
 
   return [
     `Extrae datos de una factura de ${providerName} (gas natural) argentina.`,
@@ -553,7 +555,7 @@ function buildGasPrompt(relevantText: string, provider: LSPProvider): string {
     `- provider: siempre '${providerName}'.`,
     PROVIDER_NAME_RULES,
 
-    cuitInstruction,
+    LSP_PROVIDER_TAX_ID_RULES,
 
     "- boletaNumber: número de la liquidación/factura.",
     "  Buscar 'Nro. Factura', 'Nro. Comprobante', o formato LSP.",
@@ -598,12 +600,7 @@ function buildGenericUtilityBillPrompt(relevantText: string): string {
     "  Ejemplos: 'EDESUR', 'EDENOR', 'AYSA', 'METROGAS', 'NATURGY', 'CAMUZZI'.",
     PROVIDER_NAME_RULES,
 
-    "- providerTaxId: CUIT de la EMPRESA DE SERVICIOS, NO del cliente/consorcio.",
-    "  El CUIT de la empresa está en su bloque de datos (junto a nombre, IIBB, inicio de actividades).",
-    "  ⚠️ REGLA CRÍTICA: En estos documentos el CUIT del CLIENTE (consorcio) suele aparecer",
-    "  muy prominente en la sección del titular o al final del documento. Ese CUIT NO es el",
-    "  del proveedor. NUNCA usarlo como providerTaxId.",
-    "  Si no podés identificar con certeza el CUIT de la EMPRESA: null.",
+    LSP_PROVIDER_TAX_ID_RULES,
 
     CONSORTIUM_ADDRESS_RULES,
 
@@ -647,9 +644,7 @@ function buildPersonalPrompt(relevantText: string): string {
     "- provider: siempre 'PERSONAL'.",
     PROVIDER_NAME_RULES,
 
-    "- providerTaxId: CUIT de Telecom Argentina → '30-63945373-8'.",
-    "  CUIDADO: el CUIT del CLIENTE (consorcio) aparece en la sección del titular.",
-    "  NO es el providerTaxId. Ignorarlo.",
+    LSP_PROVIDER_TAX_ID_RULES,
 
     "- boletaNumber: buscar 'N° de Factura XXXXX-XXXXXXXX'. Tomar el formato completo.",
 
