@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-03-28
+
+Highlights
+- **Manual de usuario creado** (`docs/manual-usuario.md`): documentación completa para usuarios finales no técnicos. Cubre acceso al sistema, panel principal, configuración inicial, archivo ALTA (con ejemplos de tablas para cada hoja), sincronización de directorio, procesamiento automático de boletas, resolución de boletas sin asignar, cierre de período, recibos de pago, y avisos importantes.
+
 ## 2026-03-27 (sesión 20)
 
 Highlights
