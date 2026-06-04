@@ -4,9 +4,76 @@ import { getPrismaClient } from "@/lib/prisma";
 import { PdfTextExtractorService } from "@/services/pdfTextExtractor.service";
 import { resolveAiConfig } from "@/lib/clientProcessingConfig";
 import { ClientDriveFolders, ClientGoogleConfig, ProcessingClient } from "@/types/client.types";
-import { normalizeConsortiumName } from "@/lib/consortiumNormalizer";
+import {
+  normalizeConsortiumName,
+  consortiumFuzzyMatch,
+  consortiumAliasMatch,
+} from "@/lib/consortiumNormalizer";
 import { isPdf, isPng, isJpeg } from "@/lib/fileSignature";
 import { env } from "@/config/env";
+
+/** CUIT/DNI normalizado: solo dígitos. */
+function normCuit(v: string | null | undefined): string {
+  return (v ?? "").replace(/\D/g, "");
+}
+
+type ConsortiumMatchRow = {
+  id: string;
+  canonicalName: string;
+  rawName: string;
+  cuit: string | null;
+  matchNames: string | null;
+};
+
+/**
+ * Replica el matching de consorcio del pipeline principal
+ * (processPendingDocuments.job.ts) en 4 niveles, en orden de confianza:
+ *   0. CUIT (allTaxIds) — incluye CUITs alternativos en matchNames
+ *   1. Nombre exacto normalizado
+ *   2. Fuzzy (tokens del canonicalName presentes en el OCR)
+ *   3. Alias (matchNames)
+ *
+ * Devuelve el consorcio que matchea (o null si ninguno).
+ */
+function findMatchingConsortium(
+  allTaxIds: string[],
+  rawConsortium: string | null,
+  consortiums: ConsortiumMatchRow[]
+): { row: ConsortiumMatchRow; method: string } | null {
+  // Intento 0: CUIT (señal más fuerte)
+  for (const cuit of allTaxIds) {
+    const found = consortiums.find((c) => {
+      if (c.cuit && normCuit(c.cuit) === cuit) return true;
+      const altNames = (c.matchNames ?? "").split("|").map((n) => n.trim()).filter(Boolean);
+      return altNames.some((alt) => {
+        const normAlt = normCuit(alt);
+        return normAlt.length >= 10 && normAlt === cuit;
+      });
+    });
+    if (found) return { row: found, method: `CUIT (${cuit})` };
+  }
+
+  if (rawConsortium) {
+    const canonicalName = normalizeConsortiumName(rawConsortium);
+
+    // Intento 1: exacto
+    let row = consortiums.find((c) => c.canonicalName === canonicalName);
+    if (row) return { row, method: "exacto" };
+
+    // Intento 2: fuzzy
+    row = consortiums.find((c) => consortiumFuzzyMatch(rawConsortium, c.canonicalName));
+    if (row) return { row, method: "fuzzy" };
+
+    // Intento 3: alias (matchNames)
+    row = consortiums.find((c) => {
+      const names = (c.matchNames ?? "").split("|").map((a) => a.trim()).filter(Boolean);
+      return consortiumAliasMatch(rawConsortium, names);
+    });
+    if (row) return { row, method: "alias" };
+  }
+
+  return null;
+}
 
 /**
  * POST /api/client/consortiums/[id]/invoices/scan
@@ -31,7 +98,7 @@ export async function POST(
     // Consorcio seleccionado actualmente
     const selectedConsortium = await prisma.consortium.findFirst({
       where: { id: consortiumId, clientId: auth.session.clientId },
-      select: { id: true, canonicalName: true, rawName: true },
+      select: { id: true, canonicalName: true, rawName: true, cuit: true, matchNames: true },
     });
     if (!selectedConsortium) {
       return NextResponse.json({ ok: false, error: "Consorcio no encontrado" }, { status: 404 });
@@ -170,30 +237,39 @@ export async function POST(
     }
 
     // ── Validación de consorcio ──────────────────────────────────────────────
+    // Replica el matching robusto del pipeline (CUIT → exacto → fuzzy → alias)
+    // en vez de comparar igualdad exacta de nombre normalizado. Esto evita
+    // falsos positivos cuando la IA confunde el proveedor con el consorcio
+    // o cuando el nombre tiene abreviaturas/ceros/sufijos de LSP.
+    //
+    // Filosofía: solo se declara mismatch si hay EVIDENCIA FUERTE de que la
+    // boleta es de OTRO consorcio del cliente. Si no se puede determinar
+    // (IA confundió campos, OCR pobre), NO se bloquea — el usuario eligió el
+    // consorcio a propósito.
     let consortiumMismatch = false;
     let foundConsortium: string | null = null;
 
-    const extractedConsortiumRaw = extracted.consortium as string | null | undefined;
+    const allTaxIds = ((extracted.allTaxIds as string[] | null | undefined) ?? [])
+      .map((c) => normCuit(c))
+      .filter((c) => c.length >= 10);
+    const rawConsortium = (extracted.consortium as string | null | undefined)?.trim() ?? null;
 
-    if (extractedConsortiumRaw?.trim()) {
-      const extractedNorm = normalizeConsortiumName(extractedConsortiumRaw);
-      const selectedNorm  = normalizeConsortiumName(selectedConsortium.canonicalName);
+    // Solo vale la pena evaluar si hay alguna señal (CUIT o nombre extraído)
+    if (allTaxIds.length > 0 || rawConsortium) {
+      const allConsortiums = await prisma.consortium.findMany({
+        where: { clientId: auth.session.clientId },
+        select: { id: true, canonicalName: true, rawName: true, cuit: true, matchNames: true },
+      });
 
-      if (extractedNorm && selectedNorm && extractedNorm !== selectedNorm) {
-        // Buscar en todos los consorcios del cliente cuál coincide
-        const allConsortiums = await prisma.consortium.findMany({
-          where: { clientId: auth.session.clientId },
-          select: { canonicalName: true, rawName: true },
-        });
+      const match = findMatchingConsortium(allTaxIds, rawConsortium, allConsortiums);
 
-        const match = allConsortiums.find(
-          (c) => normalizeConsortiumName(c.canonicalName) === extractedNorm ||
-                 normalizeConsortiumName(c.rawName) === extractedNorm
-        );
-
+      // Mismatch SOLO si la boleta matchea claramente con otro consorcio.
+      // - match al seleccionado  → pertenece, no se avisa.
+      // - match === null         → indeterminado, no se bloquea.
+      // - match a otro consorcio → error de carga real, se avisa.
+      if (match && match.row.id !== selectedConsortium.id) {
         consortiumMismatch = true;
-        // Mostrar el nombre real registrado si existe, si no el que extrajo la IA
-        foundConsortium = match?.rawName ?? extractedConsortiumRaw.trim();
+        foundConsortium = match.row.rawName;
       }
     }
 

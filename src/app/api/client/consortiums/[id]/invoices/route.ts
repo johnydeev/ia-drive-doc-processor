@@ -5,9 +5,11 @@ import { requireClientSession } from "@/lib/clientAuth";
 import { getPrismaClient } from "@/lib/prisma";
 import { createHash } from "crypto";
 import { GoogleSheetsService, SheetsRowMapping } from "@/services/googleSheets.service";
-import { resolveGoogleConfig, resolveMapping, resolveSheetName } from "@/lib/clientProcessingConfig";
+import { GoogleDriveService } from "@/services/googleDrive.service";
+import { resolveGoogleConfig, resolveMapping, resolveSheetName, resolveFolders } from "@/lib/clientProcessingConfig";
 import { ClientDriveFolders, ClientGoogleConfig, ProcessingClient } from "@/types/client.types";
 import { ExtractedDocumentData } from "@/types/extractedDocument.types";
+import { isPdf } from "@/lib/fileSignature";
 
 const DEFAULT_MAPPING: SheetsRowMapping = {
   boletaNumber: "A",
@@ -121,7 +123,39 @@ export async function POST(
       return NextResponse.json({ ok: false, error: "Consorcio no encontrado" }, { status: 404 });
     }
 
-    const body = createSchema.parse(await request.json());
+    // El body llega como JSON (sin archivo) o como multipart/form-data cuando
+    // la carga asistida adjunta el PDF que se escaneó, para guardarlo en Drive.
+    const contentType = request.headers.get("content-type") ?? "";
+    let body: z.infer<typeof createSchema>;
+    let pdfFile: File | null = null;
+
+    if (contentType.includes("multipart/form-data")) {
+      const fd = await request.formData();
+      const f = fd.get("pdf");
+      if (f && typeof f !== "string") pdfFile = f;
+      const field = (k: string): string | undefined => {
+        const v = fd.get(k);
+        return typeof v === "string" && v.length > 0 ? v : undefined;
+      };
+      const amountRaw = field("amount");
+      body = createSchema.parse({
+        providerId:      field("providerId"),
+        periodId:        field("periodId"),
+        boletaNumber:    field("boletaNumber"),
+        providerTaxId:   field("providerTaxId"),
+        detail:          field("detail"),
+        observation:     field("observation"),
+        issueDate:       field("issueDate"),
+        dueDate:         field("dueDate"),
+        amount:          amountRaw !== undefined ? Number(amountRaw) : undefined,
+        coeficienteId:   field("coeficienteId"),
+        rubroId:         field("rubroId"),
+        tipoGasto:       field("tipoGasto") ?? "ORDINARIO",
+        tipoComprobante: field("tipoComprobante"),
+      });
+    } else {
+      body = createSchema.parse(await request.json());
+    }
 
     const period = await prisma.period.findFirst({
       where: { id: body.periodId, consortiumId },
@@ -145,6 +179,66 @@ export async function POST(
     const canonicalTaxId = provider.cuit || body.providerTaxId || null;
     const canonicalTaxIdNorm = (canonicalTaxId ?? "").replace(/\D/g, "");
 
+    // Config del cliente (Drive + Sheets), resuelta una sola vez.
+    const clientRow = await prisma.client.findUnique({
+      where: { id: auth.session.clientId },
+      select: { driveFoldersJson: true, googleConfigJson: true, extractionConfigJson: true },
+    });
+    const processingClient: ProcessingClient | null = clientRow
+      ? {
+          id: auth.session.clientId,
+          name: "",
+          isActive: true,
+          batchSize: 10,
+          intervalMinutes: 60,
+          driveFoldersJson: (clientRow.driveFoldersJson as ClientDriveFolders | null) ?? null,
+          googleConfigJson: (clientRow.googleConfigJson as ClientGoogleConfig | null) ?? null,
+          extractionConfigJson: (clientRow.extractionConfigJson as Record<string, unknown> | null) ?? null,
+        }
+      : null;
+    const googleConfig = processingClient ? resolveGoogleConfig(processingClient) : null;
+
+    // ── Subir el PDF de la carga asistida a Drive (si vino archivo) ─────────
+    // La boleta se guarda igual aunque Drive falle; el motivo se expone vía
+    // `driveWarning`.
+    let sourceFileUrl: string | null = null;
+    let driveFileId: string | null = null;
+    let driveWarning: string | null = null;
+
+    if (pdfFile) {
+      const MAX_PDF_SIZE = 15 * 1024 * 1024; // 15MB
+      if (pdfFile.size > MAX_PDF_SIZE) {
+        driveWarning = "El PDF supera 15MB, no se adjuntó a Drive.";
+      } else {
+        const pdfBuffer = Buffer.from(await pdfFile.arrayBuffer());
+        if (!isPdf(pdfBuffer)) {
+          driveWarning = "El archivo adjunto no es un PDF válido, no se guardó en Drive.";
+        } else if (!googleConfig) {
+          driveWarning = "Sin credenciales de Google, el PDF no se guardó en Drive.";
+        } else {
+          const folders = processingClient ? resolveFolders(processingClient) : ({} as ReturnType<typeof resolveFolders>);
+          const destFolderId = folders.scanned ?? folders.receipts ?? null;
+          if (!destFolderId) {
+            driveWarning = "Sin carpeta de Drive configurada (Escaneados), el PDF no se guardó.";
+          } else {
+            try {
+              const driveService = new GoogleDriveService(googleConfig);
+              const fileName = pdfFile.name || `boleta_${Date.now()}.pdf`;
+              const uploaded = await driveService.uploadFile(pdfBuffer, fileName, "application/pdf", destFolderId);
+              driveFileId = uploaded.id || null;
+              sourceFileUrl =
+                uploaded.webViewLink ??
+                (uploaded.id ? `https://drive.google.com/file/d/${uploaded.id}/view` : null);
+            } catch (driveError) {
+              const detail = driveError instanceof Error ? driveError.message : "Error desconocido";
+              console.warn(`[manual-invoice] drive upload failed: ${detail}`);
+              driveWarning = `No se pudo subir el PDF a Drive: ${detail}`;
+            }
+          }
+        }
+      }
+    }
+
     const invoice = await prisma.invoice.create({
       data: {
         clientId:         auth.session.clientId,
@@ -166,6 +260,8 @@ export async function POST(
         tipoComprobante:  body.tipoComprobante || null,
         isManual:         true,
         isDuplicate:      false,
+        driveFileId,
+        sourceFileUrl,
         boletaNumberNorm: (body.boletaNumber ?? "").toUpperCase().trim(),
         providerTaxIdNorm: canonicalTaxIdNorm,
         dueDateNorm:      body.dueDate ?? "",
@@ -173,30 +269,19 @@ export async function POST(
       },
     });
 
-    // Insertar en Google Sheets
+    // Insertar en Google Sheets.
+    // La boleta YA está en la DB. Si Sheets falla, no abortamos (sería peor
+    // dejar la boleta sin guardar), pero exponemos el motivo al usuario vía
+    // `sheetsWarning` en la respuesta para que no quede un fallo silencioso.
+    let sheetsWarning: string | null = null;
     try {
-      const clientRow = await prisma.client.findUnique({
-        where: { id: auth.session.clientId },
-        select: { driveFoldersJson: true, googleConfigJson: true, extractionConfigJson: true },
-      });
-
-      if (clientRow) {
-        const processingClient: ProcessingClient = {
-          id: auth.session.clientId,
-          name: "",
-          isActive: true,
-          batchSize: 10,
-          intervalMinutes: 60,
-          driveFoldersJson: (clientRow.driveFoldersJson as ClientDriveFolders | null) ?? null,
-          googleConfigJson: (clientRow.googleConfigJson as ClientGoogleConfig | null) ?? null,
-          extractionConfigJson: (clientRow.extractionConfigJson as Record<string, unknown> | null) ?? null,
-        };
-
-        const googleConfig = resolveGoogleConfig(processingClient);
+      if (processingClient) {
         const sheetName = resolveSheetName(processingClient);
         const mapping = resolveMapping(processingClient) ?? DEFAULT_MAPPING;
 
-        if (googleConfig) {
+        if (!googleConfig) {
+          sheetsWarning = "El cliente no tiene Google Sheets configurado, la boleta no se escribió en la planilla.";
+        } else {
           const sheetsService = new GoogleSheetsService(googleConfig);
           const sheetData: ExtractedDocumentData = {
             boletaNumber:  invoice.boletaNumber,
@@ -211,7 +296,7 @@ export async function POST(
             clientNumber:  null,
             paymentMethod: null,
             period:        period ? `${String(period.month).padStart(2, "0")}/${period.year}` : null,
-            sourceFileUrl: null,
+            sourceFileUrl: invoice.sourceFileUrl,
             isDuplicate:   "NO",
             paymentStatus: "Sin pagar",
             bank: consortium.bank ?? null,
@@ -220,14 +305,12 @@ export async function POST(
         }
       }
     } catch (sheetsError) {
-      console.warn(
-        `[manual-invoice] sheets insert failed invoiceId=${invoice.id}: ${
-          sheetsError instanceof Error ? sheetsError.message : "Unknown error"
-        }`
-      );
+      const detail = sheetsError instanceof Error ? sheetsError.message : "Error desconocido";
+      console.warn(`[manual-invoice] sheets insert failed invoiceId=${invoice.id}: ${detail}`);
+      sheetsWarning = `La boleta se guardó pero no se pudo escribir en Google Sheets: ${detail}`;
     }
 
-    return NextResponse.json({ ok: true, invoice });
+    return NextResponse.json({ ok: true, invoice, sheetsWarning, driveWarning });
   } catch (error) {
     const message =
       error instanceof z.ZodError

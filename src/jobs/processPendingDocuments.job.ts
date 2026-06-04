@@ -27,6 +27,7 @@ export interface ProcessJobConfig {
   driveUnassignedFolderId?: string | null;
   driveFailedFolderId?: string | null;
   driveProcessingFolderId?: string | null;
+  driveDuplicatesFolderId?: string | null;
   googleConfig?: ClientGoogleConfig | null;
   aiConfig?: {
     geminiApiKey?: string;
@@ -822,15 +823,31 @@ async function processDriveFile(
       return;
     }
 
-    await runStep("Insertar en Google Sheets", () =>
-      sheetsService.insertRow(resolvedConfig.sheetName, extracted!, resolvedMapping)
-    );
-    pipelineLog.sheetsInserted(cid);
+    // Duplicados: NO se escriben en Sheets ni en DB — así la planilla y la DB
+    // se mantienen 1:1. El PDF se mueve a la carpeta "Duplicados" si está
+    // configurada; si no, a Escaneados (no se pierde, queda para revisión).
+    if (!isDuplicate) {
+      await runStep("Insertar en Google Sheets", () =>
+        sheetsService.insertRow(resolvedConfig.sheetName, extracted!, resolvedMapping)
+      );
+      pipelineLog.sheetsInserted(cid);
+    } else {
+      pipelineLog.stepStart(cid, "📋 Duplicado — no se escribe en Sheets (consistencia DB↔Sheets)");
+    }
 
-    await runStep("Mover a Escaneados", () =>
-      driveService.moveFileToScanned(file.id, finalSourceFolderId, resolvedConfig.driveScannedFolderId)
-    );
-    pipelineLog.movedToScanned(cid, file.id);
+    if (isDuplicate && resolvedConfig.driveDuplicatesFolderId && finalSourceFolderId) {
+      const fromFolder = finalSourceFolderId;
+      const dupFolder = resolvedConfig.driveDuplicatesFolderId;
+      await runStep("Mover a Duplicados", () =>
+        driveService.moveFileToFolder(file.id, fromFolder, dupFolder)
+      );
+      pipelineLog.stepStart(cid, "→ Duplicado movido a carpeta Duplicados");
+    } else {
+      await runStep("Mover a Escaneados", () =>
+        driveService.moveFileToScanned(file.id, finalSourceFolderId, resolvedConfig.driveScannedFolderId)
+      );
+      pipelineLog.movedToScanned(cid, file.id);
+    }
 
     if (!isDuplicate) {
       await runStep("Guardar invoice", () =>
@@ -848,7 +865,7 @@ async function processDriveFile(
       );
       pipelineLog.invoiceSaved(cid, isDuplicate);
     } else {
-      pipelineLog.stepStart(cid, "📋 Duplicado — no se guarda en DB (solo Sheets)");
+      pipelineLog.stepStart(cid, "📋 Duplicado — no se guarda en DB");
     }
 
     if (duplicateKey) existingDuplicateKeys.add(duplicateKey);
@@ -880,7 +897,7 @@ function buildLegacyConfig(sheetName: string, mapping?: SheetsRowMapping): Proce
     clientId: "default-env-client", clientName: "Default Client", sheetName, mapping,
     drivePendingFolderId: env.GOOGLE_DRIVE_PENDING_FOLDER_ID,
     driveScannedFolderId: env.GOOGLE_DRIVE_SCANNED_FOLDER_ID,
-    driveUnassignedFolderId: null, driveFailedFolderId: null, driveProcessingFolderId: null, googleConfig: null,
+    driveUnassignedFolderId: null, driveFailedFolderId: null, driveProcessingFolderId: null, driveDuplicatesFolderId: null, googleConfig: null,
   };
 }
 
@@ -893,6 +910,7 @@ function normalizeConfig(config: ProcessJobConfig | string, mapping?: SheetsRowM
     driveUnassignedFolderId: config.driveUnassignedFolderId ?? null,
     driveFailedFolderId: config.driveFailedFolderId ?? null,
     driveProcessingFolderId: config.driveProcessingFolderId ?? null,
+    driveDuplicatesFolderId: config.driveDuplicatesFolderId ?? null,
   };
 }
 

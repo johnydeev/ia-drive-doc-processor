@@ -107,7 +107,7 @@ Client          → Tenant. Roles: ADMIN / CLIENT / VIEWER. consortiumsEnabled (
 > **Nota:** Rubro y Coeficiente son a nivel CLIENT (no por consorcio).
 ### Campos importantes en Invoice
 - `boletaNumberNorm`, `providerTaxIdNorm`, `dueDateNorm`, `amountNorm` → business key para deduplicación
-- `isDuplicate` → flag (sigue yendo a Sheets, no se mueve en Drive)
+- `isDuplicate` → flag. **Desde 2026-06-04: los duplicados NO se escriben en Sheets ni en DB** (consistencia DB↔Sheets). El PDF se mueve a la carpeta `duplicates` si está configurada, sino a Escaneados. Antes se escribían en Sheets marcados "YES".
 - `tipoGasto` → enum: ORDINARIO / EXTRAORDINARIO / PARTICULAR
 - `tipoComprobante` → string libre (A, B, C, Ticket, Recibo, etc.)
 - `lspServiceId` → FK nullable a LspService (vincula factura LSP con servicio específico)
@@ -132,17 +132,19 @@ Client          → Tenant. Roles: ADMIN / CLIENT / VIEWER. consortiumsEnabled (
 ### googleConfigJson por cliente
 ```json
 {
-  "clientEmail":   "...",
-  "privateKey":    "[ENCRYPTED]",
-  "sheetsId":      "ID_ARCHIVO_DATOS",
-  "altaSheetsId":  "ID_ARCHIVO_ALTA",
-  "geminiApiKey":  "[ENCRYPTED]",
-  "openaiApiKey":  "[ENCRYPTED]"
+  "clientEmail":      "...",
+  "privateKey":       "[ENCRYPTED]",
+  "sheetsId":         "ID_ARCHIVO_DATOS",
+  "altaSheetsId":     "ID_ARCHIVO_ALTA",
+  "geminiApiKey":     "[ENCRYPTED]",
+  "openaiApiKey":     "[ENCRYPTED]",
+  "impersonateEmail": "contacto@dominio.com"
 }
 ```
 - `sheetsId` → archivo de boletas (Datos)
 - `altaSheetsId` → archivo ALTA separado para sync de directorio (Consorcios, Proveedores, Rubros, Coeficientes)
 - `privateKey`, `geminiApiKey`, `openaiApiKey` se guardan **encriptados** en DB. Usar `resolveGoogleConfig(client)` para obtenerlos desencriptados.
+- `impersonateEmail` → opcional, **texto plano (no encriptado)**. Soporte de domain-wide delegation: si está presente, `GoogleDriveService` impersona ese usuario (`subject` en el JWT). Permite a la service account CREAR archivos en "Mi unidad" (las SA no tienen cuota propia). Fallback global: env `GOOGLE_IMPERSONATE_EMAIL`. **No usado en MorinigoAdm** — para crear archivos en Drive se optó por **Unidad Compartida** (ver abajo), que no requiere impersonation ni super admin. El soporte queda disponible por si algún cliente prefiere delegación.
 ---
 ## Feature: Sincronización Directorio ALTA (Sheets → DB)
 ### Flujo
@@ -180,9 +182,9 @@ Siempre usar `resolveGoogleConfig(client)` para construir el `GoogleSheetsServic
 6. **Resolve assignment** → match consorcio + proveedor + período activo del consorcio
 7. **Canonización** → reemplazar datos OCR por datos canónicos de DB
 8. **LspService lookup** → si es LSP y tiene clientNumber, buscar en tabla LspService
-9. **Insert Sheets** → fila con monto formateado en es-AR ($ 118.000,00) + período (MM/YYYY)
-10. **Mover archivo** → Escaneados (ok) / Sin Asignar (no matcheó)
-11. **Guardar Invoice** + métricas (con lspServiceId y paymentMethod si aplica)
+9. **Insert Sheets** → fila con monto formateado en es-AR ($ 118.000,00) + período (MM/YYYY). **Solo si NO es duplicado** (los duplicados no se escriben en Sheets desde 2026-06-04).
+10. **Mover archivo** → Escaneados (ok) / Sin Asignar (no matcheó) / **Duplicados** (si es duplicado y `driveFoldersJson.duplicates` está configurada; sino va a Escaneados).
+11. **Guardar Invoice** + métricas (con lspServiceId y paymentMethod si aplica). **Solo si NO es duplicado** (los duplicados no se persisten en DB — lo impide el unique `uq_invoice_business_key`).
 ### Matching de consorcio (3 niveles, en orden)
 1. **Exacto** → `normalizeConsortiumName(rawOcr) === canonicalName`
 2. **Fuzzy** → todos los tokens de `canonicalName` aparecen en `rawOcr`
@@ -320,10 +322,18 @@ Respuesta: `{ ok, deleted, driveMovedBack, driveFailed, sheetsCleared }`
   "scanned":    "ID_CARPETA_ESCANEADOS",
   "unassigned": "ID_CARPETA_SIN_ASIGNAR",
   "failed":     "ID_CARPETA_FALLIDOS",
-  "receipts":   "ID_CARPETA_RECIBOS"
+  "receipts":   "ID_CARPETA_RECIBOS",
+  "processing": "ID_CARPETA_PROCESANDO",
+  "duplicates": "ID_CARPETA_DUPLICADOS"
 }
 ```
-Diagnóstico: `npx tsx scripts/fix-client-folders.ts`
+- `processing` → lock de archivo durante el procesamiento (opcional).
+- `duplicates` → destino de las boletas duplicadas (opcional). Si no está, los duplicados van a `scanned`.
+
+> **Service accounts y creación de archivos:** una SA no tiene cuota de almacenamiento, así que **no puede CREAR archivos en "Mi unidad"** (sí mover/leer). El pipeline automático funciona porque solo MUEVE archivos que el usuario sube a `pending`. Para que la app CREE archivos (carga manual del PDF, recibos), las carpetas deben vivir en una **Unidad Compartida (Shared Drive)** con la SA como miembro (rol Administrador de contenido) — el código ya soporta Shared Drives (`supportsAllDrives`/`includeItemsFromAllDrives`). Alternativa: domain-wide delegation vía `impersonateEmail` (requiere super admin). MorinigoAdm usa Unidad Compartida "Control de Boletas y Pagos".
+
+Diagnóstico carpetas: `npx tsx scripts/fix-client-folders.ts`
+Diagnóstico consistencia Sheets↔DB: `npx tsx scripts/diag-sheets-consistency.ts`
 ---
 ## Autenticación
 - Cookie `dpp_session` (httpOnly, sameSite=lax)
@@ -413,6 +423,7 @@ PROCESS_INTERVAL_MINUTES=   # Intervalo scheduler (ej: 5)
 # Opcionales (fallback global si el cliente no tiene config propia)
 GOOGLE_CLIENT_EMAIL=
 GOOGLE_PRIVATE_KEY=
+GOOGLE_IMPERSONATE_EMAIL=    # opcional: domain-wide delegation (fallback global de googleConfigJson.impersonateEmail)
 GOOGLE_DRIVE_PENDING_FOLDER_ID=
 GOOGLE_DRIVE_SCANNED_FOLDER_ID=
 GOOGLE_SHEETS_ID=

@@ -43,10 +43,16 @@ export class GoogleDriveService {
       throw new Error("Missing Google Drive credentials. Configure client credentials in DB or GOOGLE_CLIENT_EMAIL/GOOGLE_PRIVATE_KEY.");
     }
 
+    // Domain-wide delegation: si hay un usuario a impersonar, la SA actúa en
+    // su nombre. Necesario para CREAR archivos en Drive (las SA no tienen
+    // cuota propia). Sin esto, sólo se pueden leer/mover archivos existentes.
+    const subject = googleConfig?.impersonateEmail || env.GOOGLE_IMPERSONATE_EMAIL || undefined;
+
     const auth = new google.auth.JWT({
       email: clientEmail,
       key: privateKey.replace(/\\n/g, "\n"),
       scopes: ["https://www.googleapis.com/auth/drive"],
+      ...(subject ? { subject } : {}),
     });
 
     this.drive = google.drive({ version: "v3", auth });

@@ -4,6 +4,230 @@ Registro de decisiones tomadas ante problemas reales encontrados en producción.
 
 ---
 
+## 2026-06-04 — Duplicados: consistencia DB↔Sheets (no persistir en DB)
+
+### Problema
+El usuario reportó que la boleta RIVADAVIA 4243 (`0002-00330905`) estaba en la
+DB pero no en Sheets, y pidió "ajustar la consistencia entre DB y Sheets".
+
+### Investigación (systematic-debugging, read-only)
+Se creó `scripts/diag-sheets-consistency.ts` para comparar la hoja contra la
+DB. Hallazgos:
+- **No había bug de inserción:** RIVADAVIA SÍ estaba en Sheets (última fila,
+  523). El reporte fue un falso negativo (no se scrolleó hasta el fondo).
+- `insertRow` sano: 0 gaps, 0 filas fantasma.
+- La diferencia real: Sheets 522 filas de datos vs DB 499 = **23 de más**, que
+  corresponden a **22 boletas duplicadas** (`isDuplicate=YES`) que el pipeline
+  escribe en Sheets pero NO en DB (comportamiento documentado), + 1 fila
+  huérfana suelta.
+
+### Decisión
+A pedido del usuario: **los duplicados ya no se escriben en Sheets** (de ahora
+en más), para mantener la planilla 1:1 con la DB. Además, carpeta opcional
+`driveFoldersJson.duplicates`: si está, el PDF duplicado se mueve ahí; si no,
+sigue yendo a Escaneados. **Lo ya registrado en Sheets no se toca.**
+
+### Alternativas descartadas
+- **Persistir los duplicados en la DB** (para que DB tenga lo mismo que
+  Sheets): se descartó por dos razones de peso:
+  1. Choca con el unique `uq_invoice_business_key` (boleta+CUIT+vto+monto) →
+     requeriría una migración que **elimina esa salvaguarda de integridad**.
+  2. Inflaría el "TOTAL PERÍODO" (suma de invoices) con las repetidas →
+     liquidaciones incorrectas, salvo filtrar `isDuplicate` en todos los
+     cálculos (más superficie de error).
+- **Limpiar los 22 duplicados actuales:** el usuario prefirió dejarlos; el
+  cambio aplica solo hacia adelante.
+
+### Impacto
+- `processPendingDocuments.job.ts`: `insertRow` solo si `!isDuplicate`;
+  movimiento a `driveDuplicatesFolderId` (fallback Escaneados); nuevo campo en
+  `ProcessJobConfig`.
+- `clientProcessingConfig.ts` (`ResolvedFolders` + `resolveFolders`) y
+  `client.types.ts` (`ClientDriveFolders.duplicates`).
+- `runProcessingCycle.ts` y `jobWorkerMain.ts`: propagan `driveDuplicatesFolderId`.
+- Sin migración de schema. `scripts/diag-sheets-consistency.ts` queda como
+  herramienta de diagnóstico read-only.
+
+---
+
+## 2026-06-04 — Crear archivos en Drive con service account (Unidad Compartida)
+
+### Problema
+Al guardar el PDF de la carga manual, Drive devolvía:
+`Service Accounts do not have storage quota`. Las service accounts **no tienen
+cuota propia** → no pueden CREAR archivos en "Mi unidad". El pipeline
+automático nunca lo sufrió porque **solo mueve/lee** archivos que el usuario
+sube a `pending` (mover no consume cuota); nunca crea. La carga manual sí crea
+(sube el PDF desde la PC) → choca con el límite. El feature de recibos tiene la
+misma limitación latente.
+
+### Decisión
+**Usar una Unidad Compartida (Shared Drive).** Las carpetas del cliente viven
+en una unidad compartida y la SA es miembro (rol Administrador de contenido) →
+puede crear archivos ahí (la cuota es de la organización). El código ya
+soportaba Shared Drives (`supportsAllDrives` + `includeItemsFromAllDrives` en
+todos los métodos de `GoogleDriveService`), así que **no requirió cambios** —
+solo mover las carpetas a la unidad. **Los IDs de carpeta no cambian al mover**,
+así que `driveFoldersJson` siguió válido. MorinigoAdm: unidad "Control de
+Boletas y Pagos".
+
+Además se agregó **soporte opcional de domain-wide delegation**
+(`impersonateEmail` en `googleConfigJson` o env `GOOGLE_IMPERSONATE_EMAIL` →
+`subject` en el JWT de Drive), por si algún cliente prefiere delegación en vez
+de Unidad Compartida. Retrocompatible: sin valor, comportamiento idéntico al
+anterior.
+
+### Alternativas descartadas
+- **Delegación de dominio como única vía:** requiere super admin del Workspace
+  del cliente (no se tenía en `contacto@morinigoadm.com`) y otorga a la SA el
+  poder de impersonar a **cualquier** usuario del dominio — fricción y riesgo
+  altos, sobre todo para vender a terceros. Queda como opción, no como default.
+
+### Impacto
+- `services/googleDrive.service.ts`: `subject` opcional en el JWT.
+- `types/client.types.ts`: `ClientGoogleConfig.impersonateEmail`.
+- `lib/clientProcessingConfig.ts`: `resolveGoogleConfig` propaga el campo.
+- `config/env.ts`: `GOOGLE_IMPERSONATE_EMAIL` opcional.
+- Sin migración. Config operativa: mover carpetas a la Unidad Compartida +
+  agregar la SA como miembro.
+
+---
+
+## 2026-06-02 — Carga asistida: guardar el PDF en Drive + warnings visibles
+
+### Problema
+Al cargar una boleta desde el modal "Cargar boleta", el PDF que se sube se
+usaba **solo para escanear datos con IA y luego se descartaba**. La boleta se
+creaba en la DB sin `sourceFileUrl` ni `driveFileId`: la columna ARCHIVO
+quedaba en "—" y la celda de URL (columna K) en Google Sheets vacía. El
+usuario reportó "cargué la boleta pero no veo la URL de la imagen".
+
+Además, el insert a Google Sheets en la carga manual estaba envuelto en un
+`try/catch` que **solo hacía `console.warn`**: si fallaba, la boleta quedaba
+en la DB pero no en la planilla, sin ninguna señal para el usuario (fallo
+silencioso).
+
+### Decisión
+1. **Subir el PDF a Drive en la carga asistida.** El endpoint
+   `POST /api/client/consortiums/[id]/invoices` ahora acepta
+   `multipart/form-data` además de JSON. Si viene el campo `pdf`:
+   - Valida tamaño (≤15MB) y magic bytes (`isPdf`).
+   - Lo sube a `folders.scanned` (fallback `folders.receipts`) con
+     `GoogleDriveService.uploadFile` — carpeta plana, igual que donde el
+     pipeline deja las boletas procesadas, para que "Ver PDF" funcione igual.
+   - Guarda `driveFileId` + `sourceFileUrl` en la Invoice y escribe la URL en
+     la columna K de Sheets (antes era `null`).
+   - El front (`page.tsx`) manda FormData solo si hay archivo; si no, sigue
+     mandando JSON (sin cambios para cargas sin PDF).
+2. **Hacer visibles los fallos de Drive y Sheets.** La boleta se guarda en la
+   DB aunque Drive o Sheets fallen (sería peor perderla), pero ahora el
+   endpoint devuelve `driveWarning` y `sheetsWarning`, y la UI los muestra
+   como toast. Si todo va bien, confirma "Boleta cargada y enviada a Google
+   Sheets".
+
+### Alternativas descartadas
+- **Endpoint separado para subir el PDF tras crear la boleta** (2 requests):
+  requeriría re-buscar la fila recién insertada en Sheets para completar la
+  columna K. Integrar el upload en el endpoint principal inserta la fila con
+  la URL de una sola pasada — más simple y sin búsqueda posterior.
+- **Abortar la creación si Drive/Sheets fallan**: se descartó; es peor perder
+  la boleta que tenerla sin PDF/fila. Se prefiere guardar + avisar.
+
+### Impacto
+- `src/app/api/client/consortiums/[id]/invoices/route.ts`: parsing
+  multipart+JSON, resolución de config una sola vez, upload a Drive,
+  `driveWarning`/`sheetsWarning` en la respuesta.
+- `src/app/admin/consortiums/page.tsx`: envío FormData con PDF, manejo de
+  warnings en toast.
+- Sin cambios de schema (campos `driveFileId`/`sourceFileUrl` ya existían).
+
+---
+
+## 2026-06-02 — Columna "Estado" → "Origen" en la tabla de boletas
+
+### Problema
+La columna "Estado" de la tabla de boletas mezclaba conceptos heterogéneos:
+"Manual" (origen de carga), "Duplicado" (validación) y "OK" (procesada por el
+pipeline). El "OK" no aportaba información clara y el conjunto era confuso.
+
+### Decisión
+Renombrar la columna a **"Origen"** y mostrar solo el medio de carga:
+**Manual** (cargada a mano desde la UI) o **Automática** (procesada por el
+pipeline desde Drive). El flag de duplicado ya se ve en la stat card
+"Duplicados" del header; las boletas duplicadas además no se persisten en DB,
+así que la etiqueta casi nunca aparecía en la tabla.
+
+### Impacto
+- `src/app/admin/consortiums/page.tsx`: header `<th>` y celda de la columna.
+
+---
+
+## 2026-06-02 — Validación robusta de pertenencia al consorcio en carga manual (scan)
+
+### Problema
+Al cargar una boleta desde la UI del consorcio ("Cargar boleta" → scan con
+IA), el endpoint `POST /api/client/consortiums/[id]/invoices/scan` validaba
+si la boleta pertenecía al consorcio seleccionado. **Disparaba falsos
+positivos** ("esta boleta no pertenece al consorcio elegido") cuando la
+boleta SÍ era del consorcio correcto.
+
+Causa raíz: la validación era mucho más débil que el matching del pipeline
+principal. Solo hacía **igualdad exacta del nombre normalizado** del campo
+`consortium` extraído por la IA contra el seleccionado:
+
+```ts
+const extractedNorm = normalizeConsortiumName(extractedConsortiumRaw);
+const selectedNorm  = normalizeConsortiumName(selectedConsortium.canonicalName);
+if (extractedNorm !== selectedNorm) consortiumMismatch = true;
+```
+
+Esto fallaba en varios escenarios reales:
+- La IA ponía el **nombre del proveedor** en el campo `consortium` →
+  `extractedNorm` ≠ `selectedNorm` → falso aviso (el caso reportado).
+- Diferencias por abreviaturas / ceros a la izquierda / sufijos numéricos
+  de LSP que el fuzzy match sí resuelve.
+- No usaba el **CUIT** (`allTaxIds`) — la señal más fuerte y la que el
+  pipeline usa como Intento 0.
+- No usaba **alias/matchNames**.
+
+El pipeline (`processPendingDocuments.job.ts`) ya resolvía esto con 4
+niveles (CUIT → exacto → fuzzy → alias), pero el scan no compartía esa
+lógica.
+
+### Decisión
+Reescribir la validación del scan para **reutilizar el mismo matching de 4
+niveles** del pipeline, con una filosofía de **minimizar falsos positivos**:
+
+- Se agregó `findMatchingConsortium(allTaxIds, rawConsortium, consortiums)`
+  en `scan/route.ts` que replica el orden CUIT → exacto → fuzzy → alias y
+  devuelve el consorcio que matchea (o null).
+- **Solo se declara mismatch si la boleta matchea claramente con OTRO
+  consorcio del cliente.** Tres casos:
+  - Match al consorcio seleccionado → pertenece, no se avisa.
+  - Match `null` (indeterminado: IA confundió campos / OCR pobre) → **no se
+    bloquea** (el usuario eligió el consorcio a propósito).
+  - Match a otro consorcio → error de carga real, se avisa con su `rawName`.
+
+### Alternativas descartadas
+- **Extraer el matching a un módulo compartido** entre pipeline y scan: más
+  limpio a largo plazo, pero el pipeline tiene efectos colaterales (logging,
+  retorno de `unassignedReason`, etc.) acoplados. Se optó por replicar solo
+  la parte pura de matching en el scan para no arriesgar el pipeline en
+  producción. Candidato a refactor futuro.
+- **Mantener el aviso cuando no se puede determinar**: se descartó porque es
+  exactamente la fuente de los falsos positivos reportados.
+
+### Impacto
+- `src/app/api/client/consortiums/[id]/invoices/scan/route.ts`:
+  - Nuevos helpers `normCuit` y `findMatchingConsortium`.
+  - Imports `consortiumFuzzyMatch`, `consortiumAliasMatch`.
+  - `select` del consorcio seleccionado ampliado con `cuit` + `matchNames`.
+  - Bloque de validación reescrito.
+- Sin cambios de schema ni migraciones. La respuesta del endpoint mantiene
+  el mismo contrato (`consortiumMismatch`, `foundConsortium`).
+
+---
+
 ## 2026-05-25 — Eliminación de boletas y pagos desde la UI
 
 ### Problema

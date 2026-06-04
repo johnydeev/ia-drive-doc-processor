@@ -2,6 +2,84 @@
 
 ## [Unreleased]
 
+### Features
+- **Crear archivos en Drive con service account vía Unidad Compartida (2026-06-04)**.
+  La carga manual del PDF fallaba con `Service Accounts do not have storage
+  quota` (las SA no pueden crear archivos en "Mi unidad"). Solución: mover las
+  carpetas del cliente a una **Unidad Compartida** con la SA como miembro
+  (Administrador de contenido) — el código ya soportaba Shared Drives, sin
+  cambios y sin migración (los IDs de carpeta no cambian al mover). Se agregó
+  además **soporte opcional de domain-wide delegation** (`impersonateEmail` en
+  `googleConfigJson` / env `GOOGLE_IMPERSONATE_EMAIL` → `subject` en el JWT),
+  retrocompatible. MorinigoAdm: unidad "Control de Boletas y Pagos". Detalle en
+  `docs/decisiones.md`. Archivos: `googleDrive.service.ts`, `client.types.ts`,
+  `clientProcessingConfig.ts`, `config/env.ts`.
+- **Duplicados: consistencia DB↔Sheets + carpeta opcional (2026-06-04)**.
+  Hasta ahora el pipeline escribía las boletas duplicadas en Google Sheets
+  (marcadas `isDuplicate=YES`) pero NO en la DB — por eso Sheets quedaba con
+  más filas que la DB (en MorinigoAdm: 522 vs 499, exactamente los 22+1
+  duplicados). Diagnóstico read-only confirmó que NO era un bug de inserción
+  (la boleta reportada como "faltante" estaba en la última fila). A pedido,
+  ahora **los duplicados ya no se escriben en Sheets** → la planilla y la DB
+  se mantienen 1:1 hacia adelante. Además, si se configura
+  `driveFoldersJson.duplicates`, el PDF duplicado se mueve a esa carpeta
+  ("Duplicados") en vez de a Escaneados, para revisión. Lo ya registrado en
+  Sheets NO se modifica (solo aplica de ahora en más).
+  Se descartó persistir los duplicados en la DB porque choca con el unique
+  `uq_invoice_business_key` (requeriría migración que debilita la integridad)
+  y porque inflaría los totales del período. Detalle en `docs/decisiones.md`.
+  Archivos: `processPendingDocuments.job.ts`, `runProcessingCycle.ts`,
+  `jobWorkerMain.ts`, `clientProcessingConfig.ts`, `client.types.ts`.
+  Nuevo: `scripts/diag-sheets-consistency.ts` (diagnóstico read-only).
+
+- **Carga asistida: el PDF escaneado ahora se guarda en Drive (2026-06-02)**.
+  Antes, el PDF que se sube al modal "Cargar boleta" solo se usaba para
+  extraer datos con IA y se descartaba — la boleta quedaba sin `sourceFileUrl`
+  (columna ARCHIVO en "—" y celda de URL vacía en Sheets). Ahora, si la carga
+  trae PDF, el endpoint `POST /api/client/consortiums/[id]/invoices` lo sube a
+  la carpeta `scanned` del cliente (fallback `receipts`), guarda
+  `driveFileId` + `sourceFileUrl` en la Invoice y escribe la URL en la
+  columna K de Sheets. El endpoint acepta `multipart/form-data` además de
+  JSON (compat). Si Drive falla, la boleta se guarda igual y se informa vía
+  `driveWarning`. Archivos: `route.ts`, `page.tsx`.
+
+### Fixes
+- **Fallo silencioso al escribir boleta manual en Sheets (2026-06-02)**. El
+  insert a Google Sheets en la carga manual estaba envuelto en un `try/catch`
+  que solo hacía `console.warn` — si fallaba, la boleta quedaba en la DB pero
+  no en la planilla y el usuario no se enteraba. Ahora el endpoint devuelve
+  `sheetsWarning` y la UI lo muestra como toast (o confirma el éxito).
+  Archivos: `route.ts`, `page.tsx`.
+
+### UI
+- **Columna "Estado" → "Origen" (Manual / Automática) (2026-06-02)**. La
+  columna mezclaba conceptos (Manual / Duplicado / OK). Ahora indica solo el
+  medio de carga: **Manual** (cargada a mano) o **Automática** (procesada por
+  el pipeline desde Drive). Archivo: `src/app/admin/consortiums/page.tsx`.
+- **Modal "Cargar boleta": monto con separador de miles + nombre del
+  consorcio destacado (2026-06-02)**. El input de Monto pasó de
+  `type="number"` (sin separadores) a `type="text"` + `inputMode="decimal"`
+  con formateo es-AR al perder foco (`721.571,37`). El valor autocompletado
+  por el scan también se muestra ya formateado, y al guardar se parsea con
+  `parseAmountInput` (maneja puntos de miles). El nombre del consorcio al
+  que se carga la boleta ahora se muestra grande, centrado y en mayúscula
+  (nueva clase `.modalConsortiumName`), con el período centrado debajo.
+  Archivos: `src/app/admin/consortiums/page.tsx`, `page.module.css`.
+
+### Fixes
+- **Falsos positivos en "esta boleta no pertenece al consorcio" al cargar
+  manualmente (2026-06-02)**. El endpoint de scan (`POST /api/client/
+  consortiums/[id]/invoices/scan`) avisaba que la boleta no pertenecía al
+  consorcio seleccionado aunque sí perteneciera — típicamente cuando la IA
+  tomaba al **proveedor** como consorcio. La validación solo comparaba
+  igualdad exacta del nombre normalizado, mientras que el pipeline real usa
+  matching de 4 niveles. Ahora el scan reutiliza esa misma lógica robusta
+  (**CUIT → exacto → fuzzy → alias/matchNames**) y solo declara mismatch
+  cuando la boleta matchea **claramente con otro consorcio** del cliente; si
+  no se puede determinar, no bloquea. Sin cambios de contrato ni migración.
+  Detalle en `docs/decisiones.md` (entrada 2026-06-02).
+  Archivo: `src/app/api/client/consortiums/[id]/invoices/scan/route.ts`.
+
 ### CI / Ops
 - **Export de logs antes del rebuild + upload como artifact (2026-05-25)**.
   Nuevo step en el job `deploy` que ejecuta `scripts/export-logs.ps1`

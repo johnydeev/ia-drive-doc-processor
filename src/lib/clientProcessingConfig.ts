@@ -62,6 +62,8 @@ export function resolveGoogleConfig(client: ProcessingClient): ClientGoogleConfi
   const clientEmail = asRequiredString(raw.clientEmail);
   const privateKeyRaw = asRequiredString(raw.privateKey);
   const sheetsId = asRequiredString(raw.sheetsId);
+  // Email a impersonar (domain-wide delegation). Plano, no cifrado.
+  const impersonateEmail = asOptionalString(raw.impersonateEmail);
 
   if (!projectId || !clientEmail || !privateKeyRaw || !sheetsId) {
     return null;
@@ -72,6 +74,7 @@ export function resolveGoogleConfig(client: ProcessingClient): ClientGoogleConfi
     clientEmail,
     privateKey: decrypt(privateKeyRaw),
     sheetsId,
+    ...(impersonateEmail ? { impersonateEmail } : {}),
   };
 }
 
@@ -114,6 +117,7 @@ export interface ResolvedFolders {
   failed: string | null;
   receipts: string | null;
   processing: string | null;
+  duplicates: string | null;
 }
 
 export function resolveFolders(client: ProcessingClient): ResolvedFolders {
@@ -126,6 +130,7 @@ export function resolveFolders(client: ProcessingClient): ResolvedFolders {
     failed:     f?.failed?.trim()     || null,
     receipts:   f?.receipts?.trim()   || null,
     processing: f?.processing?.trim() || null,
+    duplicates: f?.duplicates?.trim() || null,
   };
 }
 

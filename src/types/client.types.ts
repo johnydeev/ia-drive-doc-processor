@@ -4,6 +4,13 @@ export interface ClientGoogleConfig {
   privateKey: string;
   sheetsId: string;
   altaSheetsId?: string;
+  /**
+   * Email de un usuario de Workspace a impersonar (domain-wide delegation).
+   * Necesario para que la service account pueda CREAR archivos en Drive
+   * (las SA no tienen cuota propia). Si está vacío, se usa la SA directa
+   * (sirve para mover/leer, pero no para crear en "Mi unidad").
+   */
+  impersonateEmail?: string | null;
 }
 
 export interface ClientExtractionConfig {
@@ -32,6 +39,12 @@ export interface ClientDriveFolders {
   failed?: string | null;
   receipts?: string | null;
   processing?: string | null;
+  /**
+   * Carpeta para boletas detectadas como duplicadas. Si está configurada,
+   * el PDF duplicado se mueve acá (en vez de Escaneados) para revisión.
+   * Los duplicados NO se escriben en Sheets ni en DB (consistencia DB↔Sheets).
+   */
+  duplicates?: string | null;
 }
 
 export interface ProcessingClient {

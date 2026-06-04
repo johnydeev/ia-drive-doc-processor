@@ -498,6 +498,16 @@
 
 .modalTitle { font-size: 18px; font-weight: 700; color: var(--text-heading); margin-bottom: 6px; }
 .modalSubtitle { font-size: 13px; color: var(--text-muted); margin-bottom: 18px; }
+.modalConsortiumName {
+  font-size: 24px;
+  font-weight: 800;
+  color: var(--text-heading);
+  text-align: center;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  line-height: 1.2;
+  margin: 8px 0 4px;
+}
 .modalBody { font-size: 14px; color: var(--text-secondary); line-height: 1.65; margin-bottom: 20px; }
 .modalBody strong { color: var(--text-heading); }
 

@@ -1,10 +1,81 @@
 # Progreso del proyecto — drive-doc-processor
 
-Actualizado al 25/05/2026 (sesión 26).
+Actualizado al 02/06/2026 (sesión 27).
 
 ---
 
-## Última sesión (25/05/2026)
+## Última sesión (04/06/2026)
+
+**Feature — crear archivos en Drive con la service account (Unidad Compartida):**
+- La carga manual del PDF fallaba: `Service Accounts do not have storage quota`
+  (las SA no pueden crear archivos en "Mi unidad"; el pipeline no lo sufría
+  porque solo mueve archivos pre-existentes).
+- Solución: Unidad Compartida "Control de Boletas y Pagos" con la SA como
+  miembro (Administrador de contenido). El código ya soportaba Shared Drives →
+  sin cambios de código, sin migración (los IDs no cambian al mover carpetas).
+- Soporte opcional extra: domain-wide delegation vía `impersonateEmail` /
+  `GOOGLE_IMPERSONATE_EMAIL` (descartado como default: requiere super admin).
+- Config: `driveFoldersJson.duplicates` del cliente MorinigoAdm seteado a la
+  carpeta "Duplicados" de la unidad.
+
+**Feature — duplicados: consistencia DB↔Sheets + carpeta opcional:**
+- Diagnóstico (read-only, `scripts/diag-sheets-consistency.ts`) confirmó que
+  NO había bug: la boleta "faltante" estaba en la última fila de Sheets. La
+  diferencia DB(499) vs Sheets(522) eran los 22 duplicados que el pipeline
+  escribía en Sheets pero no en DB.
+- Cambio (Opción B): los duplicados **ya no se escriben en Sheets** → planilla
+  1:1 con la DB de ahora en más. Si hay `driveFoldersJson.duplicates`, el PDF
+  duplicado se mueve a esa carpeta; si no, a Escaneados.
+- Lo ya registrado en Sheets NO se toca. Sin migración.
+- Se descartó persistir duplicados en DB (choca con unique
+  `uq_invoice_business_key` + inflaría totales). Ver `docs/decisiones.md`.
+
+## Sesión 02/06/2026
+
+**Feature — carga asistida guarda el PDF en Drive:**
+- El PDF subido al modal "Cargar boleta" antes solo se escaneaba y se
+  descartaba (boleta sin `sourceFileUrl` → ARCHIVO "—", celda URL vacía en
+  Sheets). Ahora se sube a la carpeta `scanned` (fallback `receipts`), se
+  guardan `driveFileId` + `sourceFileUrl` en la Invoice y la URL va a la
+  columna K de Sheets.
+- El endpoint `POST .../invoices` ahora acepta `multipart/form-data` (con PDF)
+  además de JSON. El front manda FormData solo si hay archivo.
+
+**Fix — fallo silencioso de Sheets en carga manual + warnings visibles:**
+- El insert a Sheets estaba en un `try/catch` que solo logueaba. Ahora el
+  endpoint devuelve `sheetsWarning` / `driveWarning` y la UI los muestra como
+  toast (o confirma el éxito). Se acabó el "se guardó pero no aparece y no sé
+  por qué".
+
+**UI — columna "Estado" → "Origen" (Manual / Automática):**
+- La columna mezclaba Manual / Duplicado / OK. Ahora indica solo el medio de
+  carga: Manual (a mano) o Automática (pipeline desde Drive).
+
+**UI — modal "Cargar boleta": monto con miles + consorcio destacado:**
+- Input de Monto: `type="number"` → `type="text"` + `inputMode="decimal"`.
+  Formatea es-AR con separador de miles al perder foco (`721.571,37`). El
+  monto autocompletado por el scan se muestra ya formateado; al guardar se
+  parsea con `parseAmountInput`.
+- Nombre del consorcio en el header del modal ahora grande, centrado y en
+  mayúscula (clase `.modalConsortiumName`); período centrado debajo.
+
+**Fix — falsos positivos al cargar boleta manualmente (validación de consorcio):**
+- Síntoma: al cargar una boleta desde el consorcio, el aviso "esta boleta no
+  pertenece al consorcio elegido" saltaba aunque la boleta sí fuera correcta.
+  Pasaba sobre todo cuando la IA tomaba al **proveedor** como consorcio.
+- Causa: la validación del endpoint scan solo hacía igualdad exacta del nombre
+  normalizado, mucho más débil que el matching de 4 niveles del pipeline.
+- Fix: `scan/route.ts` ahora reutiliza el matching robusto del pipeline
+  (**CUIT → exacto → fuzzy → alias/matchNames**) vía nuevo helper
+  `findMatchingConsortium`. Solo declara mismatch si la boleta matchea
+  **claramente con otro consorcio** del cliente; si no se puede determinar,
+  no bloquea (el usuario eligió el consorcio a propósito).
+- Sin cambios de schema, migración ni contrato del endpoint.
+- Detalle en `docs/decisiones.md` y `CHANGELOG.md` (entradas 2026-06-02).
+
+---
+
+## Sesión anterior (25/05/2026)
 
 **UI urgente — separación de Boletas y Pagos:**
 - Quitados los botones "Pagar" / "Ver pagos" de la columna PAGO en la tabla

@@ -922,7 +922,7 @@ export default function ConsortiumsPage() {
           observation:     e.observation     ?? f.observation,
           issueDate:       toInputDate(e.issueDate) || f.issueDate,
           dueDate:         toInputDate(e.dueDate)   || f.dueDate,
-          amount:          e.amount != null  ? String(e.amount) : f.amount,
+          amount:          e.amount != null  ? formatAmountPlain(Number(e.amount)) : f.amount,
           tipoComprobante: e.tipoComprobante ?? f.tipoComprobante,
           ...(hit ? { providerId: hit.id } : {}),
         }));
@@ -968,29 +968,58 @@ export default function ConsortiumsPage() {
         setRubros((prev) => [...prev, rubroData.rubro]);
       }
 
-      const res = await guardedFetch(`/api/client/consortiums/${selectedId}/invoices`, {
-        method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          providerId:      invoiceForm.providerId,
-          periodId:        selectedPeriod.id,
-          boletaNumber:    invoiceForm.boletaNumber    || undefined,
-          providerTaxId:   invoiceForm.providerTaxId   || undefined,
-          detail:          invoiceForm.detail          || undefined,
-          observation:     invoiceForm.observation     || undefined,
-          issueDate:       invoiceForm.issueDate       || undefined,
-          dueDate:         invoiceForm.dueDate         || undefined,
-          amount:          invoiceForm.amount ? parseFloat(invoiceForm.amount) : undefined,
-          coeficienteId:   coefId   || undefined,
-          rubroId:         rubroId  || undefined,
-          tipoGasto:       invoiceForm.tipoGasto,
-          tipoComprobante: invoiceForm.tipoComprobante || undefined,
-        }),
-      });
+      const url = `/api/client/consortiums/${selectedId}/invoices`;
+      const amountValue = invoiceForm.amount ? parseAmountInput(invoiceForm.amount) : undefined;
+      let res: Response;
+      if (scanFile) {
+        // Carga asistida con PDF → multipart para guardar el archivo en Drive.
+        const fd = new FormData();
+        fd.append("pdf", scanFile);
+        fd.append("providerId", invoiceForm.providerId);
+        fd.append("periodId", selectedPeriod.id);
+        fd.append("tipoGasto", invoiceForm.tipoGasto);
+        if (invoiceForm.boletaNumber)    fd.append("boletaNumber", invoiceForm.boletaNumber);
+        if (invoiceForm.providerTaxId)   fd.append("providerTaxId", invoiceForm.providerTaxId);
+        if (invoiceForm.detail)          fd.append("detail", invoiceForm.detail);
+        if (invoiceForm.observation)     fd.append("observation", invoiceForm.observation);
+        if (invoiceForm.issueDate)       fd.append("issueDate", invoiceForm.issueDate);
+        if (invoiceForm.dueDate)         fd.append("dueDate", invoiceForm.dueDate);
+        if (amountValue !== undefined)   fd.append("amount", String(amountValue));
+        if (coefId)                      fd.append("coeficienteId", coefId);
+        if (rubroId)                     fd.append("rubroId", rubroId);
+        if (invoiceForm.tipoComprobante) fd.append("tipoComprobante", invoiceForm.tipoComprobante);
+        res = await guardedFetch(url, { method: "POST", body: fd });
+      } else {
+        res = await guardedFetch(url, {
+          method: "POST", headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            providerId:      invoiceForm.providerId,
+            periodId:        selectedPeriod.id,
+            boletaNumber:    invoiceForm.boletaNumber    || undefined,
+            providerTaxId:   invoiceForm.providerTaxId   || undefined,
+            detail:          invoiceForm.detail          || undefined,
+            observation:     invoiceForm.observation     || undefined,
+            issueDate:       invoiceForm.issueDate       || undefined,
+            dueDate:         invoiceForm.dueDate         || undefined,
+            amount:          amountValue,
+            coeficienteId:   coefId   || undefined,
+            rubroId:         rubroId  || undefined,
+            tipoGasto:       invoiceForm.tipoGasto,
+            tipoComprobante: invoiceForm.tipoComprobante || undefined,
+          }),
+        });
+      }
       const data = await res.json();
       if (!res.ok || !data.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
       setInvoices((prev) => [data.invoice, ...prev]);
       setShowInvoiceModal(false);
       resetInvoiceForm();
+      const warnings = [data.sheetsWarning, data.driveWarning].filter(Boolean);
+      if (warnings.length > 0) {
+        setToolbarError(warnings.join(" "));
+      } else {
+        setToolbarInfo("Boleta cargada y enviada a Google Sheets.");
+      }
     } catch (err) {
       setInvoiceError(err instanceof Error ? err.message : "Error al guardar la boleta");
     } finally { setSavingInvoice(false); }
@@ -1405,7 +1434,7 @@ export default function ConsortiumsPage() {
                         <tr>
                           <th>N° Boleta</th><th>Proveedor</th><th>CUIT</th><th>Comprobante</th>
                           <th>Detalle</th><th>Emisión</th><th>Vencimiento</th><th>Monto</th>
-                          <th>Tipo</th><th>Rubro</th><th>Coef.</th><th>Estado</th>
+                          <th>Tipo</th><th>Rubro</th><th>Coef.</th><th>Origen</th>
                           <th>Archivo</th><th>Pago</th><th>Acciones</th>
                         </tr>
                       </thead>
@@ -1432,9 +1461,9 @@ export default function ConsortiumsPage() {
                             <td>{(inv as any).rubroRef?.name ?? "—"}</td>
                             <td className={styles.tdMono}>{(inv as any).coeficienteRef?.name ?? "—"}</td>
                             <td>
-                              {inv.isManual ? <span className={styles.badgeManual}>Manual</span>
-                                : inv.isDuplicate ? <span className={styles.badgeDuplicate}>Duplicado</span>
-                                : <span className={styles.badgeOk}>OK</span>}
+                              {inv.isManual
+                                ? <span className={styles.badgeManual}>Manual</span>
+                                : <span className={styles.badgeOk}>Automática</span>}
                             </td>
                             <td>
                               {inv.sourceFileUrl
@@ -1622,7 +1651,8 @@ export default function ConsortiumsPage() {
         <div className={styles.modalOverlay} onClick={() => !savingInvoice && !scanning && setShowInvoiceModal(false)}>
           <div className={styles.modalLarge} onClick={(e) => e.stopPropagation()}>
             <h3 className={styles.modalTitle}>Cargar boleta</h3>
-            <p className={styles.modalSubtitle}>{selectedConsortium?.rawName} · {formatPeriod(selectedPeriod)}</p>
+            <p className={styles.modalConsortiumName}>{selectedConsortium?.rawName}</p>
+            <p className={styles.modalSubtitle} style={{ textAlign: "center" }}>{formatPeriod(selectedPeriod)}</p>
 
             <div className={styles.scanSection}>
               <label className={styles.scanLabel}>
@@ -1680,7 +1710,20 @@ export default function ConsortiumsPage() {
 
               <div className={styles.formField}>
                 <label>Monto</label>
-                <input type="number" className={styles.formInput} value={invoiceForm.amount} onChange={(e) => setInvoiceForm((f) => ({ ...f, amount: e.target.value }))} placeholder="0.00" min="0" step="0.01" />
+                <input
+                  type="text"
+                  inputMode="decimal"
+                  className={styles.formInput}
+                  value={invoiceForm.amount}
+                  onChange={(e) => setInvoiceForm((f) => ({ ...f, amount: e.target.value }))}
+                  onBlur={(e) => {
+                    const raw = e.target.value.trim();
+                    if (!raw) { setInvoiceForm((f) => ({ ...f, amount: "" })); return; }
+                    const n = parseAmountInput(raw);
+                    setInvoiceForm((f) => ({ ...f, amount: Number.isFinite(n) ? formatAmountPlain(n) : raw }));
+                  }}
+                  placeholder="0,00"
+                />
               </div>
               <div className={styles.formField}>
                 <label>Tipo de gasto</label>
