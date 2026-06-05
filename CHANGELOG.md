@@ -44,6 +44,16 @@
   `driveWarning`. Archivos: `route.ts`, `page.tsx`.
 
 ### Fixes
+- **Carga manual ahora deduplica (no se pueden cargar boletas repetidas) (2026-06-05)**.
+  Bug crítico: el endpoint de carga manual generaba el `documentHash` con
+  `Date.now()` (único siempre → el candado de hash nunca detectaba el mismo
+  PDF) y no verificaba business key. Resultado: el mismo PDF cargado 2 veces
+  entraba 2 veces en DB y Sheets (agravado cuando la IA leía el N° distinto,
+  ej. `0005-...` vs `00005-...`, lo que tampoco activaba el unique de business
+  key). Fix: se computa el **hash real del binario** (`computeDocumentHash`,
+  igual que el pipeline) y se verifica duplicado por **hash** y por **business
+  key** ANTES de subir/guardar; si ya existe, corta con **409** y un mensaje
+  claro ("Esta boleta ya fue cargada"). Archivo: `route.ts`.
 - **Inserción en Sheets con `append`+INSERT_ROWS (filtros se expanden) (2026-06-05)**.
   `GoogleSheetsService.insertRow` calculaba la fila a mano (`values.get` +
   `update` en `length+1`). Eso escribía en una celda **fuera del rango del

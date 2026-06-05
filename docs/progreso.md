@@ -6,6 +6,19 @@ Actualizado al 02/06/2026 (sesión 27).
 
 ## Última sesión (05/06/2026)
 
+**Fix CRÍTICO — carga manual deduplica (no más boletas repetidas):**
+- En prod, la misma boleta cargada manual 2 veces entró 2 veces (DB+Sheets).
+  Causa: hash con `Date.now()` (nunca detectaba el mismo PDF) + sin verificación
+  de business key + N° leído distinto por la IA (`0005` vs `00005`).
+- Fix: hash REAL del binario + dedup por hash y business key ANTES de guardar;
+  si existe → 409 con mensaje claro. Pendiente: deploy + limpiar los 2 registros
+  de prueba duplicados (MATAFUEGOS) desde la app.
+
+> **Verificado en producción (05/06):** deploy #60 OK (tras revivir el runner
+> self-hosted que quedó offline). Carga manual confirmada: el campo
+> `consortium` se llena y la fila se actualiza en Sheets. Pendiente de probar
+> en prod: comportamiento de duplicados (requiere una boleta repetida).
+
 **Fix — inserción en Sheets con `append`+INSERT_ROWS (filtros se expanden):**
 - Problema: con un filtro aplicado en la hoja, las boletas nuevas no aparecían
   en el filtro (quedaban fuera de su rango). Causa: `insertRow` usaba

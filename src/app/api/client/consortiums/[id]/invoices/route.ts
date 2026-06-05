@@ -3,7 +3,7 @@ import { z } from "zod";
 import { requireAuthenticatedSession } from "@/lib/adminAuth";
 import { requireClientSession } from "@/lib/clientAuth";
 import { getPrismaClient } from "@/lib/prisma";
-import { createHash } from "crypto";
+import { InvoiceRepository } from "@/repositories/invoice.repository";
 import { GoogleSheetsService, SheetsRowMapping } from "@/services/googleSheets.service";
 import { GoogleDriveService } from "@/services/googleDrive.service";
 import { resolveGoogleConfig, resolveMapping, resolveSheetName, resolveFolders } from "@/lib/clientProcessingConfig";
@@ -173,11 +173,64 @@ export async function POST(
       return NextResponse.json({ ok: false, error: "Proveedor no encontrado" }, { status: 404 });
     }
 
-    const hashInput = `manual:${auth.session.clientId}:${consortiumId}:${body.boletaNumber ?? ""}:${body.amount ?? ""}:${Date.now()}`;
-    const documentHash = createHash("sha256").update(hashInput).digest("hex");
-
     const canonicalTaxId = provider.cuit || body.providerTaxId || null;
     const canonicalTaxIdNorm = (canonicalTaxId ?? "").replace(/\D/g, "");
+
+    // ── Leer y validar el PDF (si vino), antes de cualquier cosa ────────────
+    const repo = new InvoiceRepository();
+    const MAX_PDF_SIZE = 15 * 1024 * 1024; // 15MB
+    let pdfBuffer: Buffer | null = null;
+    let driveWarning: string | null = null;
+    if (pdfFile) {
+      if (pdfFile.size > MAX_PDF_SIZE) {
+        driveWarning = "El PDF supera 15MB, no se adjuntó a Drive.";
+      } else {
+        const buf = Buffer.from(await pdfFile.arrayBuffer());
+        if (isPdf(buf)) pdfBuffer = buf;
+        else driveWarning = "El archivo adjunto no es un PDF válido, no se guardó en Drive.";
+      }
+    }
+
+    // ── Deduplicación ANTES de guardar (igual que el pipeline) ──────────────
+    // Hash REAL del binario (no un hash con timestamp): así detecta el mismo
+    // PDF aunque la IA lea los datos distinto. Sin PDF, hash determinístico de
+    // los datos de negocio. Si es duplicado, se corta con error (no se guarda
+    // ni se sube a Drive).
+    const documentHash = pdfBuffer
+      ? repo.computeDocumentHash(pdfBuffer)
+      : repo.computeDocumentHash(
+          `manual:${auth.session.clientId}:${consortiumId}:${canonicalTaxIdNorm}:` +
+          `${(body.boletaNumber ?? "").trim().toUpperCase()}:${body.dueDate ?? ""}:${body.amount ?? ""}`
+        );
+
+    const dupByHash = await repo.findDuplicateByHash(auth.session.clientId, documentHash);
+    if (dupByHash) {
+      return NextResponse.json(
+        { ok: false, error: "Esta boleta ya fue cargada (el mismo archivo ya existe)." },
+        { status: 409 }
+      );
+    }
+
+    const dupByKey = await repo.findDuplicateByBusinessKey(auth.session.clientId, {
+      boletaNumber: body.boletaNumber ?? null,
+      provider: provider.canonicalName,
+      consortium: consortium.rawName,
+      providerTaxId: canonicalTaxId,
+      detail: null,
+      observation: null,
+      dueDate: body.dueDate ?? null,
+      amount: body.amount ?? null,
+      alias: null,
+      clientNumber: null,
+      paymentMethod: null,
+      allTaxIds: [],
+    } as ExtractedDocumentData);
+    if (dupByKey) {
+      return NextResponse.json(
+        { ok: false, error: "Ya existe una boleta con el mismo N°, CUIT, vencimiento y monto." },
+        { status: 409 }
+      );
+    }
 
     // Config del cliente (Drive + Sheets), resuelta una sola vez.
     const clientRow = await prisma.client.findUnique({
@@ -198,42 +251,33 @@ export async function POST(
       : null;
     const googleConfig = processingClient ? resolveGoogleConfig(processingClient) : null;
 
-    // ── Subir el PDF de la carga asistida a Drive (si vino archivo) ─────────
+    // ── Subir el PDF a Drive (ya leído y validado arriba) ──────────────────
     // La boleta se guarda igual aunque Drive falle; el motivo se expone vía
-    // `driveWarning`.
+    // `driveWarning` (ya puede traer un aviso si el PDF era inválido).
     let sourceFileUrl: string | null = null;
     let driveFileId: string | null = null;
-    let driveWarning: string | null = null;
 
-    if (pdfFile) {
-      const MAX_PDF_SIZE = 15 * 1024 * 1024; // 15MB
-      if (pdfFile.size > MAX_PDF_SIZE) {
-        driveWarning = "El PDF supera 15MB, no se adjuntó a Drive.";
+    if (pdfBuffer) {
+      if (!googleConfig) {
+        driveWarning = "Sin credenciales de Google, el PDF no se guardó en Drive.";
       } else {
-        const pdfBuffer = Buffer.from(await pdfFile.arrayBuffer());
-        if (!isPdf(pdfBuffer)) {
-          driveWarning = "El archivo adjunto no es un PDF válido, no se guardó en Drive.";
-        } else if (!googleConfig) {
-          driveWarning = "Sin credenciales de Google, el PDF no se guardó en Drive.";
+        const folders = processingClient ? resolveFolders(processingClient) : ({} as ReturnType<typeof resolveFolders>);
+        const destFolderId = folders.scanned ?? folders.receipts ?? null;
+        if (!destFolderId) {
+          driveWarning = "Sin carpeta de Drive configurada (Escaneados), el PDF no se guardó.";
         } else {
-          const folders = processingClient ? resolveFolders(processingClient) : ({} as ReturnType<typeof resolveFolders>);
-          const destFolderId = folders.scanned ?? folders.receipts ?? null;
-          if (!destFolderId) {
-            driveWarning = "Sin carpeta de Drive configurada (Escaneados), el PDF no se guardó.";
-          } else {
-            try {
-              const driveService = new GoogleDriveService(googleConfig);
-              const fileName = pdfFile.name || `boleta_${Date.now()}.pdf`;
-              const uploaded = await driveService.uploadFile(pdfBuffer, fileName, "application/pdf", destFolderId);
-              driveFileId = uploaded.id || null;
-              sourceFileUrl =
-                uploaded.webViewLink ??
-                (uploaded.id ? `https://drive.google.com/file/d/${uploaded.id}/view` : null);
-            } catch (driveError) {
-              const detail = driveError instanceof Error ? driveError.message : "Error desconocido";
-              console.warn(`[manual-invoice] drive upload failed: ${detail}`);
-              driveWarning = `No se pudo subir el PDF a Drive: ${detail}`;
-            }
+          try {
+            const driveService = new GoogleDriveService(googleConfig);
+            const fileName = pdfFile!.name || `boleta_${Date.now()}.pdf`;
+            const uploaded = await driveService.uploadFile(pdfBuffer, fileName, "application/pdf", destFolderId);
+            driveFileId = uploaded.id || null;
+            sourceFileUrl =
+              uploaded.webViewLink ??
+              (uploaded.id ? `https://drive.google.com/file/d/${uploaded.id}/view` : null);
+          } catch (driveError) {
+            const detail = driveError instanceof Error ? driveError.message : "Error desconocido";
+            console.warn(`[manual-invoice] drive upload failed: ${detail}`);
+            driveWarning = `No se pudo subir el PDF a Drive: ${detail}`;
           }
         }
       }

@@ -50,6 +50,53 @@ sigue yendo a Escaneados. **Lo ya registrado en Sheets no se toca.**
 
 ---
 
+## 2026-06-05 — Carga manual: deduplicación (hash real + bloqueo)
+
+### Problema
+En producción, la misma boleta cargada manualmente dos veces entró dos veces
+(DB + Sheets). Diagnóstico con datos reales (cliente MorinigoAdm,
+boleta MATAFUEGOS):
+- Registro 1: `0005-00009460`, hash `cab4d2f5…`
+- Registro 2: `00005-00009460`, hash `f087a0da…`
+
+Dos candados de la DB fallaron:
+1. **Hash:** el endpoint manual generaba `documentHash` con `Date.now()` → único
+   en cada carga, aunque el PDF fuera idéntico. El unique `uq_invoice_document_hash`
+   nunca lo frenaba.
+2. **Business key:** la IA leyó el N° distinto (`0005` vs `00005`, un cero a la
+   izquierda) → `boletaNumberNorm` distinto → el unique `uq_invoice_business_key`
+   tampoco lo frenó. Además, la carga manual no verificaba duplicados (a
+   diferencia del pipeline).
+
+### Decisión
+La carga manual ahora deduplica como el pipeline, **antes** de subir a Drive o
+guardar:
+1. **Hash real del binario** del PDF (`repo.computeDocumentHash(buffer)`), no un
+   hash con timestamp. Sin PDF, hash determinístico de los datos de negocio (sin
+   `Date.now()`). Así el mismo archivo da el mismo hash aunque la IA varíe los
+   datos extraídos.
+2. Verificación por **hash** (`findDuplicateByHash`) y por **business key**
+   (`findDuplicateByBusinessKey`). Si existe → **409** con mensaje claro
+   ("Esta boleta ya fue cargada" / "Ya existe una boleta con el mismo N°, CUIT,
+   vencimiento y monto"). NO se guarda ni se sube a Drive.
+
+### Alternativas descartadas
+- **Normalizar ceros a la izquierda en `boletaNumberNorm`** (para que `0005` y
+  `00005` se consideren iguales): se descartó por ahora — modifica la
+  deduplicación global (pipeline) y los datos históricos. El hash real del
+  binario ya cubre el caso real (mismo PDF). Queda como mejora futura.
+- **Marcar como duplicado en vez de bloquear** (como el pipeline): se prefirió
+  bloquear con error, porque la carga manual es una acción explícita del usuario
+  y el feedback inmediato es más claro.
+
+### Impacto
+- `src/app/api/client/consortiums/[id]/invoices/route.ts`: hash real, dedup por
+  hash + business key, respuesta 409, lectura del PDF reordenada (una sola vez,
+  antes de dedup/upload). Se eliminó `import { createHash }` (ya no se usa).
+- Sin migración.
+
+---
+
 ## 2026-06-05 — Inserción en Sheets: `values.update` → `append` + INSERT_ROWS
 
 ### Problema
