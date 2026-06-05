@@ -403,31 +403,31 @@ export class GoogleSheetsService {
   ): Promise<InsertRowResult> {
     await this.ensureHeaderRow(sheetName, mapping);
 
+    const row = this.buildRow(data, mapping);
+
+    // `append` con `INSERT_ROWS` detecta la "tabla" lógica en `tableRange`
+    // (header + datos contiguos) e INSERTA una fila física después de la
+    // última fila. Ventajas sobre el patrón anterior (values.get + update en
+    // length+1):
+    //   1. Atómico del lado de Google → sin race conditions entre worker y
+    //      carga manual (no hay cálculo de fila a mano).
+    //   2. Inmune a "filas fantasma" (no cuenta values.length).
+    //   3. Al insertar la fila DENTRO de la tabla, los rangos asociados
+    //      (filtro básico de la hoja, etc.) se EXPANDEN automáticamente — antes
+    //      el filtro no incluía la fila nueva porque quedaba fuera de su rango.
     const tableRange = this.getRangeFromMapping(sheetName, mapping);
-    const current = await this.sheets.spreadsheets.values.get({
+
+    const response = await this.sheets.spreadsheets.values.append({
       spreadsheetId: this.spreadsheetId,
       range: tableRange,
-    });
-
-    const existingRows = current.data.values ?? [];
-    const nextRowNumber = Math.max(existingRows.length + 1, 2);
-
-    const row = this.buildRow(data, mapping);
-    const columns = Object.values(mapping).map((c) => this.columnToIndex(c));
-    const startColumn = this.indexToColumn(Math.min(...columns));
-    const endColumn = this.indexToColumn(Math.max(...columns));
-    const targetRange = `${sheetName}!${startColumn}${nextRowNumber}:${endColumn}${nextRowNumber}`;
-
-    const response = await this.sheets.spreadsheets.values.update({
-      spreadsheetId: this.spreadsheetId,
-      range: targetRange,
       valueInputOption: "USER_ENTERED",
+      insertDataOption: "INSERT_ROWS",
       requestBody: { values: [row] },
     });
 
     return {
-      updatedRange: response.data.updatedRange,
-      updatedRows: response.data.updatedRows,
+      updatedRange: response.data.updates?.updatedRange,
+      updatedRows: response.data.updates?.updatedRows,
     };
   }
 

@@ -248,6 +248,7 @@ export async function POST(
         documentHash,
         boletaNumber:     body.boletaNumber || null,
         provider:         provider.canonicalName,
+        consortium:       consortium.rawName,
         providerTaxId:    canonicalTaxId,
         detail:           body.detail || null,
         observation:      body.observation || null,

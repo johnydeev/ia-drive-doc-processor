@@ -4,7 +4,29 @@ Actualizado al 02/06/2026 (sesión 27).
 
 ---
 
-## Última sesión (04/06/2026)
+## Última sesión (05/06/2026)
+
+**Fix — inserción en Sheets con `append`+INSERT_ROWS (filtros se expanden):**
+- Problema: con un filtro aplicado en la hoja, las boletas nuevas no aparecían
+  en el filtro (quedaban fuera de su rango). Causa: `insertRow` usaba
+  `values.update` en una fila calculada (escribe en celda, no inserta fila).
+- Fix: `insertRow` ahora usa `spreadsheets.values.append` +
+  `insertDataOption: INSERT_ROWS` → inserta fila física, el filtro se expande.
+  Bonus: atómico (sin race conditions) e inmune a filas fantasma. Afecta
+  pipeline + carga manual. Sin migración. Confirmado contra doc oficial v4.
+
+**Fix — carga manual dejaba `consortium` (texto) en NULL:**
+- En producción, una boleta cargada manualmente (MATAFUEGOS, JUNIN 1222)
+  quedó con `consortium`=NULL en la DB. Causa: el endpoint manual seteaba
+  `consortiumId` (FK, correcto) pero no copiaba el nombre al campo texto.
+  Fix: `consortium: consortium.rawName` en el create. Registro histórico
+  corregido con UPDATE puntual.
+- Confirmado con `diag-sheets-consistency.ts`: el PDF SÍ se subió a Drive
+  (Shared Drive andando en prod) y la fila SÍ está en Sheets (fila 524, era
+  un falso negativo por no scrollear). La boleta estaba bien ligada a JUNIN
+  1222 vía consortiumId.
+
+## Sesión 04/06/2026
 
 **Feature — crear archivos en Drive con la service account (Unidad Compartida):**
 - La carga manual del PDF fallaba: `Service Accounts do not have storage quota`

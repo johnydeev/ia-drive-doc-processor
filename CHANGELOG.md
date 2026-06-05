@@ -44,6 +44,25 @@
   `driveWarning`. Archivos: `route.ts`, `page.tsx`.
 
 ### Fixes
+- **Inserción en Sheets con `append`+INSERT_ROWS (filtros se expanden) (2026-06-05)**.
+  `GoogleSheetsService.insertRow` calculaba la fila a mano (`values.get` +
+  `update` en `length+1`). Eso escribía en una celda **fuera del rango del
+  filtro** de la hoja, por lo que un filtro creado por el usuario no mostraba
+  las filas nuevas (había que recrearlo). Reescrito con
+  `spreadsheets.values.append` + `insertDataOption: INSERT_ROWS`: inserta una
+  fila física dentro de la tabla → el filtro/rango se expande solo. Además es
+  **atómico** (sin race conditions entre worker y carga manual) e inmune a
+  "filas fantasma". Afecta pipeline y carga manual. Sin migración.
+  Archivo: `googleSheets.service.ts`.
+- **Carga manual: el campo `consortium` (texto) quedaba NULL (2026-06-05)**.
+  El endpoint `POST .../invoices` seteaba `consortiumId` (FK, correcto) pero no
+  copiaba el nombre al campo desnormalizado `consortium`, que quedaba en NULL
+  (se veía como "boleta sin consorcio" en vistas que muestran el texto, aunque
+  la relación estaba bien). Se agregó `consortium: consortium.rawName` al
+  create. Registro histórico afectado corregido vía UPDATE puntual en DB.
+  Nota: confirmado que el PDF SÍ se sube a Drive (Shared Drive) y la fila SÍ
+  se escribe en Sheets — el reporte de "no está en Sheets" fue un falso
+  negativo (fila al final de la hoja). Archivo: `route.ts`.
 - **Fallo silencioso al escribir boleta manual en Sheets (2026-06-02)**. El
   insert a Google Sheets en la carga manual estaba envuelto en un `try/catch`
   que solo hacía `console.warn` — si fallaba, la boleta quedaba en la DB pero

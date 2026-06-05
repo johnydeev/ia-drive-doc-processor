@@ -50,6 +50,42 @@ sigue yendo a Escaneados. **Lo ya registrado en Sheets no se toca.**
 
 ---
 
+## 2026-06-05 — Inserción en Sheets: `values.update` → `append` + INSERT_ROWS
+
+### Problema
+El usuario aplicaba un filtro en la hoja (rango fijo, ej. A1:U523). Al cargar
+una boleta nueva, la fila aparecía en la hoja (fila 524) pero el **filtro no la
+mostraba** ni al refrescar. Causa: `insertRow` escribía con `values.update` en
+una celda calculada (`length+1`) — una celda **fuera del rango del filtro**, no
+una inserción de fila. Los filtros básicos no se autoexpanden ante escrituras
+fuera de su rango.
+
+### Decisión
+Reescribir `GoogleSheetsService.insertRow` para usar
+`spreadsheets.values.append` con `insertDataOption: INSERT_ROWS`
+(confirmado en la doc oficial de la API v4). `append` detecta la "tabla" lógica
+en el rango y agrega después de la última fila; `INSERT_ROWS` **inserta una fila
+física** dentro de la tabla, por lo que los rangos asociados (filtro básico,
+etc.) se expanden automáticamente.
+
+Beneficios colaterales (también resuelven riesgos detectados en el debugging
+del 2026-06-04):
+- **Atómico:** Google maneja la posición de la fila → sin race conditions entre
+  worker y carga manual (antes ambos podían leer el mismo `length` y pisarse).
+- **Inmune a filas fantasma:** ya no se cuenta `values.length`.
+
+### Alternativas descartadas
+- **Tabla nativa de Sheets** (del lado del usuario): se autoexpande siempre,
+  pero es config manual por hoja/cliente. Queda como respaldo si algún filtro
+  básico tuviera un caso límite.
+
+### Impacto
+- `services/googleSheets.service.ts`: cuerpo de `insertRow` (de get+update a
+  append). Afecta pipeline (`processPendingDocuments`) y carga manual. Sin
+  cambio de firma ni de contrato (`InsertRowResult` igual). Sin migración.
+
+---
+
 ## 2026-06-04 — Crear archivos en Drive con service account (Unidad Compartida)
 
 ### Problema
