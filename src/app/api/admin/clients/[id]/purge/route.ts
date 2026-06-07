@@ -64,29 +64,25 @@ export async function DELETE(
   const googleConfig = resolveGoogleConfig(processingClient);
   if (googleConfig) {
     const folders = resolveFolders(processingClient);
-    if (folders.pending && folders.scanned) {
+    if (folders.pending) {
       try {
         const driveService = new GoogleDriveService(googleConfig);
         for (const invoice of invoices) {
           if (!invoice.driveFileId) continue;
           try {
-            // Intentar mover desde scanned → pending
-            await driveService.moveFileToFolder(invoice.driveFileId, folders.scanned, folders.pending);
+            // El archivo puede estar en Escaneados (histórico) o en
+            // Rendiciones/[Edificio]/[Período]. Se mueve desde su parent real
+            // (no asumir `scanned`): si no, en Drive el removeParents sería un
+            // no-op y el archivo quedaría en ambas carpetas a la vez.
+            const parents = await driveService.getFileParents(invoice.driveFileId);
+            const fromFolderId = parents.find((p) => p !== folders.pending) ?? parents[0] ?? null;
+            if (fromFolderId && fromFolderId !== folders.pending) {
+              await driveService.moveFileToFolder(invoice.driveFileId, fromFolderId, folders.pending);
+            }
             driveMovedBack++;
           } catch {
-            // Si falla, intentar desde unassigned → pending
-            if (folders.unassigned) {
-              try {
-                await driveService.moveFileToFolder(invoice.driveFileId, folders.unassigned, folders.pending);
-                driveMovedBack++;
-              } catch {
-                driveFailed++;
-                console.warn(`[purge] No se pudo mover archivo ${invoice.driveFileId} de vuelta a pendientes`);
-              }
-            } else {
-              driveFailed++;
-              console.warn(`[purge] No se pudo mover archivo ${invoice.driveFileId} (sin carpeta unassigned)`);
-            }
+            driveFailed++;
+            console.warn(`[purge] No se pudo mover archivo ${invoice.driveFileId} de vuelta a pendientes`);
           }
         }
       } catch (err) {
@@ -94,7 +90,7 @@ export async function DELETE(
         driveFailed = invoices.filter((i) => i.driveFileId).length;
       }
     } else {
-      console.warn(`[purge] Cliente ${id} sin carpetas pending/scanned configuradas, skip Drive`);
+      console.warn(`[purge] Cliente ${id} sin carpeta pending configurada, skip Drive`);
     }
   } else {
     console.warn(`[purge] Cliente ${id} sin credenciales Google configuradas, skip Drive`);
