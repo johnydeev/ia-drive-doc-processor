@@ -64,7 +64,19 @@ const runOnce = async (): Promise<void> => {
         const sheetName = resolveSheetName(client);
         const googleConfig = resolveGoogleConfig(client);
         const folders = resolveFolders(client);
+        // Valida carpetas requeridas (incluida `statements`/Rendiciones). Si falta
+        // alguna lanza → el catch loguea y saltea el cliente (cero tokens IA).
         validateClientProcessingConfig(client, sheetName, googleConfig);
+
+        // "Llave" anti-tokens: sin ningún período ACTIVE no se encola nada. El
+        // worker es el único que consume IA, así que cortar acá = 0 tokens.
+        const activePeriods = await prisma.period.count({
+          where: { clientId: client.id, status: "ACTIVE" },
+        });
+        if (activePeriods === 0) {
+          schedulerLog.clientNoActivePeriods(client.id, client.name);
+          continue;
+        }
 
         const driveService = new GoogleDriveService(googleConfig);
         const files = await driveService.listPendingPdfFiles(folders.pending);

@@ -89,6 +89,10 @@ export const schedulerLog = {
     log("debug", "scheduler", `Sin PDFs pendientes — "${clientName}" [${shortId(clientId)}]`);
   },
 
+  clientNoActivePeriods(clientId: string, clientName: string) {
+    log("warn", "scheduler", `⛔ Sin períodos activos — no se encolan boletas (abrir período). "${clientName}" [${shortId(clientId)}]. Reintenta el próximo ciclo.`);
+  },
+
   jobsQueued(count: number, clientId: string, clientName: string, totalFound: number, batchSize: number) {
     const capped = totalFound >= batchSize;
     const foundLabel = capped
