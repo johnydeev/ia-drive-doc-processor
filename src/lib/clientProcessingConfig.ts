@@ -118,6 +118,7 @@ export interface ResolvedFolders {
   receipts: string | null;
   processing: string | null;
   duplicates: string | null;
+  statements: string | null;
 }
 
 export function resolveFolders(client: ProcessingClient): ResolvedFolders {
@@ -131,6 +132,7 @@ export function resolveFolders(client: ProcessingClient): ResolvedFolders {
     receipts:   f?.receipts?.trim()   || null,
     processing: f?.processing?.trim() || null,
     duplicates: f?.duplicates?.trim() || null,
+    statements: f?.statements?.trim() || null,
   };
 }
 
@@ -147,6 +149,10 @@ export function validateClientProcessingConfig(
 
   if (!folders.scanned) {
     throw new Error("Missing required client config: driveFoldersJson.scanned");
+  }
+
+  if (!folders.statements) {
+    throw new Error("Missing required client config: driveFoldersJson.statements (carpeta Rendiciones)");
   }
 
   if (folders.pending === folders.scanned) {

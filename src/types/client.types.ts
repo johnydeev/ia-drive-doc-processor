@@ -45,6 +45,12 @@ export interface ClientDriveFolders {
    * Los duplicados NO se escriben en Sheets ni en DB (consistencia DB↔Sheets).
    */
   duplicates?: string | null;
+  /**
+   * Carpeta raíz "Rendiciones" (pública): dentro la app crea [Edificio]/[Período].
+   * La crea el owner; su ID se configura acá. Solo las subcarpetas de edificio
+   * se comparten públicas (la raíz queda privada).
+   */
+  statements?: string | null;
 }
 
 export interface ProcessingClient {
