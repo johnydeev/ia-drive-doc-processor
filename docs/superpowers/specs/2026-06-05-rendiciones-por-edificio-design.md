@@ -86,11 +86,19 @@ se reutilizan (no se vuelve a crear ni a compartir).
 Caracteres inválidos a remover/reemplazar: `/ \ : * ? " < > |`.
 
 - `buildStatementPeriodFolderName(month, year)` → `"2026-06 Junio"`.
-- `buildInvoiceFileName({ provider, consortium, month, year, boletaNumber })`
+- `buildInvoiceFileName({ provider, consortium, month, year, boletaNumber, documentHash })`
   → `"PROVEEDOR - CONSORCIO - P06-2026 - NNNN.pdf"`.
-- `buildReceiptFileName({ provider, consortium, month, year, boletaNumber, paymentDate, installmentNumber, totalInstallments })`
-  → `"... - NNNN - RECIBO 15-06-2026.pdf"` o, en cuotas,
-  `"... - NNNN - RECIBO cuota 1 de 3 - 15-06-2026.pdf"`.
+  - **Sin N° de boleta** (la IA no lo extrajo): se usa `SN` + los primeros 6
+    caracteres del `documentHash` para garantizar unicidad →
+    `"PROVEEDOR - CONSORCIO - P06-2026 - SN a3f9c2.pdf"`.
+- `buildReceiptFileName({ provider, consortium, month, year, boletaNumber, paymentDate, amount, installmentNumber, totalInstallments })`
+  → según el tipo de pago:
+  - **Pago único** (salda el total): `"... - NNNN - RECIBO 15-06-2026.pdf"`.
+  - **Cuotas pactadas** (`totalInstallments > 1`):
+    `"... - NNNN - RECIBO cuota 1 de 3 - 15-06-2026.pdf"`.
+  - **Pago parcial libre** (no salda el total, sin cuotas): incluye el monto
+    para distinguir parciales del mismo día →
+    `"... - NNNN - RECIBO pago parcial - 15-06-2026 - $250000.pdf"`.
 
 ### `GoogleDriveService`
 - `renameFile(fileId, newName)` → `files.update({ name })` (con `supportsAllDrives`).
@@ -113,7 +121,29 @@ Caracteres inválidos a remover/reemplazar: `/ \ : * ? " < > |`.
 
 ## 6. Cambios en los flujos
 
-### 6.1 Pipeline (`processPendingDocuments.job.ts`)
+### 6.0 Validaciones preventivas en el SCHEDULER (la "llave", antes de gastar tokens)
+**Clave para no quemar tokens IA.** El scheduler corre cada N min y encola
+boletas; el worker es el único que consume IA. Por eso la validación se hace en
+el scheduler **antes de encolar** — si falla, no se encola nada → **cero tokens**.
+
+Antes de encolar las boletas de un cliente, el scheduler valida **a nivel
+cliente**:
+1. **Carpetas requeridas configuradas** (incluida `statements`). Se extiende
+   `validateClientProcessingConfig` para incluir `statements`.
+2. **Que exista al menos un período ACTIVE** en el cliente.
+
+Si **cualquiera** falla → el scheduler **NO encola** ese cliente en ese ciclo,
+**loguea un aviso claro** y los PDFs quedan en Pendientes. Al corregir el
+problema (configurar la carpeta / abrir período), el **próximo ciclo** procesa
+normal. No se gasta ningún token porque el worker nunca recibe los jobs.
+
+> Por qué el período se valida así: el período es por consorcio y el consorcio
+> sólo se conoce tras la extracción IA. Pero como los períodos se manejan en
+> conjunto ("Cerrar Período General" abre el período de todos los consorcios),
+> en la práctica es todo-o-nada — la validación a nivel cliente cubre el peor
+> caso (ningún período → corta todo).
+
+### 6.1 Pipeline / worker (`processPendingDocuments.job.ts`)
 Cuando la boleta es **OK y NO duplicada** (reemplaza el paso "Mover a Escaneados"):
 1. `resolveStatementsFolders` → carpetas edificio/período (+ compartir si nuevo).
 2. `renameFile` con `buildInvoiceFileName`.
@@ -121,8 +151,11 @@ Cuando la boleta es **OK y NO duplicada** (reemplaza el paso "Mover a Escaneados
 4. `sourceFileUrl` = link del archivo en su nueva ubicación.
 
 Duplicado → carpeta Duplicados (sin cambios). Sin asignar → Sin Asignar (sin cambios).
-Si `folders.statements` no está configurada → fallback a Escaneados + warning en
-logs (no romper el pipeline).
+
+**Red de seguridad (caso puntual):** si el scheduler dejó pasar el cliente
+(hay períodos activos) pero **un consorcio específico** no tiene período al
+matchearse, el worker mueve esa boleta a **Revisión** (`failed`) + aviso en
+logs. Es una sola boleta — el gasto masivo ya lo cortó la llave del scheduler.
 
 ### 6.2 Carga manual (`POST /api/client/consortiums/[id]/invoices`)
 El PDF se sube directo a la carpeta de período de statements (hoy va a Escaneados),
@@ -143,9 +176,13 @@ procesó ninguna boleta de ese edificio), mostrar un guion o "Pendiente".
 ---
 
 ## 8. Ajustes a funcionalidad existente
-- **Eliminar boleta** y **purga**: hoy asumen origen "Escaneados". Ajustar para
-  mover el archivo **desde su parent real** (Rendiciones), usando
-  `getFileParents`. No deben romperse con la nueva ubicación.
+- **Eliminar boleta**: el archivo ahora vive en `statements/[Edificio]/[Período]`
+  (antes en Escaneados). El borrado debe moverlo a **Revisión** (`failed`) —
+  destino sin cambios — tomándolo **desde su parent real** vía `getFileParents`
+  (cambia el origen, no el destino). Confirmado: al eliminar, el PDF va a
+  Revisión (`failed`).
+- **Purga**: ídem — mover desde el parent real (Rendiciones) en vez de asumir
+  Escaneados.
 - **Escaneados**: queda como histórico de boletas viejas; lo ya guardado no se
   toca. Deja de recibir boletas nuevas.
 
@@ -156,26 +193,44 @@ procesó ninguna boleta de ese edificio), mostrar un guion o "Pendiente".
   organización" para que el link público funcione (config de la unidad, una vez).
 - **Sanitización:** nombres de proveedor/consorcio con caracteres inválidos para
   Drive deben limpiarse en los helpers de naming.
-- **Colisiones de archivo:** resueltas con el N° de boleta (boleta) y la fecha de
-  pago / nº de cuota (recibo).
+- **Colisiones de archivo:** boleta → N° de boleta, o `SN + 6 del hash` si no hay
+  N°. Recibo → fecha de pago + nº de cuota (cuotas) o + monto (parcial libre).
 - **Performance:** cache en memoria de folderIds por ciclo del worker.
 - **Idempotencia:** `getOrCreateFolder` evita carpetas duplicadas; el sharing y el
   guardado del link solo ocurren la primera vez por edificio.
-- **Boleta sin período activo:** si no hay período, usar el período resuelto del
-  pipeline; si no hay, fallback a Escaneados + warning (no bloquear).
+- **Sin período — peor caso:** lo corta la **llave del scheduler** (sección 6.0):
+  si el cliente no tiene ningún período ACTIVE, no se encola nada → 0 tokens.
+- **Sin período — caso puntual:** un consorcio específico sin período (con el
+  resto del cliente con período) → la boleta va a **Revisión** (`failed`) +
+  aviso (sección 6.1).
+- **Consorcio nuevo:** al darse de alta (UI / import / sync-directory) toma el
+  período vía `resolveMajorityMonth` = el **mes mayoritario** de los períodos
+  ACTIVE del cliente. Tras un cierre general, todos están en el mismo mes, así
+  que el nuevo **se alinea solo** y nace con período → la feature lo organiza
+  desde su primera boleta (no cae en "sin período"). Si no hubiera ningún
+  período activo, toma el mes del calendario (pero ese escenario lo corta la
+  llave del scheduler).
 
 ---
 
 ## 10. Plan de testing (alto nivel)
-- Unit: helpers de naming (casos con caracteres especiales, cuotas, sin N° boleta).
-- Unit: `buildStatementPeriodFolderName` (orden cronológico).
+- Unit: helpers de naming:
+  - boleta con N°, sin N° (`SN + hash`), con caracteres especiales.
+  - recibo: pago único, cuotas, pago parcial libre (con monto).
+  - `buildStatementPeriodFolderName` (orden cronológico).
 - Integración (manual en staging/prod controlado):
   - Pipeline: boleta OK → aparece renombrada en `statements/Edificio/Período`,
     carpeta del edificio compartida, link guardado en DB.
   - Carga manual: ídem.
-  - Recibo: aparece junto a su boleta, naming correcto.
+  - Recibo (único / cuota / parcial libre): aparece junto a su boleta, naming OK.
   - Duplicado → carpeta Duplicados (no a statements).
-  - Eliminar boleta: mueve desde statements sin error.
+  - **Llave scheduler:** sin `statements` configurada o sin período activo →
+    NO encola + aviso en logs + PDFs quedan en Pendientes (0 tokens).
+  - **Caso puntual:** consorcio sin período (resto con período) → boleta a
+    Revisión (`failed`) + aviso.
+  - **Consorcio nuevo:** alta tras cierre general → nace con el período en curso;
+    su primera boleta se organiza en `statements/[Nuevo]/[Período]`.
+  - Eliminar boleta: mueve desde statements → Revisión (`failed`) sin error.
 
 ---
 

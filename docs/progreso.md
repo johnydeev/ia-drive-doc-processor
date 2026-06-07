@@ -4,6 +4,20 @@ Actualizado al 02/06/2026 (sesión 27).
 
 ---
 
+## Infra (07/06/2026)
+
+**Runner self-hosted (RED-DRAGON) auto-gestionado vía Tarea Programada:**
+- Problema recurrente: el runner (`run.cmd` interactivo en `C:\actions-runner`)
+  se colgaba/apagaba y había que revivirlo a mano en cada deploy.
+- `svc.cmd` NO existe en Windows (es de Linux/Mac). Instalarlo como servicio
+  real choca con Docker Desktop (corre en la sesión del usuario).
+- Solución: Tarea Programada de Windows "GitHubActionsRunner" → lanza
+  `run.cmd` al iniciar sesión (LogonType Interactive → acceso a Docker),
+  reinicio automático cada 1 min, sin límite de ejecución. Creada con
+  `Register-ScheduledTask` (requiere admin). Comando de baja:
+  `Unregister-ScheduledTask -TaskName "GitHubActionsRunner" -Confirm:$false`.
+- Requiere que el usuario esté logueado (ya era requisito por Docker Desktop).
+
 ## Última sesión (05/06/2026)
 
 **Fix CRÍTICO — carga manual deduplica (no más boletas repetidas):**
@@ -11,8 +25,13 @@ Actualizado al 02/06/2026 (sesión 27).
   Causa: hash con `Date.now()` (nunca detectaba el mismo PDF) + sin verificación
   de business key + N° leído distinto por la IA (`0005` vs `00005`).
 - Fix: hash REAL del binario + dedup por hash y business key ANTES de guardar;
-  si existe → 409 con mensaje claro. Pendiente: deploy + limpiar los 2 registros
-  de prueba duplicados (MATAFUEGOS) desde la app.
+  si existe → 409 con mensaje claro.
+- **Verificado en producción (deploy #61):** cargar el mismo PDF 2 veces ahora
+  devuelve "Esta boleta ya fue cargada (el mismo archivo ya existe)". Nota de
+  transición: los registros cargados ANTES del fix tienen hash artificial
+  (Date.now), así que el dedup por hash no los reconoce — hay que comparar con
+  registros nuevos. Limitación conocida: dos PDFs distintos de la misma boleta
+  con N° leído distinto por la IA (ceros) no se detectan (fix de ceros descartado).
 
 > **Verificado en producción (05/06):** deploy #60 OK (tras revivir el runner
 > self-hosted que quedó offline). Carga manual confirmada: el campo
