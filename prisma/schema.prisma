@@ -291,6 +291,13 @@ model Consortium {
   paymentAlias           String?
   bank                   String?
   suterhKey              String?
+  /// ID de la carpeta del edificio dentro de "Rendiciones" (statements).
+  /// La crea/comparte la app la primera vez que organiza una boleta de este
+  /// consorcio; luego se reutiliza. El QR de rendición apunta a esta carpeta.
+  statementsFolderId     String?
+  /// webViewLink público de la carpeta del edificio (para generar el QR).
+  /// Visible en el panel. Se llena junto con statementsFolderId.
+  statementsFolderUrl    String?
   createdAt              DateTime             @default(now())
   updatedAt              DateTime             @updatedAt
   client                 Client               @relation(fields: [clientId], references: [id], onDelete: Cascade)
