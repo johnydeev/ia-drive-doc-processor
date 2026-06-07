@@ -151,6 +151,34 @@ export class GoogleDriveService {
     };
   }
 
+  /** Renombra un archivo en Drive. */
+  async renameFile(fileId: string, newName: string): Promise<void> {
+    await this.drive.files.update({
+      fileId,
+      requestBody: { name: newName },
+      fields: "id,name",
+      supportsAllDrives: true,
+    });
+  }
+
+  /**
+   * Comparte una carpeta como "cualquiera con el link" (lector) y devuelve el
+   * webViewLink. Para la carpeta de cada edificio (la raíz queda privada).
+   */
+  async shareFolderPublic(folderId: string): Promise<string> {
+    await this.drive.permissions.create({
+      fileId: folderId,
+      requestBody: { type: "anyone", role: "reader" },
+      supportsAllDrives: true,
+    });
+    const meta = await this.drive.files.get({
+      fileId: folderId,
+      fields: "webViewLink",
+      supportsAllDrives: true,
+    });
+    return meta.data.webViewLink ?? `https://drive.google.com/drive/folders/${folderId}`;
+  }
+
   /**
    * Busca una subcarpeta por nombre dentro de un padre.
    * Si no existe, la crea. Retorna el ID de la carpeta.
