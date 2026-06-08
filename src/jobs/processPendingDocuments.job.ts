@@ -163,6 +163,19 @@ function normName(v: string | null | undefined): string {
     .trim();
 }
 
+/** Normaliza el método de match a una categoría sin PII (sin el detalle entre paréntesis). */
+function normalizeMatchMethod(m: string | null | undefined): string | null {
+  if (!m) return null;
+  const lower = m.toLowerCase();
+  if (lower.startsWith("cuit")) return "CUIT";
+  if (lower.includes("exacto")) return "exacto";
+  if (lower.startsWith("fuzzy")) return "fuzzy";
+  if (lower.startsWith("alias")) return "alias";
+  if (lower.includes("parcial")) return "parcial";
+  if (lower === "lsp") return "lsp";
+  return m;
+}
+
 async function createProcessingContext(
   config: ProcessJobConfig,
   mapping: SheetsRowMapping
@@ -216,6 +229,9 @@ interface AssignmentResult {
   statementsFolderId: string | null;
   periodMonth: number | null;
   periodYear: number | null;
+  consortiumMatchMethod: string | null;
+  providerMatchMethod: string | null;
+  reasonCategory: string | null;
 }
 
 async function resolveAssignment(
@@ -233,6 +249,7 @@ async function resolveAssignment(
     canonicalConsortium: null, canonicalProvider: null, canonicalProviderTaxId: null,
     providerPaymentAlias: null, consortiumBank: null,
     statementsFolderId: null, periodMonth: null, periodYear: null,
+    consortiumMatchMethod: null, providerMatchMethod: null, reasonCategory: null,
   };
 
   const prisma = getPrismaClient();
@@ -331,6 +348,9 @@ async function resolveAssignment(
           statementsFolderId: lspService.consortium.statementsFolderId ?? null,
           periodMonth: activePeriod?.month ?? null,
           periodYear: activePeriod?.year ?? null,
+          consortiumMatchMethod: "lsp",
+          providerMatchMethod: "lsp",
+          reasonCategory: null,
         };
       }
 
@@ -339,6 +359,7 @@ async function resolveAssignment(
         ...base,
         unassigned: true,
         unassignedReason: `LSP ${lspProviderCanonicalName} - Nro cliente ${normalizedClientNumber} no registrado en LspServices`,
+        reasonCategory: "lsp_clientnumber_not_registered",
       };
     } catch (err) {
       pipelineLog.stepStart(clientId, `LspService lookup error: ${err instanceof Error ? err.message : "Unknown"} → fallback a matching normal`);
@@ -409,19 +430,21 @@ async function resolveAssignment(
       return {
         ...base,
         unassignedReason: `Consorcio no encontrado: "${rawConsortium}" → norm: "${canonicalName}"`,
+        reasonCategory: "consortium_not_found",
       };
     }
   }
 
   if (!consortiumRow) {
-    return { ...base, unassignedReason: "No se pudo extraer el consorcio del PDF ni matchear por CUIT" };
+    return { ...base, unassignedReason: "No se pudo extraer el consorcio del PDF ni matchear por CUIT", reasonCategory: "consortium_not_found" };
   }
 
   pipelineLog.consortiumMatch(clientId, matchMethod, consortiumRow.canonicalName);
+  base.consortiumMatchMethod = normalizeMatchMethod(matchMethod);
 
   const consortium = await consortiumRepository.findByCanonicalName(clientId, consortiumRow.canonicalName);
   if (!consortium) {
-    return { ...base, unassignedReason: `Consorcio no encontrado: "${rawConsortium}"` };
+    return { ...base, unassignedReason: `Consorcio no encontrado: "${rawConsortium}"`, reasonCategory: "consortium_not_found" };
   }
 
   const activePeriod = await consortiumRepository.findActivePeriod(consortium.id);
@@ -500,6 +523,7 @@ async function resolveAssignment(
       ...base,
       unassigned: true,
       unassignedReason: `Proveedor no identificado. OCR taxId="${rawCuit}" provider="${rawName}"`,
+      reasonCategory: "provider_not_found",
     };
   }
 
@@ -527,6 +551,9 @@ async function resolveAssignment(
     statementsFolderId: base.statementsFolderId,
     periodMonth: base.periodMonth,
     periodYear: base.periodYear,
+    consortiumMatchMethod: base.consortiumMatchMethod,
+    providerMatchMethod: normalizeMatchMethod(providerMatchMethod),
+    reasonCategory: null,
   };
 }
 
@@ -546,17 +573,46 @@ async function processDriveFile(
 
   const cid = resolvedConfig.clientId;
 
-  const runStep = async <T>(label: string, fn: () => Promise<T>): Promise<T> => {
+  // ── Acumulador de métricas para la línea [metrics] (una por boleta, ver §3 spec) ──
+  const startedAt = Date.now();
+  const m: {
+    ms: Record<string, number>;
+    textSource: string | null;
+    textChars: number | null;
+    emitterBlock: boolean | null;
+    lsp: string | null;
+    ai: Record<string, unknown> | null;
+    match: { consortium: string | null; provider: string | null };
+    result: string;
+    reason: string | null;
+    extracted: Record<string, unknown> | null;
+    canonical: Record<string, unknown> | null;
+    reasonText: string | null;
+  } = {
+    ms: {}, textSource: null, textChars: null, emitterBlock: null, lsp: null,
+    ai: null, match: { consortium: null, provider: null }, result: "failed",
+    reason: "error", extracted: null, canonical: null, reasonText: null,
+  };
+
+  // runStep mide el elapsed; si se pasa metricKey, lo acumula en m.ms[metricKey]
+  // (acumula porque la IA puede reintentar con varios proveedores).
+  const runStep = async <T>(label: string, fn: () => Promise<T>, metricKey?: string): Promise<T> => {
     pipelineLog.stepStart(cid, label);
-    try { return await fn(); }
-    catch (error) { throw new Error(`${label} failed: ${error instanceof Error ? error.message : "Unknown error"}`); }
+    const t0 = Date.now();
+    try {
+      return await fn();
+    } catch (error) {
+      throw new Error(`${label} failed: ${error instanceof Error ? error.message : "Unknown error"}`);
+    } finally {
+      if (metricKey) m.ms[metricKey] = (m.ms[metricKey] ?? 0) + (Date.now() - t0);
+    }
   };
 
   try {
     pipelineLog.fileStart(cid, file.id, file.name);
 
     const sourceFileUrl = buildDriveFileUrl(file.id, file.webViewLink);
-    const buffer = await runStep("Descarga de Drive", () => driveService.downloadFile(file.id));
+    const buffer = await runStep("Descarga de Drive", () => driveService.downloadFile(file.id), "download");
 
     // ── Lock de archivo: mover a carpeta Procesando para evitar que otro ciclo
     // concurrente lo reprocese mientras estamos trabajando en él.
@@ -576,14 +632,17 @@ async function processDriveFile(
     const finalSourceFolderId = processingFolderId ?? resolvedConfig.drivePendingFolderId;
 
     const fileHash = invoiceRepository.computeDocumentHash(buffer);
-    const existingByHash = await runStep("Verificación duplicado por hash", () =>
-      invoiceRepository.findDuplicateByHash(cid, fileHash)
+    const existingByHash = await runStep(
+      "Verificación duplicado por hash",
+      () => invoiceRepository.findDuplicateByHash(cid, fileHash),
+      "dedupHash"
     );
     pipelineLog.hashResult(cid, fileHash, Boolean(existingByHash));
 
     let extracted: ExtractedDocumentData | null = null;
     let isDuplicate = Boolean(existingByHash);
     let fileAiUsage: import("@/types/aiUsage.types").AiUsageMetrics | null = null;
+    let extractionWasCached = false;
 
     let lspProvider: ReturnType<typeof identifyLSPProvider> = null;
 
@@ -596,18 +655,24 @@ async function processDriveFile(
     if (isImage) {
       // ── Flujo imagen: extracción directa con Gemini Vision ──
       pipelineLog.stepStart(cid, `→ Archivo de imagen detectado (${file.mimeType ?? file.name}) — usando Gemini Vision`);
+      m.textSource = "image";
+      m.textChars = 0;
+      m.emitterBlock = false;
 
       if (existingByHash?.extraction) {
         const { sourceFileUrl: _url, isDuplicate: _dup, ...storedFields } =
           existingByHash.extraction as ExtractedDocumentData;
         extracted = { ...storedFields };
+        extractionWasCached = true;
       } else if (geminiModule && geminiApiKey) {
         const imageMimeType: "image/jpeg" | "image/png" =
           file.mimeType?.includes("png") ? "image/png" : "image/jpeg";
         try {
           const extractor = new geminiModule.GeminiExtractorService({ apiKey: geminiApiKey, model: geminiModel });
-          extracted = await runStep("Extracción IA (Gemini Vision)", () =>
-            extractor.extractStructuredDataFromImage(buffer, imageMimeType)
+          extracted = await runStep(
+            "Extracción IA (Gemini Vision)",
+            () => extractor.extractStructuredDataFromImage(buffer, imageMimeType),
+            "ai"
           );
           fileAiUsage = extractor.getLastUsage?.() ?? null;
           accumulateTokenUsage(summary.tokenUsage, fileAiUsage);
@@ -630,13 +695,22 @@ async function processDriveFile(
       const { sourceFileUrl: _url, isDuplicate: _dup, ...storedFields } =
         existingByHash.extraction as ExtractedDocumentData;
       extracted = { ...storedFields };
-      const text = await runStep("Extracción de texto (PDF)", () => pdfExtractor.extractTextFromPdf(buffer));
+      extractionWasCached = true;
+      const text = await runStep("Extracción de texto (PDF)", () => pdfExtractor.extractTextFromPdf(buffer), "text");
+      m.textSource = pdfExtractor.getLastTextSource();
+      m.textChars = text.length;
+      m.emitterBlock = pdfExtractor.getLastHasEmitterBlock();
+      m.ms.ocr = pdfExtractor.getLastOcrMs();
       lspProvider = identifyLSPProvider(text);
       extracted = refineExtractionWithRawText(extracted, text);
     } else {
       // ── Flujo PDF: extracción normal ──
       // Primera pasada: texto completo para detección
-      const fullText = await runStep("Extracción de texto (PDF)", () => pdfExtractor.extractTextFromPdf(buffer));
+      const fullText = await runStep("Extracción de texto (PDF)", () => pdfExtractor.extractTextFromPdf(buffer), "text");
+      m.textSource = pdfExtractor.getLastTextSource();
+      m.textChars = fullText.length;
+      m.emitterBlock = pdfExtractor.getLastHasEmitterBlock();
+      m.ms.ocr = pdfExtractor.getLastOcrMs();
 
       // Detectar tipo de documento
       lspProvider = identifyLSPProvider(fullText);
@@ -646,7 +720,7 @@ async function processDriveFile(
 
       // Para LSP, re-extraer limitando a página 1 para reducir ruido
       const text = lspProvider
-        ? await runStep("Re-extracción página 1 (LSP)", () => pdfExtractor.extractTextFromPdf(buffer, 1))
+        ? await runStep("Re-extracción página 1 (LSP)", () => pdfExtractor.extractTextFromPdf(buffer, 1), "textPage1")
         : fullText;
 
       if (resolvedConfig.debugMode) {
@@ -658,7 +732,7 @@ async function processDriveFile(
       if (geminiModule) {
         try {
           const extractor = new geminiModule.GeminiExtractorService({ apiKey: geminiApiKey, model: geminiModel });
-          extracted = await runStep("Extracción IA (Gemini)", () => extractor.extractStructuredData(text));
+          extracted = await runStep("Extracción IA (Gemini)", () => extractor.extractStructuredData(text), "ai");
           fileAiUsage = extractor.getLastUsage?.() ?? null;
           accumulateTokenUsage(summary.tokenUsage, fileAiUsage);
           pipelineLog.aiExtraction(cid, "gemini", true);
@@ -672,7 +746,7 @@ async function processDriveFile(
       if (extracted === null && openAiModule) {
         try {
           const extractor = new openAiModule.AiExtractorService({ apiKey: openaiApiKey, model: openaiModel });
-          extracted = await runStep("Extracción IA (OpenAI)", () => extractor.extractStructuredData(text));
+          extracted = await runStep("Extracción IA (OpenAI)", () => extractor.extractStructuredData(text), "ai");
           fileAiUsage = extractor.getLastUsage?.() ?? null;
           accumulateTokenUsage(summary.tokenUsage, fileAiUsage);
           pipelineLog.aiExtraction(cid, "openai", true);
@@ -686,7 +760,7 @@ async function processDriveFile(
       if (extracted === null && claudeModule) {
         try {
           const extractor = new claudeModule.ClaudeExtractorService({ apiKey: anthropicApiKey, model: anthropicModel });
-          extracted = await runStep("Extracción IA (Claude)", () => extractor.extractStructuredData(text));
+          extracted = await runStep("Extracción IA (Claude)", () => extractor.extractStructuredData(text), "ai");
           fileAiUsage = extractor.getLastUsage?.() ?? null;
           accumulateTokenUsage(summary.tokenUsage, fileAiUsage);
           pipelineLog.aiExtraction(cid, "anthropic", true);
@@ -718,9 +792,35 @@ async function processDriveFile(
       allTaxIds: extracted.allTaxIds,
     });
 
+    // Metadatos de extracción para [metrics]: lsp + tokens/modelo + snapshot crudo
+    // (lo que extrajo la IA, ANTES de canonizar). El snapshot va al bloque `values`
+    // (solo se emite con debugMode).
+    m.lsp = lspProvider ?? null;
+    m.ai = fileAiUsage
+      ? {
+          provider: fileAiUsage.provider ?? null,
+          model: fileAiUsage.model ?? null,
+          ok: true,
+          in: fileAiUsage.inputTokens ?? null,
+          out: fileAiUsage.outputTokens ?? null,
+          total: fileAiUsage.totalTokens ?? null,
+        }
+      : { provider: extractionWasCached ? "cached" : "ocr_only", model: null, ok: false, in: null, out: null, total: null };
+    m.extracted = {
+      consortium: extracted.consortium,
+      provider: extracted.provider,
+      taxId: extracted.providerTaxId,
+      boleta: extracted.boletaNumber,
+      due: extracted.dueDate,
+      amount: extracted.amount,
+      clientNumber: extracted.clientNumber,
+    };
+
     if (!isDuplicate) {
-      const dup = await runStep("Verificación duplicado por clave de negocio", () =>
-        invoiceRepository.findDuplicateByBusinessKey(cid, extracted!)
+      const dup = await runStep(
+        "Verificación duplicado por clave de negocio",
+        () => invoiceRepository.findDuplicateByBusinessKey(cid, extracted!),
+        "dedupKey"
       );
       if (dup) {
         isDuplicate = true;
@@ -749,9 +849,11 @@ async function processDriveFile(
     extracted.isDuplicate = isDuplicate ? "YES" : "NO";
     extracted.paymentStatus = "Sin pagar";
 
+    const assignStart = Date.now();
     let assignment = await resolveAssignment(
       extracted, cid, file.id, consortiumRepository, providerRepository, lspProvider
     );
+    m.ms.assign = Date.now() - assignStart;
 
     // ── Fallback visual: si el proveedor no fue encontrado y el emisor
     // estaba en imagen, intentar extracción visual con Gemini ──────────────
@@ -813,6 +915,8 @@ async function processDriveFile(
     }
     // ── Fin fallback visual ────────────────────────────────────────────────
 
+    m.match = { consortium: assignment.consortiumMatchMethod, provider: assignment.providerMatchMethod };
+
     if (!assignment.unassigned) {
       if (assignment.canonicalConsortium)    extracted.consortium    = assignment.canonicalConsortium;
       if (assignment.canonicalProvider)      extracted.provider      = assignment.canonicalProvider;
@@ -821,15 +925,26 @@ async function processDriveFile(
       extracted.period = assignment.periodLabel || null;
       extracted.bank = assignment.consortiumBank;
       pipelineLog.canonized(cid, extracted.consortium ?? "?", extracted.provider ?? "?", extracted.providerTaxId ?? "?");
+      m.canonical = {
+        consortium: extracted.consortium,
+        provider: extracted.provider,
+        taxId: extracted.providerTaxId,
+        period: extracted.period,
+      };
     }
 
     const { sourceFileUrl: _url, isDuplicate: _dup, ...extractionFields } = extracted;
 
     if (assignment.unassigned) {
+      m.result = "unassigned";
+      m.reason = assignment.reasonCategory ?? null;
+      m.reasonText = assignment.unassignedReason;
       pipelineLog.movedToUnassigned(cid, file.id, assignment.unassignedReason ?? "razón desconocida");
       if (resolvedConfig.driveUnassignedFolderId && finalSourceFolderId) {
-        await runStep("Mover a Sin Asignar", () =>
-          driveService.moveFileToUnassigned(file.id, finalSourceFolderId, resolvedConfig.driveUnassignedFolderId!)
+        await runStep(
+          "Mover a Sin Asignar",
+          () => driveService.moveFileToUnassigned(file.id, finalSourceFolderId, resolvedConfig.driveUnassignedFolderId!),
+          "move"
         );
       }
       summary.unassigned += 1;
@@ -843,10 +958,14 @@ async function processDriveFile(
     // se organiza en Rendiciones, no se escribe en Sheets ni en DB. Solo aplica si
     // la organización por Rendiciones está activa (statements configurada).
     if (!isDuplicate && resolvedConfig.driveStatementsFolderId && !assignment.periodId) {
+      m.result = "no_period";
+      m.reason = "no_active_period";
       pipelineLog.stepStart(cid, `⚠️ Consorcio "${assignment.canonicalConsortium ?? "?"}" sin período activo → Revisión`);
       if (resolvedConfig.driveFailedFolderId && finalSourceFolderId) {
-        await runStep("Mover a Revisión (sin período activo)", () =>
-          driveService.moveFileToFolder(file.id, finalSourceFolderId, resolvedConfig.driveFailedFolderId!)
+        await runStep(
+          "Mover a Revisión (sin período activo)",
+          () => driveService.moveFileToFolder(file.id, finalSourceFolderId, resolvedConfig.driveFailedFolderId!),
+          "move"
         );
         pipelineLog.movedToFailed(cid, file.id);
       }
@@ -859,8 +978,10 @@ async function processDriveFile(
     // se mantienen 1:1. El PDF se mueve a la carpeta "Duplicados" si está
     // configurada; si no, a Escaneados (no se pierde, queda para revisión).
     if (!isDuplicate) {
-      await runStep("Insertar en Google Sheets", () =>
-        sheetsService.insertRow(resolvedConfig.sheetName, extracted!, resolvedMapping)
+      await runStep(
+        "Insertar en Google Sheets",
+        () => sheetsService.insertRow(resolvedConfig.sheetName, extracted!, resolvedMapping),
+        "sheets"
       );
       pipelineLog.sheetsInserted(cid);
     } else {
@@ -870,8 +991,10 @@ async function processDriveFile(
     if (isDuplicate && resolvedConfig.driveDuplicatesFolderId && finalSourceFolderId) {
       const fromFolder = finalSourceFolderId;
       const dupFolder = resolvedConfig.driveDuplicatesFolderId;
-      await runStep("Mover a Duplicados", () =>
-        driveService.moveFileToFolder(file.id, fromFolder, dupFolder)
+      await runStep(
+        "Mover a Duplicados",
+        () => driveService.moveFileToFolder(file.id, fromFolder, dupFolder),
+        "move"
       );
       pipelineLog.stepStart(cid, "→ Duplicado movido a carpeta Duplicados");
     } else if (!isDuplicate && resolvedConfig.driveStatementsFolderId && finalSourceFolderId) {
@@ -879,8 +1002,9 @@ async function processDriveFile(
       // Escaneados). La carpeta del edificio se crea/comparte la primera vez.
       const { resolveStatementsFolders } = await import("@/services/statementsFolders.service");
       const { buildInvoiceFileName } = await import("@/lib/statementsNaming");
-      const sf = await runStep("Resolver carpetas Rendiciones", () =>
-        resolveStatementsFolders({
+      const sf = await runStep(
+        "Resolver carpetas Rendiciones",
+        () => resolveStatementsFolders({
           drive: driveService,
           statementsRootId: resolvedConfig.driveStatementsFolderId!,
           consortium: {
@@ -890,7 +1014,8 @@ async function processDriveFile(
           },
           month: assignment.periodMonth!,
           year: assignment.periodYear!,
-        })
+        }),
+        "move"
       );
       const newName = buildInvoiceFileName({
         provider: extracted!.provider,
@@ -900,22 +1025,27 @@ async function processDriveFile(
         boletaNumber: extracted!.boletaNumber,
         documentHash: fileHash,
       });
-      await runStep("Renombrar boleta", () => driveService.renameFile(file.id, newName));
-      await runStep("Mover a Rendiciones", () =>
-        driveService.moveFileToFolder(file.id, finalSourceFolderId, sf.periodFolderId)
+      await runStep("Renombrar boleta", () => driveService.renameFile(file.id, newName), "move");
+      await runStep(
+        "Mover a Rendiciones",
+        () => driveService.moveFileToFolder(file.id, finalSourceFolderId, sf.periodFolderId),
+        "move"
       );
       pipelineLog.stepStart(cid, `📁 Organizada en Rendiciones — "${assignment.canonicalConsortium ?? "?"}"`);
     } else {
       // Fallback legacy (no debería ocurrir: el scheduler valida statements).
-      await runStep("Mover a Escaneados", () =>
-        driveService.moveFileToScanned(file.id, finalSourceFolderId, resolvedConfig.driveScannedFolderId)
+      await runStep(
+        "Mover a Escaneados",
+        () => driveService.moveFileToScanned(file.id, finalSourceFolderId, resolvedConfig.driveScannedFolderId),
+        "move"
       );
       pipelineLog.movedToScanned(cid, file.id);
     }
 
     if (!isDuplicate) {
-      await runStep("Guardar invoice", () =>
-        invoiceRepository.saveProcessedInvoice({
+      await runStep(
+        "Guardar invoice",
+        () => invoiceRepository.saveProcessedInvoice({
           clientId: cid, documentHash: fileHash, fileId: file.id,
           sourceFileUrl, extraction: extractionFields, isDuplicate,
           consortiumId: assignment.consortiumId, providerId: assignment.providerId, periodId: assignment.periodId,
@@ -925,7 +1055,8 @@ async function processDriveFile(
           tokensTotal: fileAiUsage?.totalTokens ?? null,
           aiProvider: fileAiUsage?.provider ?? null,
           aiModel: fileAiUsage?.model ?? null,
-        })
+        }),
+        "save"
       );
       pipelineLog.invoiceSaved(cid, isDuplicate);
     } else {
@@ -935,12 +1066,17 @@ async function processDriveFile(
     if (duplicateKey) existingDuplicateKeys.add(duplicateKey);
     if (isDuplicate)  summary.duplicatesDetected += 1;
     summary.processed += 1;
+    m.result = isDuplicate ? "duplicate" : "ok";
+    m.reason = null;
     pipelineLog.fileCompleted(cid, file.name, { processed: 1, unassigned: 0, duplicate: isDuplicate });
 
   } catch (error) {
     summary.failed += 1;
     const errorMessage = error instanceof Error ? error.message : "Unknown error";
     summary.errors.push({ fileId: file.id, fileName: file.name, error: errorMessage });
+    m.result = "failed";
+    m.reason = "error";
+    m.reasonText = errorMessage;
     pipelineLog.fileFailed(cid, file.name, errorMessage);
     // Para el catch, intentamos usar Procesando primero (si existe) y caer a Pendientes.
     const failSourceFolderId =
@@ -953,6 +1089,30 @@ async function processDriveFile(
         // Silent — ya logueamos el error principal
       }
     }
+  } finally {
+    // Una sola línea [metrics] por boleta, en TODOS los caminos de salida
+    // (ok / unassigned / duplicate / no_period / failed). `values` solo con debug.
+    m.ms.total = Date.now() - startedAt;
+    pipelineLog.metrics(
+      {
+        ts: new Date().toISOString(),
+        client: cid,
+        file: file.name,
+        fileId: file.id,
+        mime: file.mimeType ?? null,
+        textSource: m.textSource,
+        textChars: m.textChars,
+        emitterBlock: m.emitterBlock,
+        lsp: m.lsp,
+        ai: m.ai,
+        ms: m.ms,
+        match: m.match,
+        result: m.result,
+        reason: m.reason,
+      },
+      { extracted: m.extracted, canonical: m.canonical, reasonText: m.reasonText },
+      !!resolvedConfig.debugMode
+    );
   }
 }
 

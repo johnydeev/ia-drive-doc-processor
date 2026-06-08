@@ -4,6 +4,22 @@ Registro de decisiones tomadas ante problemas reales encontrados en producción.
 
 ---
 
+## 2026-06-08 — Logs de métricas del pipeline (instrumentación)
+
+**Problema:** los logs sirven para leer una boleta pero no para analizar de forma
+agregada (latencia IA, %OCR, costo, aciertos). Ej: una boleta tardó 2m41s en Gemini
+vs 5s otra, solo visible restando timestamps a mano.
+
+**Decisión:** una línea estructurada `[metrics] {JSON}` por boleta (additiva, no
+reemplaza los logs legibles). Núcleo siempre **sin PII**; el bloque `values`
+(extraído vs canónico) solo con `debugMode`. **Solo logging, sin migración.**
+Emisión en `finally` → una sola línea por boleta en todos los caminos.
+
+**Descartado:** persistir métricas en una tabla DB (requiere migración; YAGNI).
+Diseño: `docs/superpowers/specs/2026-06-08-logs-metricas-pipeline-design.md`.
+
+---
+
 ## 2026-06-07 — Rendiciones por edificio (statements): organización en Drive + llave anti-tokens
 
 ### Problema

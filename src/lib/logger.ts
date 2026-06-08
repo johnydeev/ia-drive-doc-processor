@@ -332,6 +332,14 @@ export const pipelineLog = {
     log("info", "job", `  Fallidos:     ${summary.failed}`, shortId(clientId));
     miniDivider("job");
   },
+
+  /**
+   * Línea estructurada de métricas por boleta (para análisis agregado).
+   * El núcleo va siempre; `values` (PII: monto/CUIT/nombres) solo con debug=true.
+   */
+  metrics(core: Record<string, unknown>, values: Record<string, unknown> | null, debug: boolean) {
+    console.log(`[metrics] ${JSON.stringify(buildMetricsPayload(core, values, debug))}`);
+  },
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -384,4 +392,17 @@ function formatDuration(ms: number): string {
   const minutes = Math.floor(seconds / 60);
   const remainingSeconds = seconds % 60;
   return `${minutes}m ${remainingSeconds}s`;
+}
+
+/**
+ * Arma el payload de la línea [metrics]. El núcleo va siempre; el bloque `values`
+ * (que puede contener PII: monto/CUIT/nombres) se incluye SOLO con debug=true.
+ * Pura: testeable sin emitir nada.
+ */
+export function buildMetricsPayload(
+  core: Record<string, unknown>,
+  values: Record<string, unknown> | null,
+  debug: boolean
+): Record<string, unknown> {
+  return debug && values ? { ...core, values } : { ...core };
 }

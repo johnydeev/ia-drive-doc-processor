@@ -1,6 +1,19 @@
 # Progreso del proyecto — drive-doc-processor
 
-Actualizado al 07/06/2026 (sesión 28).
+Actualizado al 08/06/2026 (sesión 29).
+
+---
+
+## Logs de métricas del pipeline (08/06/2026)
+
+**Estado: implementado, pendiente de verificación en prod.**
+
+Línea `[metrics] {JSON}` por boleta en el worker (additiva): tiempos por paso,
+tokens+modelo, fuente de texto (direct/ocr/merged/image), método de match,
+`result`/`reason`. Núcleo sin PII; `values` (extraído vs canónico) solo con
+`debugMode`. Sin migración. Para analizar: exportar logs y `grep '[metrics]'`.
+`tsc` limpio + `scripts/test-metrics-payload.ts` 8/8. Diseño:
+`docs/superpowers/specs/2026-06-08-logs-metricas-pipeline-design.md`.
 
 ---
 

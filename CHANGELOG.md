@@ -3,6 +3,14 @@
 ## [Unreleased]
 
 ### Features
+- **Logs de métricas del pipeline (instrumentación para análisis) (2026-06-08)**.
+  Una línea `[metrics] {JSON}` por boleta en el log del worker (additiva, greppable):
+  tiempos por paso (`ms.ai/ocr/text/...`), tokens+modelo, `textSource`
+  (direct/ocr/merged/image), método de match, `result` y `reason`. Núcleo siempre
+  sin PII; el bloque `values` (extraído vs canónico) solo con `debugMode`. Solo
+  logging, sin migración. Archivos: `pdfTextExtractor.service.ts`, `logger.ts`,
+  `processPendingDocuments.job.ts`. Nuevo: `scripts/test-metrics-payload.ts`.
+  Diseño: `docs/superpowers/specs/2026-06-08-logs-metricas-pipeline-design.md`.
 - **Rendiciones por edificio: boletas y recibos organizados en Drive para QR (2026-06-07)**.
   Las boletas OK ya no van a "Escaneados": ahora se organizan en
   `Rendiciones/[Edificio]/[Período]/` dentro de una carpeta raíz pública

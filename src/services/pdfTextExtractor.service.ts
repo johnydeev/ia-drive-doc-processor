@@ -4,6 +4,8 @@ export class PdfTextExtractorService {
   private static readonly MIN_USEFUL_CHARS = 100;
   private lastOcrPngBuffer: Buffer | null = null;
   private lastHasEmitterBlock = false;
+  private lastTextSource: "direct" | "ocr" | "merged" = "direct";
+  private lastOcrMs = 0;
 
   getLastOcrPng(): Buffer | null {
     return this.lastOcrPngBuffer;
@@ -13,9 +15,21 @@ export class PdfTextExtractorService {
     return this.lastHasEmitterBlock;
   }
 
+  /** Fuente del texto devuelto por la última llamada a extractTextFromPdf. */
+  getLastTextSource(): "direct" | "ocr" | "merged" {
+    return this.lastTextSource;
+  }
+
+  /** Milisegundos que tardó el OCR en la última llamada (0 si no se usó). */
+  getLastOcrMs(): number {
+    return this.lastOcrMs;
+  }
+
   async extractTextFromPdf(buffer: Buffer, maxPages?: number): Promise<string> {
     this.lastOcrPngBuffer = null;
     this.lastHasEmitterBlock = false;
+    this.lastTextSource = "direct";
+    this.lastOcrMs = 0;
     const directText = await this.extractTextDirectly(buffer, maxPages);
 
     const hasEnoughText = directText.length >= PdfTextExtractorService.MIN_USEFUL_CHARS;
@@ -43,20 +57,30 @@ export class PdfTextExtractorService {
       `[pdf-extractor] Bloque emisor no detectado en texto ` +
       `(${directText.length} chars, hasEmitterBlock=${hasEmitterBlock}) → activando OCR`
     );
+    const ocrStart = Date.now();
     try {
       const { OcrService } = await import("@/services/ocr.service");
       const ocrService = new OcrService();
       const ocrText = await ocrService.extractTextFromPdf(buffer);
       this.lastOcrPngBuffer = ocrService.getLastFirstPagePng();
       const cleanOcr = this.cleanText(ocrText);
+      this.lastOcrMs = Date.now() - ocrStart;
 
       if (cleanOcr.length > directText.length) {
         console.warn(`[pdf-extractor] OCR exitoso — texto enriquecido (${cleanOcr.length} chars)`);
+        this.lastTextSource = "merged";
         return this.mergeTexts(directText, cleanOcr);
       }
 
-      return directText.length > 0 ? directText : cleanOcr;
+      if (directText.length > 0) {
+        this.lastTextSource = "direct";
+        return directText;
+      }
+      this.lastTextSource = "ocr";
+      return cleanOcr;
     } catch (ocrError) {
+      this.lastOcrMs = Date.now() - ocrStart;
+      this.lastTextSource = "direct";
       console.error(
         `[pdf-extractor] OCR falló, usando texto de pdf-parse: ` +
         `${ocrError instanceof Error ? ocrError.message : "Unknown error"}`
