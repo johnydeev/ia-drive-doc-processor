@@ -28,6 +28,7 @@ export interface ProcessJobConfig {
   driveFailedFolderId?: string | null;
   driveProcessingFolderId?: string | null;
   driveDuplicatesFolderId?: string | null;
+  driveStatementsFolderId?: string | null;
   googleConfig?: ClientGoogleConfig | null;
   aiConfig?: {
     geminiApiKey?: string;
@@ -212,6 +213,9 @@ interface AssignmentResult {
   canonicalProviderTaxId: string | null;
   providerPaymentAlias: string | null;
   consortiumBank: string | null;
+  statementsFolderId: string | null;
+  periodMonth: number | null;
+  periodYear: number | null;
 }
 
 async function resolveAssignment(
@@ -228,6 +232,7 @@ async function resolveAssignment(
     unassigned: true, unassignedReason: null,
     canonicalConsortium: null, canonicalProvider: null, canonicalProviderTaxId: null,
     providerPaymentAlias: null, consortiumBank: null,
+    statementsFolderId: null, periodMonth: null, periodYear: null,
   };
 
   const prisma = getPrismaClient();
@@ -272,7 +277,7 @@ async function resolveAssignment(
   if (lspProvider && lspProvider !== "GENERIC_LSP" && normalizedClientNumber) {
     try {
       const lspInclude = {
-        consortium: { select: { id: true, canonicalName: true, rawName: true, bank: true } },
+        consortium: { select: { id: true, canonicalName: true, rawName: true, bank: true, statementsFolderId: true } },
         providerRef: { select: { id: true, canonicalName: true, cuit: true, paymentAlias: true } },
       } as const;
 
@@ -323,6 +328,9 @@ async function resolveAssignment(
           canonicalProviderTaxId: resolvedProvider?.cuit ?? extracted.providerTaxId,
           providerPaymentAlias: resolvedProvider?.paymentAlias ?? null,
           consortiumBank: lspService.consortium.bank ?? null,
+          statementsFolderId: lspService.consortium.statementsFolderId ?? null,
+          periodMonth: activePeriod?.month ?? null,
+          periodYear: activePeriod?.year ?? null,
         };
       }
 
@@ -425,6 +433,9 @@ async function resolveAssignment(
   base.periodLabel = activePeriod ? formatPeriodLabel(activePeriod.month, activePeriod.year) : null;
   base.canonicalConsortium = consortium.rawName;
   base.consortiumBank = consortium.bank ?? null;
+  base.statementsFolderId = consortium.statementsFolderId ?? null;
+  base.periodMonth = activePeriod?.month ?? null;
+  base.periodYear = activePeriod?.year ?? null;
 
   const consortiumCuitNorm = normCuit((consortium as any).cuit);
 
@@ -513,6 +524,9 @@ async function resolveAssignment(
     canonicalProviderTaxId: matched.cuit ?? rawCuit,
     providerPaymentAlias: matched.paymentAlias ?? null,
     consortiumBank: base.consortiumBank,
+    statementsFolderId: base.statementsFolderId,
+    periodMonth: base.periodMonth,
+    periodYear: base.periodYear,
   };
 }
 
@@ -823,6 +837,24 @@ async function processDriveFile(
       return;
     }
 
+    // Red de seguridad (caso puntual): el consorcio matcheó pero no tiene período
+    // activo. El peor caso —cliente sin ningún período— ya lo cortó la llave del
+    // scheduler (0 tokens). Esta boleta puntual va a Revisión (failed) + aviso: no
+    // se organiza en Rendiciones, no se escribe en Sheets ni en DB. Solo aplica si
+    // la organización por Rendiciones está activa (statements configurada).
+    if (!isDuplicate && resolvedConfig.driveStatementsFolderId && !assignment.periodId) {
+      pipelineLog.stepStart(cid, `⚠️ Consorcio "${assignment.canonicalConsortium ?? "?"}" sin período activo → Revisión`);
+      if (resolvedConfig.driveFailedFolderId && finalSourceFolderId) {
+        await runStep("Mover a Revisión (sin período activo)", () =>
+          driveService.moveFileToFolder(file.id, finalSourceFolderId, resolvedConfig.driveFailedFolderId!)
+        );
+        pipelineLog.movedToFailed(cid, file.id);
+      }
+      summary.unassigned += 1;
+      pipelineLog.fileCompleted(cid, file.name, { processed: 0, unassigned: 1, duplicate: false });
+      return;
+    }
+
     // Duplicados: NO se escriben en Sheets ni en DB — así la planilla y la DB
     // se mantienen 1:1. El PDF se mueve a la carpeta "Duplicados" si está
     // configurada; si no, a Escaneados (no se pierde, queda para revisión).
@@ -842,7 +874,39 @@ async function processDriveFile(
         driveService.moveFileToFolder(file.id, fromFolder, dupFolder)
       );
       pipelineLog.stepStart(cid, "→ Duplicado movido a carpeta Duplicados");
+    } else if (!isDuplicate && resolvedConfig.driveStatementsFolderId && finalSourceFolderId) {
+      // Boleta OK → organizar en Rendiciones/[Edificio]/[Período] (reemplaza
+      // Escaneados). La carpeta del edificio se crea/comparte la primera vez.
+      const { resolveStatementsFolders } = await import("@/services/statementsFolders.service");
+      const { buildInvoiceFileName } = await import("@/lib/statementsNaming");
+      const sf = await runStep("Resolver carpetas Rendiciones", () =>
+        resolveStatementsFolders({
+          drive: driveService,
+          statementsRootId: resolvedConfig.driveStatementsFolderId!,
+          consortium: {
+            id: assignment.consortiumId!,
+            rawName: assignment.canonicalConsortium ?? assignment.consortiumId!,
+            statementsFolderId: assignment.statementsFolderId,
+          },
+          month: assignment.periodMonth!,
+          year: assignment.periodYear!,
+        })
+      );
+      const newName = buildInvoiceFileName({
+        provider: extracted!.provider,
+        consortium: assignment.canonicalConsortium,
+        month: assignment.periodMonth!,
+        year: assignment.periodYear!,
+        boletaNumber: extracted!.boletaNumber,
+        documentHash: fileHash,
+      });
+      await runStep("Renombrar boleta", () => driveService.renameFile(file.id, newName));
+      await runStep("Mover a Rendiciones", () =>
+        driveService.moveFileToFolder(file.id, finalSourceFolderId, sf.periodFolderId)
+      );
+      pipelineLog.stepStart(cid, `📁 Organizada en Rendiciones — "${assignment.canonicalConsortium ?? "?"}"`);
     } else {
+      // Fallback legacy (no debería ocurrir: el scheduler valida statements).
       await runStep("Mover a Escaneados", () =>
         driveService.moveFileToScanned(file.id, finalSourceFolderId, resolvedConfig.driveScannedFolderId)
       );
@@ -897,7 +961,7 @@ function buildLegacyConfig(sheetName: string, mapping?: SheetsRowMapping): Proce
     clientId: "default-env-client", clientName: "Default Client", sheetName, mapping,
     drivePendingFolderId: env.GOOGLE_DRIVE_PENDING_FOLDER_ID,
     driveScannedFolderId: env.GOOGLE_DRIVE_SCANNED_FOLDER_ID,
-    driveUnassignedFolderId: null, driveFailedFolderId: null, driveProcessingFolderId: null, driveDuplicatesFolderId: null, googleConfig: null,
+    driveUnassignedFolderId: null, driveFailedFolderId: null, driveProcessingFolderId: null, driveDuplicatesFolderId: null, driveStatementsFolderId: null, googleConfig: null,
   };
 }
 
@@ -911,6 +975,7 @@ function normalizeConfig(config: ProcessJobConfig | string, mapping?: SheetsRowM
     driveFailedFolderId: config.driveFailedFolderId ?? null,
     driveProcessingFolderId: config.driveProcessingFolderId ?? null,
     driveDuplicatesFolderId: config.driveDuplicatesFolderId ?? null,
+    driveStatementsFolderId: config.driveStatementsFolderId ?? null,
   };
 }
 

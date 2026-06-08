@@ -85,6 +85,7 @@ export async function runProcessingCycle(
           driveFailedFolderId: folders.failed,
           driveProcessingFolderId: folders.processing,
           driveDuplicatesFolderId: folders.duplicates,
+          driveStatementsFolderId: folders.statements,
           googleConfig,
           aiConfig: resolveAiConfig(client),
           debugMode: !!(client.extractionConfigJson as Record<string, unknown> | null)?.debugMode,

@@ -4,6 +4,60 @@ Registro de decisiones tomadas ante problemas reales encontrados en producción.
 
 ---
 
+## 2026-06-07 — Rendiciones por edificio (statements): organización en Drive + llave anti-tokens
+
+### Problema
+Los inquilinos de cada consorcio necesitan ver qué se pagó y cuándo. Las boletas
+OK terminaban todas mezcladas en "Escaneados", sin estructura navegable ni un
+acceso público por edificio para rendir cuentas.
+
+### Decisión
+Organizar cada boleta y recibo en un **árbol invertido** en Drive:
+`Rendiciones/[Edificio]/[Período]/`. La carpeta raíz (`statements`) la crea el
+owner una vez; la app crea las subcarpetas. La carpeta de cada **edificio** se
+comparte **pública** (anyone/reader) una sola vez y su link se guarda en
+`Consortium.statementsFolderUrl` (el QR lo genera el usuario desde el panel).
+Aplica al pipeline y a la carga manual; los recibos van junto a su boleta.
+
+Decisiones puntuales:
+- **Naming** legible y sin colisiones: boleta
+  `PROVEEDOR - CONSORCIO - P06-2026 - NNNN.pdf`; sin N° → `SN + 6 del hash`.
+  Recibo según tipo de pago (único / cuota X de N / parcial libre + monto).
+- **Llave anti-tokens en el SCHEDULER** (no en el worker): el worker es el único
+  que consume IA, así que la validación (carpeta `statements` + al menos un
+  período ACTIVE a nivel cliente) se hace **antes de encolar**. Si falla → no se
+  encola → **cero tokens**; los PDFs quedan en Pendientes y el próximo ciclo
+  reintenta. La validación de carpetas reusa `validateClientProcessingConfig`
+  (que ahora exige `statements`); el período se chequea con un `count` directo.
+- **Caso puntual sin período** (un consorcio sin período, con el resto del
+  cliente con período): el worker manda esa boleta a Revisión (`failed`) + aviso.
+- **Duplicados**: sin cambios — siguen yendo a la carpeta Duplicados.
+- **Cache en memoria** por proceso de los folderIds (edificio/período) para no
+  repetir llamadas a Drive por cada boleta del mismo edificio en un ciclo.
+
+### Alternativas descartadas
+- **Validar el período en el worker**: gastaría tokens antes de descubrir que no
+  hay período. Se cortó en el scheduler (0 tokens).
+- **Compartir pública la carpeta raíz `statements`**: expondría todos los
+  edificios juntos. Solo se comparte la carpeta de cada edificio (el período
+  hereda el acceso al estar dentro).
+- **Migrar boletas históricas**: fuera de alcance; aplica de ahora en más.
+  "Escaneados" queda como histórico de boletas viejas.
+
+### Impacto
+Migración `20260607000100_add_consortium_statements_folder`
+(`Consortium.statementsFolderId/Url`). Nuevos: `src/lib/statementsNaming.ts`,
+`src/services/statementsFolders.service.ts`, `scripts/test-statements-naming.ts`.
+Modificados: schema, `client.types.ts`, `clientProcessingConfig.ts`,
+`googleDrive.service.ts` (`renameFile` + `shareFolderPublic`),
+`processPendingDocuments.job.ts` (+ `runProcessingCycle.ts`, `jobWorkerMain.ts`),
+`scheduler.ts` + `logger.ts`, carga manual (`invoices/route.ts`), recibo
+(`invoices/[invoiceId]/receipt/route.ts`), purga (`clients/[id]/purge/route.ts`)
+y el panel (`admin/consortiums/page.tsx`). Spec completo en
+`docs/superpowers/specs/2026-06-05-rendiciones-por-edificio-design.md`.
+
+---
+
 ## 2026-06-04 — Duplicados: consistencia DB↔Sheets (no persistir en DB)
 
 ### Problema

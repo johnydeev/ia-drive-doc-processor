@@ -124,6 +124,8 @@ Client          → Tenant. Roles: ADMIN / CLIENT / VIEWER. consortiumsEnabled (
   - Ejemplo: `"BROWN ALMTE AV 708|ALMIRANTE BROWN 708"`
   - Campo interno — **no se muestra en la UI**
 - `paymentAlias` → alias visible en la UI y en la columna "ALIAS" de Google Sheets
+- `statementsFolderId` → ID de la carpeta del edificio dentro de "Rendiciones" (`driveFoldersJson.statements`). La crea/comparte la app la 1ª vez que organiza una boleta del consorcio; luego se reutiliza.
+- `statementsFolderUrl` → webViewLink **público** de esa carpeta (para el QR de rendición). Visible en el panel con botón **Copiar**.
 ### Campos importantes en Provider
 - `matchNames` → nombres alternativos separados por `|` para matching interno
   - Campo interno — **no se muestra en la UI**
@@ -183,7 +185,11 @@ Siempre usar `resolveGoogleConfig(client)` para construir el `GoogleSheetsServic
 7. **Canonización** → reemplazar datos OCR por datos canónicos de DB
 8. **LspService lookup** → si es LSP y tiene clientNumber, buscar en tabla LspService
 9. **Insert Sheets** → fila con monto formateado en es-AR ($ 118.000,00) + período (MM/YYYY). **Solo si NO es duplicado** (los duplicados no se escriben en Sheets desde 2026-06-04).
-10. **Mover archivo** → Escaneados (ok) / Sin Asignar (no matcheó) / **Duplicados** (si es duplicado y `driveFoldersJson.duplicates` está configurada; sino va a Escaneados).
+10. **Organizar / Mover archivo** (desde 2026-06-07):
+    - **Boleta OK** → se **renombra** y se mueve a **`Rendiciones/[Edificio]/[Período]`** (`driveFoldersJson.statements`). La carpeta del edificio se crea y comparte pública la 1ª vez (link en `Consortium.statementsFolderUrl`). Reemplaza el viejo destino "Escaneados".
+    - **Sin Asignar** → carpeta Sin Asignar (no matcheó).
+    - **Duplicado** → carpeta **Duplicados** (si `driveFoldersJson.duplicates`; sino Escaneados). NO va a Rendiciones.
+    - **Consorcio sin período activo** → **Revisión** (`failed`) + aviso (caso puntual; el peor caso —cliente sin ningún período— lo corta la llave del scheduler).
 11. **Guardar Invoice** + métricas (con lspServiceId y paymentMethod si aplica). **Solo si NO es duplicado** (los duplicados no se persisten en DB — lo impide el unique `uq_invoice_business_key`).
 ### Matching de consorcio (3 niveles, en orden)
 1. **Exacto** → `normalizeConsortiumName(rawOcr) === canonicalName`
@@ -307,7 +313,7 @@ Los campos `receiptDriveFileId` y `receiptDriveFileUrl` se guardan en Invoice.
 **Ejecutar:** `DELETE /api/admin/clients/[id]/purge` — purga completa
 Flujo del DELETE (en orden):
 1. Obtener invoices del cliente (`driveFileId` de cada una)
-2. Mover archivos de Drive: `scanned → pending` (fallback `unassigned → pending`). Si falla → `driveFailed++`, continúa
+2. Mover archivos de Drive desde su **parent real** (vía `getFileParents`) → `pending`. Tolera que el archivo esté en `Rendiciones/[Edificio]/[Período]` o en Escaneados. Si falla → `driveFailed++`, continúa
 3. Limpiar Sheets: `clearAllDataRows(sheetName)` borra fila 2+ preservando headers
 4. Borrar DB en transacción: `ProcessingJob.deleteMany` + `Invoice.deleteMany`
 **NO borra:** Consorcios, Proveedores, Períodos, Rubros, Coeficientes, LspServices.
@@ -324,11 +330,13 @@ Respuesta: `{ ok, deleted, driveMovedBack, driveFailed, sheetsCleared }`
   "failed":     "ID_CARPETA_FALLIDOS",
   "receipts":   "ID_CARPETA_RECIBOS",
   "processing": "ID_CARPETA_PROCESANDO",
-  "duplicates": "ID_CARPETA_DUPLICADOS"
+  "duplicates": "ID_CARPETA_DUPLICADOS",
+  "statements": "ID_CARPETA_RENDICIONES"
 }
 ```
 - `processing` → lock de archivo durante el procesamiento (opcional).
 - `duplicates` → destino de las boletas duplicadas (opcional). Si no está, los duplicados van a `scanned`.
+- `statements` → **carpeta raíz pública "Rendiciones"** (obligatoria desde 2026-06-07). La crea el owner una vez; dentro la app crea `[Edificio]/[Período]` y comparte cada carpeta de edificio. `validateClientProcessingConfig` la exige: si falta, el scheduler saltea el cliente (con aviso, 0 tokens).
 
 > **Service accounts y creación de archivos:** una SA no tiene cuota de almacenamiento, así que **no puede CREAR archivos en "Mi unidad"** (sí mover/leer). El pipeline automático funciona porque solo MUEVE archivos que el usuario sube a `pending`. Para que la app CREE archivos (carga manual del PDF, recibos), las carpetas deben vivir en una **Unidad Compartida (Shared Drive)** con la SA como miembro (rol Administrador de contenido) — el código ya soporta Shared Drives (`supportsAllDrives`/`includeItemsFromAllDrives`). Alternativa: domain-wide delegation vía `impersonateEmail` (requiere super admin). MorinigoAdm usa Unidad Compartida "Control de Boletas y Pagos".
 

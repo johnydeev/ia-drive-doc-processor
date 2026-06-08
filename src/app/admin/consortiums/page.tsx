@@ -19,7 +19,7 @@ const TIPOS_GASTO = [
 type Period      = { id: string; year: number; month: number; status: "ACTIVE" | "CLOSED"; };
 type Coeficiente = { id: string; name: string; value: number; };
 type Rubro       = { id: string; name: string; };
-type Consortium  = { id: string; canonicalName: string; rawName: string; cuit: string | null; cutoffDay: number; matchNames: string | null; bank: string | null; periods: Period[]; _count: { invoices: number }; };
+type Consortium  = { id: string; canonicalName: string; rawName: string; cuit: string | null; cutoffDay: number; matchNames: string | null; bank: string | null; statementsFolderUrl: string | null; periods: Period[]; _count: { invoices: number }; };
 type Provider    = { id: string; canonicalName: string; cuit: string | null; paymentAlias: string | null; providerType?: "PROVEEDOR" | "EMPLEADO"; };
 type Invoice     = {
   id: string; boletaNumber: string | null; provider: string | null; providerTaxId: string | null;
@@ -453,6 +453,7 @@ export default function ConsortiumsPage() {
   const [invoiceForm, setInvoiceForm] = useState<InvoiceForm>(EMPTY_INVOICE_FORM);
   const [savingInvoice, setSavingInvoice] = useState(false);
   const [invoiceError, setInvoiceError] = useState<string | null>(null);
+  const [copiedStatementsId, setCopiedStatementsId] = useState<string | null>(null);
 
   const [showMismatchModal, setShowMismatchModal] = useState(false);
   const [mismatchFoundConsortium, setMismatchFoundConsortium] = useState<string | null>(null);
@@ -1297,6 +1298,36 @@ export default function ConsortiumsPage() {
                     </div>
                   </div>
                   {selectedConsortium.cuit && <p className={styles.detailMeta}>CUIT: {selectedConsortium.cuit}</p>}
+                  <p className={styles.detailMeta}>
+                    Rendición:{" "}
+                    {selectedConsortium.statementsFolderUrl ? (
+                      <>
+                        <a
+                          href={selectedConsortium.statementsFolderUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          style={{ color: "inherit", textDecoration: "underline" }}
+                        >
+                          Carpeta pública
+                        </a>{" "}
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const url = selectedConsortium.statementsFolderUrl;
+                            if (!url) return;
+                            navigator.clipboard?.writeText(url);
+                            setCopiedStatementsId(selectedConsortium.id);
+                            setTimeout(() => setCopiedStatementsId(null), 1500);
+                          }}
+                          style={{ marginLeft: 6, padding: "2px 8px", fontSize: "0.75rem", cursor: "pointer", borderRadius: 4, border: "1px solid currentColor", background: "transparent", color: "inherit" }}
+                        >
+                          {copiedStatementsId === selectedConsortium.id ? "✓ Copiado" : "Copiar link"}
+                        </button>
+                      </>
+                    ) : (
+                      <span style={{ opacity: 0.7 }}>Pendiente (se genera al procesar la primera boleta)</span>
+                    )}
+                  </p>
                 </div>
                 <div className={styles.detailActions}>
                   {selectedPeriod?.status === "ACTIVE" && (

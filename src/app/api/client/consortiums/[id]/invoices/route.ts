@@ -117,7 +117,7 @@ export async function POST(
 
     const consortium = await prisma.consortium.findFirst({
       where: { id: consortiumId, clientId: auth.session.clientId },
-      select: { id: true, rawName: true, bank: true },
+      select: { id: true, rawName: true, bank: true, statementsFolderId: true },
     });
     if (!consortium) {
       return NextResponse.json({ ok: false, error: "Consorcio no encontrado" }, { status: 404 });
@@ -262,14 +262,35 @@ export async function POST(
         driveWarning = "Sin credenciales de Google, el PDF no se guardó en Drive.";
       } else {
         const folders = processingClient ? resolveFolders(processingClient) : ({} as ReturnType<typeof resolveFolders>);
-        const destFolderId = folders.scanned ?? folders.receipts ?? null;
-        if (!destFolderId) {
-          driveWarning = "Sin carpeta de Drive configurada (Escaneados), el PDF no se guardó.";
+        if (!folders.statements) {
+          driveWarning = "Sin carpeta Rendiciones (statements) configurada, el PDF no se guardó.";
         } else {
           try {
+            // Mismo destino que el pipeline: Rendiciones/[Edificio]/[Período],
+            // con el PDF renombrado y la carpeta del edificio compartida pública.
             const driveService = new GoogleDriveService(googleConfig);
-            const fileName = pdfFile!.name || `boleta_${Date.now()}.pdf`;
-            const uploaded = await driveService.uploadFile(pdfBuffer, fileName, "application/pdf", destFolderId);
+            const { resolveStatementsFolders } = await import("@/services/statementsFolders.service");
+            const { buildInvoiceFileName } = await import("@/lib/statementsNaming");
+            const sf = await resolveStatementsFolders({
+              drive: driveService,
+              statementsRootId: folders.statements,
+              consortium: {
+                id: consortium.id,
+                rawName: consortium.rawName,
+                statementsFolderId: consortium.statementsFolderId ?? null,
+              },
+              month: period.month,
+              year: period.year,
+            });
+            const fileName = buildInvoiceFileName({
+              provider: provider.canonicalName,
+              consortium: consortium.rawName,
+              month: period.month,
+              year: period.year,
+              boletaNumber: body.boletaNumber ?? null,
+              documentHash,
+            });
+            const uploaded = await driveService.uploadFile(pdfBuffer, fileName, "application/pdf", sf.periodFolderId);
             driveFileId = uploaded.id || null;
             sourceFileUrl =
               uploaded.webViewLink ??

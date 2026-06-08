@@ -6,11 +6,6 @@ import { resolveGoogleConfig, resolveFolders } from "@/lib/clientProcessingConfi
 import { PaymentRepository, PaymentError } from "@/repositories/payment.repository";
 import { isPdf } from "@/lib/fileSignature";
 
-const MONTH_NAMES = [
-  "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio",
-  "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre",
-];
-
 /**
  * POST /api/client/consortiums/[id]/invoices/[invoiceId]/receipt
  *
@@ -34,7 +29,7 @@ export async function POST(
     const invoice = await prisma.invoice.findFirst({
       where: { id: invoiceId, clientId, consortiumId },
       include: {
-        consortiumRef: { select: { rawName: true } },
+        consortiumRef: { select: { rawName: true, statementsFolderId: true } },
         periodRef:     { select: { year: true, month: true } },
       },
     });
@@ -91,36 +86,18 @@ export async function POST(
 
     const folders = resolveFolders(processingClient);
 
-    // Carpeta raíz de recibos: usa receipts si está configurado, sino scanned
-    const rootReceiptsFolderId = folders.receipts ?? folders.scanned;
-    if (!rootReceiptsFolderId) {
-      return NextResponse.json({ ok: false, error: "Sin carpeta de destino configurada en Drive" }, { status: 400 });
+    // El recibo se guarda JUNTO a su boleta, en Rendiciones/[Edificio]/[Período].
+    if (!folders.statements) {
+      return NextResponse.json({ ok: false, error: "Sin carpeta Rendiciones (statements) configurada en Drive" }, { status: 400 });
+    }
+    if (!invoice.periodRef) {
+      return NextResponse.json({ ok: false, error: "La boleta no tiene período asociado" }, { status: 400 });
     }
 
-    // ── Construir estructura de carpetas: raíz / Consorcio / Período ──────
     const driveService = new GoogleDriveService(googleConfig);
 
-    const consortiumName = invoice.consortiumRef?.rawName ?? invoice.consortium ?? "Sin Consorcio";
-    const periodLabel = invoice.periodRef
-      ? `${MONTH_NAMES[invoice.periodRef.month - 1]} ${invoice.periodRef.year}`
-      : "Sin Período";
-
-    // Crear/obtener subcarpeta del consorcio
-    const consortiumFolderId = await driveService.getOrCreateFolder(
-      consortiumName,
-      rootReceiptsFolderId
-    );
-
-    // Crear/obtener subcarpeta del período dentro del consorcio
-    const periodFolderId = await driveService.getOrCreateFolder(
-      periodLabel,
-      consortiumFolderId
-    );
-
-    // ── Subir el PDF a Drive ──────────────────────────────────────────────
+    // ── Validar el PDF antes de crear carpetas o subir ────────────────────
     const buffer = Buffer.from(await file.arrayBuffer());
-
-    // Magic bytes: confirmar que el contenido es realmente PDF.
     if (!isPdf(buffer)) {
       return NextResponse.json(
         { ok: false, error: "El archivo no es un PDF válido (firma binaria incorrecta)" },
@@ -128,13 +105,28 @@ export async function POST(
       );
     }
 
-    const fileName = file.name || `recibo_${invoiceId}.pdf`;
+    // ── Resolver Rendiciones/[Edificio]/[Período] (misma carpeta que la boleta) ──
+    const { resolveStatementsFolders } = await import("@/services/statementsFolders.service");
+    const { buildReceiptFileName } = await import("@/lib/statementsNaming");
+    const consortiumName = invoice.consortiumRef?.rawName ?? invoice.consortium ?? "Sin Consorcio";
+    const sf = await resolveStatementsFolders({
+      drive: driveService,
+      statementsRootId: folders.statements,
+      consortium: {
+        id: invoice.consortiumId!,
+        rawName: consortiumName,
+        statementsFolderId: invoice.consortiumRef?.statementsFolderId ?? null,
+      },
+      month: invoice.periodRef.month,
+      year: invoice.periodRef.year,
+    });
 
+    // ── Subir el PDF (nombre provisional; se renombra tras crear el pago) ──
     const uploaded = await driveService.uploadFile(
       buffer,
-      fileName,
+      file.name || `recibo_${invoiceId}.pdf`,
       "application/pdf",
-      periodFolderId
+      sf.periodFolderId
     );
 
     if (!uploaded.id) {
@@ -144,15 +136,39 @@ export async function POST(
     const driveFileUrl = uploaded.webViewLink ?? `https://drive.google.com/file/d/${uploaded.id}/view`;
 
     // ── Crear Payment con el monto total de la invoice ───────────────────
+    const paymentDate = new Date();
     const paymentRepo = new PaymentRepository();
     const result = await paymentRepo.createPayment({
       clientId,
       invoiceId,
       amount: invoice.amount ? Number(invoice.amount) : 0,
-      paymentDate: new Date(),
+      paymentDate,
       driveFileId: uploaded.id,
       driveFileUrl,
     });
+
+    // ── Renombrar el recibo según el tipo de pago (único / cuota / parcial) ──
+    // El nombre depende del resultado del pago (salda total, nº de cuota), por
+    // eso se renombra después de createPayment. Si falla, el recibo queda con el
+    // nombre provisional (no es bloqueante).
+    try {
+      const receiptName = buildReceiptFileName({
+        provider: invoice.provider,
+        consortium: consortiumName,
+        month: invoice.periodRef.month,
+        year: invoice.periodRef.year,
+        boletaNumber: invoice.boletaNumber,
+        documentHash: invoice.documentHash,
+        paymentDate,
+        amount: Number(result.payment.amount),
+        installmentNumber: result.payment.installmentNumber,
+        totalInstallments: result.payment.totalInstallments,
+        saldaTotal: result.invoice.isPaid,
+      });
+      await driveService.renameFile(uploaded.id, receiptName);
+    } catch (renameErr) {
+      console.warn(`[receipt-upload] no se pudo renombrar el recibo: ${renameErr instanceof Error ? renameErr.message : "error"}`);
+    }
 
     return NextResponse.json({
       ok: true,

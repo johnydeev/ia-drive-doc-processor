@@ -3,6 +3,32 @@
 ## [Unreleased]
 
 ### Features
+- **Rendiciones por edificio: boletas y recibos organizados en Drive para QR (2026-06-07)**.
+  Las boletas OK ya no van a "Escaneados": ahora se organizan en
+  `Rendiciones/[Edificio]/[Período]/` dentro de una carpeta raíz pública
+  (`driveFoldersJson.statements`) que crea el owner una vez. La app crea la
+  subcarpeta de cada edificio, la **comparte pública** (anyone/reader) una sola
+  vez y guarda su link en `Consortium.statementsFolderUrl` (visible en el panel,
+  con botón **Copiar** → para generar el QR). Dentro, los períodos se agregan mes
+  a mes (`2026-06 Junio`). Los PDFs se **renombran** con naming legible
+  (`PROVEEDOR - CONSORCIO - P06-2026 - NNNN.pdf`; sin N° → `SN + 6 del hash`;
+  recibos según el tipo de pago, junto a su boleta). Aplica al **pipeline** y a
+  la **carga manual**. Los **duplicados** siguen yendo a Duplicados (no a
+  Rendiciones). **Llave anti-tokens en el scheduler:** si falta la carpeta
+  `statements` o no hay ningún período ACTIVE, el cliente se saltea con aviso y
+  **no se gasta ningún token** (los PDFs quedan en Pendientes). Caso puntual: un
+  consorcio sin período activo → su boleta va a Revisión (`failed`). Delete y
+  purga ahora mueven el archivo desde su **parent real** (Rendiciones), no
+  asumiendo Escaneados. Migración: `Consortium.statementsFolderId/Url`
+  (`20260607000100`). Diseño en
+  `docs/superpowers/specs/2026-06-05-rendiciones-por-edificio-design.md` y
+  detalle en `docs/decisiones.md`. Archivos: `schema.prisma`, `client.types.ts`,
+  `clientProcessingConfig.ts`, `googleDrive.service.ts`,
+  `processPendingDocuments.job.ts`, `runProcessingCycle.ts`, `jobWorkerMain.ts`,
+  `scheduler.ts`, `logger.ts`, `invoices/route.ts`,
+  `invoices/[invoiceId]/receipt/route.ts`, `clients/[id]/purge/route.ts`,
+  `admin/consortiums/page.tsx`. Nuevos: `src/lib/statementsNaming.ts`,
+  `src/services/statementsFolders.service.ts`, `scripts/test-statements-naming.ts`.
 - **Crear archivos en Drive con service account vía Unidad Compartida (2026-06-04)**.
   La carga manual del PDF fallaba con `Service Accounts do not have storage
   quota` (las SA no pueden crear archivos en "Mi unidad"). Solución: mover las

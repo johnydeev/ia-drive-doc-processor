@@ -1,6 +1,37 @@
 # Progreso del proyecto — drive-doc-processor
 
-Actualizado al 02/06/2026 (sesión 27).
+Actualizado al 07/06/2026 (sesión 28).
+
+---
+
+## Rendiciones por edificio — statements (07/06/2026)
+
+**Estado: implementado, pendiente de verificación funcional en prod tras deploy.**
+
+Feature para organizar boletas y recibos en `Rendiciones/[Edificio]/[Período]` en
+Drive, con la carpeta del edificio compartida pública (para QR). Diseño:
+`docs/superpowers/specs/2026-06-05-rendiciones-por-edificio-design.md`. Plan:
+`docs/superpowers/plans/2026-06-07-rendiciones-por-edificio.md`.
+
+Completado (Tasks 0–11):
+- Migración `Consortium.statementsFolderId/Url` (`20260607000100`) — aplicada por el owner.
+- Config `driveFoldersJson.statements` con validación obligatoria en `validateClientProcessingConfig`.
+- Helpers de naming puros + `scripts/test-statements-naming.ts` (8/8 ✓).
+- `GoogleDriveService.renameFile` + `shareFolderPublic`.
+- Orquestador `resolveStatementsFolders` (crea/comparte edificio + crea período, cache en memoria).
+- Pipeline: boleta OK → renombra + mueve a Rendiciones (reemplaza Escaneados). Consorcio sin período → Revisión.
+- Carga manual y recibos → misma carpeta de Rendiciones (recibo renombrado según tipo de pago).
+- Scheduler: llave anti-tokens (sin `statements` o sin período ACTIVE → no encola, 0 tokens).
+- Purga: mueve desde el parent real (Rendiciones), no asume Escaneados. Delete ya estaba OK (usa `getFileParents`).
+- Panel: link `statementsFolderUrl` por consorcio con botón Copiar.
+
+Verificación: `npx tsc --noEmit` limpio tras cada tarea. Pendiente: prueba funcional en prod
+(boleta pipeline + manual, recibo, duplicado, llave del scheduler, delete/purga).
+
+Notas operativas:
+- Cada cliente necesita `driveFoldersJson.statements` configurado y un período ACTIVE, o el
+  scheduler lo saltea (con aviso). Es el comportamiento buscado.
+- La Unidad Compartida debe permitir "compartir fuera de la organización" para que el link público funcione.
 
 ---
 
