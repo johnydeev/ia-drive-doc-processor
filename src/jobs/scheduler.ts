@@ -11,11 +11,14 @@ import {
   resolveFolders,
   validateClientProcessingConfig,
 } from "@/lib/clientProcessingConfig";
+import { SCHEDULER_TICK_MS, resolveClientIntervalMs, resolveBatchSize, shouldEvaluateClient } from "@/jobs/schedulerTiming";
 
 const clientRepository = new ClientRepository();
 const controlService = new SchedulerControlService();
+// globalMinutes = intervalo POR DEFECTO por cliente (env). NO es el tick de polling:
+// el tick es SCHEDULER_TICK_MS (fino) y cada cliente corre según su intervalMinutes
+// (leído del DB en cada ciclo → cambiarlo en la DB toma efecto sin reiniciar).
 const globalMinutes = parseProcessIntervalMinutes(env.PROCESS_INTERVAL_MINUTES);
-const globalIntervalMs = globalMinutes * 60 * 1000;
 
 let localRunning = false;
 const lastRunByClient = new Map<string, number>();
@@ -43,11 +46,15 @@ const runOnce = async (): Promise<void> => {
     let totalSkipped = 0;
 
     for (const client of clients) {
-      const clientInterval = (client.intervalMinutes > 0 ? client.intervalMinutes : globalMinutes) * 60 * 1000;
+      // intervalMinutes viene del DB (listActiveClients lo re-lee cada ciclo).
+      const clientIntervalMs = resolveClientIntervalMs(client.intervalMinutes, globalMinutes);
       const lastRun = lastRunByClient.get(client.id) ?? 0;
-      if (lastRun > 0 && now - lastRun < clientInterval) {
+      if (!shouldEvaluateClient(now, lastRun, clientIntervalMs)) {
         continue;
       }
+      // Marca la evaluación ANTES de trabajar: el throttle por intervalMinutes aplica
+      // pase lo que pase (sin PDFs, pausado o error) → no se re-evalúa cada tick.
+      lastRunByClient.set(client.id, now);
       try {
         const prisma = getPrismaClient();
         const clientMinutes = client.intervalMinutes > 0 ? client.intervalMinutes : globalMinutes;
@@ -88,6 +95,7 @@ const runOnce = async (): Promise<void> => {
 
         totalFound += files.length;
 
+        const batchSize = resolveBatchSize(client.batchSize);
         let created = 0;
         for (const file of files) {
           const existingInvoice = await prisma.invoice.findFirst({
@@ -123,17 +131,15 @@ const runOnce = async (): Promise<void> => {
           created += 1;
           totalQueued += 1;
 
-          if (created >= client.batchSize) {
+          if (created >= batchSize) {
             schedulerLog.batchLimitReached(client.id, client.name, created, files.length);
             break;
           }
         }
 
         if (created > 0) {
-          schedulerLog.jobsQueued(created, client.id, client.name, files.length, client.batchSize);
+          schedulerLog.jobsQueued(created, client.id, client.name, files.length, batchSize);
         }
-
-        lastRunByClient.set(client.id, now);
       } catch (error) {
         schedulerLog.clientError(
           client.id,
@@ -158,4 +164,4 @@ const runOnce = async (): Promise<void> => {
 schedulerLog.starting(globalMinutes);
 
 void runOnce();
-setInterval(runOnce, globalIntervalMs);
+setInterval(runOnce, SCHEDULER_TICK_MS);
