@@ -16,6 +16,7 @@ import { GoogleDriveService } from "@/services/googleDrive.service";
 import { GoogleSheetsService, SheetsRowMapping } from "@/services/googleSheets.service";
 import { PdfTextExtractorService } from "@/services/pdfTextExtractor.service";
 import { getPrismaClient } from "@/lib/prisma";
+import { isMissingAmount, cuitAppearsInText, appendNoAmountTag } from "@/lib/documentValidation";
 
 export interface ProcessJobConfig {
   clientId: string;
@@ -645,6 +646,7 @@ async function processDriveFile(
     let extractionWasCached = false;
 
     let lspProvider: ReturnType<typeof identifyLSPProvider> = null;
+    let docText = ""; // texto del documento (para verificación CUIT-en-texto); vacío en imágenes
 
     // Detectar si el archivo es una imagen (JPG/PNG)
     const isImage = (
@@ -701,6 +703,7 @@ async function processDriveFile(
       m.textChars = text.length;
       m.emitterBlock = pdfExtractor.getLastHasEmitterBlock();
       m.ms.ocr = pdfExtractor.getLastOcrMs();
+      docText = text;
       lspProvider = identifyLSPProvider(text);
       extracted = refineExtractionWithRawText(extracted, text);
     } else {
@@ -722,6 +725,7 @@ async function processDriveFile(
       const text = lspProvider
         ? await runStep("Re-extracción página 1 (LSP)", () => pdfExtractor.extractTextFromPdf(buffer, 1), "textPage1")
         : fullText;
+      docText = text;
 
       if (resolvedConfig.debugMode) {
         pipelineLog.stepStart(cid, `[DEBUG-OCR] texto (${text.length} chars, sanitizado):\n${safeDebugLog(text)}`);
@@ -815,6 +819,40 @@ async function processDriveFile(
       amount: extracted.amount,
       clientNumber: extracted.clientNumber,
     };
+
+    // ── Gate "sin monto": sin importe (certificados, obleas, informes) o monto no
+    // extraíble → Revisión con tag SIN MONTO. `0` es válido (boletas LSP de $0) y NO
+    // cae acá. No se escribe en Sheets ni se guarda Invoice.
+    if (isMissingAmount(extracted.amount)) {
+      m.result = "no_amount";
+      m.reason = "no_amount";
+      pipelineLog.stepStart(cid, `⚠️ Sin monto → Revisión (SIN MONTO): "${file.name}"`);
+      if (resolvedConfig.driveFailedFolderId && finalSourceFolderId) {
+        await runStep("Renombrar (SIN MONTO)", () => driveService.renameFile(file.id, appendNoAmountTag(file.name)), "move");
+        await runStep(
+          "Mover a Revisión (sin monto)",
+          () => driveService.moveFileToFolder(file.id, finalSourceFolderId, resolvedConfig.driveFailedFolderId!),
+          "move"
+        );
+        pipelineLog.movedToFailed(cid, file.id);
+      }
+      summary.unassigned += 1;
+      pipelineLog.fileCompleted(cid, file.name, { processed: 0, unassigned: 1, duplicate: false });
+      return;
+    }
+
+    // ── Saneo de CUIT inventado (solo NO-LSP): si la IA devolvió un CUIT que no
+    // está en el texto del documento, se descarta (era alucinado). LSP se excluye:
+    // su CUIT viene del prompt (no del papel) y resuelve por clientNumber.
+    if (lspProvider === null && docText) {
+      if (extracted.providerTaxId && !cuitAppearsInText(extracted.providerTaxId, docText)) {
+        pipelineLog.stepStart(cid, `⚠️ CUIT descartado: no aparece en el texto del documento (probable invención de la IA)`);
+        extracted.providerTaxId = null;
+      }
+      if (Array.isArray(extracted.allTaxIds) && extracted.allTaxIds.length > 0) {
+        extracted.allTaxIds = extracted.allTaxIds.filter((c) => cuitAppearsInText(c, docText));
+      }
+    }
 
     if (!isDuplicate) {
       const dup = await runStep(
