@@ -2,8 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireClientSession } from "@/lib/clientAuth";
 import { getPrismaClient } from "@/lib/prisma";
 import { PdfTextExtractorService } from "@/services/pdfTextExtractor.service";
-import { resolveAiConfig } from "@/lib/clientProcessingConfig";
-import { ClientDriveFolders, ClientGoogleConfig, ProcessingClient } from "@/types/client.types";
+import { loadProcessingClient, resolveAiConfig } from "@/lib/clientProcessingConfig";
 import {
   normalizeConsortiumName,
   consortiumFuzzyMatch,
@@ -150,21 +149,10 @@ export async function POST(
     const isImage = file.type === "image/png" || file.type === "image/jpeg";
 
     // Resolver y descifrar keys de IA
-    const clientRow = await prisma.client.findUnique({
-      where: { id: auth.session.clientId },
-      select: { driveFoldersJson: true, googleConfigJson: true, extractionConfigJson: true },
-    });
-
-    const processingClient: ProcessingClient = {
-      id:                   auth.session.clientId,
-      name:                 "",
-      isActive:             true,
-      batchSize:            10,
-      intervalMinutes:      60,
-      driveFoldersJson:     (clientRow?.driveFoldersJson     as ClientDriveFolders      | null) ?? null,
-      googleConfigJson:     (clientRow?.googleConfigJson     as ClientGoogleConfig      | null) ?? null,
-      extractionConfigJson: (clientRow?.extractionConfigJson as Record<string, unknown> | null) ?? null,
-    };
+    const processingClient = await loadProcessingClient(auth.session.clientId);
+    if (!processingClient) {
+      return NextResponse.json({ ok: false, error: "Cliente no encontrado" }, { status: 404 });
+    }
 
     const aiConfig    = resolveAiConfig(processingClient);
     const geminiKey   = aiConfig?.geminiApiKey  || env.GEMINI_API_KEY?.trim();
@@ -193,39 +181,20 @@ export async function POST(
         console.warn("[scan] Gemini Vision failed:", err instanceof Error ? err.message : err);
       }
     } else {
-      // PDF: extracción de texto + IA (Gemini → OpenAI fallback).
+      // PDF: extracción de texto + IA (cadena Gemini → OpenAI → Claude).
       const pdfExtractor = new PdfTextExtractorService();
       const text = await pdfExtractor.extractTextFromPdf(buffer);
 
-      if (geminiKey) {
-        try {
-          const { GeminiExtractorService } = await import("@/services/geminiExtractor.service");
-          const extractor = new GeminiExtractorService({ apiKey: geminiKey, model: geminiModel });
-          extracted = await extractor.extractStructuredData(text) as unknown as Record<string, unknown>;
-        } catch (err) {
-          console.warn("[scan] Gemini failed:", err instanceof Error ? err.message : err);
-        }
-      }
-
-      if (!extracted && openaiKey) {
-        try {
-          const { AiExtractorService } = await import("@/services/aiExtractor.service");
-          const extractor = new AiExtractorService({ apiKey: openaiKey, model: openaiModel });
-          extracted = await extractor.extractStructuredData(text) as unknown as Record<string, unknown>;
-        } catch (err) {
-          console.warn("[scan] OpenAI failed:", err instanceof Error ? err.message : err);
-        }
-      }
-
-      if (!extracted && anthropicKey) {
-        try {
-          const { ClaudeExtractorService } = await import("@/services/claudeExtractor.service");
-          const extractor = new ClaudeExtractorService({ apiKey: anthropicKey, model: anthropicModel });
-          extracted = await extractor.extractStructuredData(text) as unknown as Record<string, unknown>;
-        } catch (err) {
-          console.warn("[scan] Claude failed:", err instanceof Error ? err.message : err);
-        }
-      }
+      const { createAiExtractionChain } = await import("@/services/aiExtraction");
+      const chain = await createAiExtractionChain({
+        gemini: { apiKey: geminiKey, model: geminiModel },
+        openai: { apiKey: openaiKey, model: openaiModel },
+        anthropic: { apiKey: anthropicKey, model: anthropicModel },
+      });
+      const result = await chain.run(text, (provider, ok, errorMsg) => {
+        if (!ok) console.warn(`[scan] ${provider} failed:`, errorMsg);
+      });
+      extracted = result ? (result.data as unknown as Record<string, unknown>) : null;
     }
 
     if (!extracted) {

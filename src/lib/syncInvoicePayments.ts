@@ -5,11 +5,11 @@ import {
   SheetsRowMapping,
 } from "@/services/googleSheets.service";
 import {
+  loadProcessingClient,
   resolveGoogleConfig,
   resolveMapping,
   resolveSheetName,
 } from "@/lib/clientProcessingConfig";
-import { ClientDriveFolders, ClientGoogleConfig, ProcessingClient } from "@/types/client.types";
 import { normalizeBusinessAmount } from "@/lib/businessKey";
 
 const DEFAULT_MAPPING: SheetsRowMapping = {
@@ -215,21 +215,10 @@ export async function syncInvoicePaymentsFromSheets(
 
   const prisma = getPrismaClient();
 
-  const client = await prisma.client.findUnique({ where: { id: clientId } });
-  if (!client) {
+  const processingClient = await loadProcessingClient(clientId);
+  if (!processingClient) {
     throw new SyncPaymentsError("Cliente no encontrado", 404);
   }
-
-  const processingClient: ProcessingClient = {
-    id: clientId,
-    name: client.name,
-    isActive: client.isActive,
-    batchSize: client.batchSize,
-    intervalMinutes: client.intervalMinutes,
-    driveFoldersJson: (client.driveFoldersJson as ClientDriveFolders | null) ?? null,
-    googleConfigJson: (client.googleConfigJson as ClientGoogleConfig | null) ?? null,
-    extractionConfigJson: (client.extractionConfigJson as Record<string, unknown> | null) ?? null,
-  };
 
   const googleConfig = resolveGoogleConfig(processingClient);
   if (!googleConfig) {

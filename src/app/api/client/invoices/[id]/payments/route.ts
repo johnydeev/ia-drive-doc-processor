@@ -9,8 +9,7 @@ import {
 } from "@/repositories/payment.repository";
 import { GoogleSheetsService, SheetsRowMapping } from "@/services/googleSheets.service";
 import { GoogleDriveService } from "@/services/googleDrive.service";
-import { resolveGoogleConfig, resolveMapping, resolveSheetName, resolveFolders } from "@/lib/clientProcessingConfig";
-import { ClientDriveFolders, ClientGoogleConfig, ProcessingClient } from "@/types/client.types";
+import { loadProcessingClient, resolveGoogleConfig, resolveMapping, resolveSheetName, resolveFolders } from "@/lib/clientProcessingConfig";
 import { isPdf } from "@/lib/fileSignature";
 
 const DEFAULT_MAPPING: SheetsRowMapping = {
@@ -197,24 +196,10 @@ export async function POST(
       return NextResponse.json({ ok: false, error: "Boleta no encontrada" }, { status: 404 });
     }
 
-    const clientRow = await prisma.client.findUnique({
-      where: { id: clientId },
-      select: { driveFoldersJson: true, googleConfigJson: true, extractionConfigJson: true },
-    });
-    if (!clientRow) {
+    const processingClient = await loadProcessingClient(clientId);
+    if (!processingClient) {
       return NextResponse.json({ ok: false, error: "Cliente no encontrado" }, { status: 404 });
     }
-
-    const processingClient: ProcessingClient = {
-      id: clientId,
-      name: "",
-      isActive: true,
-      batchSize: 10,
-      intervalMinutes: 60,
-      driveFoldersJson: (clientRow.driveFoldersJson as ClientDriveFolders | null) ?? null,
-      googleConfigJson: (clientRow.googleConfigJson as ClientGoogleConfig | null) ?? null,
-      extractionConfigJson: (clientRow.extractionConfigJson as Record<string, unknown> | null) ?? null,
-    };
 
     const googleConfig = resolveGoogleConfig(processingClient);
 

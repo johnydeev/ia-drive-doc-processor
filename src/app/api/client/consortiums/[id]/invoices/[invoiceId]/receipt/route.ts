@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireClientSession } from "@/lib/clientAuth";
 import { getPrismaClient } from "@/lib/prisma";
 import { GoogleDriveService } from "@/services/googleDrive.service";
-import { resolveGoogleConfig, resolveFolders } from "@/lib/clientProcessingConfig";
+import { loadProcessingClient, resolveGoogleConfig, resolveFolders } from "@/lib/clientProcessingConfig";
 import { PaymentRepository, PaymentError } from "@/repositories/payment.repository";
 import { isPdf } from "@/lib/fileSignature";
 
@@ -59,25 +59,10 @@ export async function POST(
     }
 
     // ── Obtener config de Drive del cliente ───────────────────────────────
-    const clientRow = await prisma.client.findUnique({
-      where: { id: clientId },
-      select: { driveFoldersJson: true, googleConfigJson: true, extractionConfigJson: true },
-    });
-
-    if (!clientRow) {
+    const processingClient = await loadProcessingClient(clientId);
+    if (!processingClient) {
       return NextResponse.json({ ok: false, error: "Cliente no encontrado" }, { status: 404 });
     }
-
-    const processingClient = {
-      id: clientId,
-      name: "",
-      isActive: true,
-      batchSize: 10,
-      intervalMinutes: 60,
-      driveFoldersJson: clientRow.driveFoldersJson as any,
-      googleConfigJson: clientRow.googleConfigJson as any,
-      extractionConfigJson: clientRow.extractionConfigJson as any,
-    };
 
     const googleConfig = resolveGoogleConfig(processingClient);
     if (!googleConfig) {

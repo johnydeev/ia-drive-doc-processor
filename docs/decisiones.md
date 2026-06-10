@@ -4,6 +4,51 @@ Registro de decisiones tomadas ante problemas reales encontrados en producción.
 
 ---
 
+## 2026-06-10 — Refactor de patrones de diseño, Fase 1 (extractores IA, rutas, carga de cliente)
+
+**Problema:** auditoría de patrones (`docs/reporte-patrones-diseno.md`) detectó
+inconsistencias de diseño que generan deuda:
+1. El fallback de extractores IA Gemini→OpenAI→Claude estaba **copiado** en el
+   pipeline (`processPendingDocuments.job.ts`) y en la ruta de scan manual
+   (`.../invoices/scan/route.ts`), y **ya había divergido** (uno logueaba con
+   `pipelineLog`, el otro con `console.warn`): un bug latente, no solo estética.
+2. Boilerplate de rutas API duplicado: auth-guard en 28 archivos, bloque
+   `ZodError` literal en 12, respuestas de error ad-hoc con status a ojo.
+3. El armado de `ProcessingClient` desde la DB (`findUnique({ select })` + mapeo)
+   estaba duplicado en 8 lugares, varios con valores hardcodeados inconsistentes
+   (`name: ""`, `batchSize: 10`, `intervalMinutes: 60`).
+
+**Decisión:**
+- **H1 (Strategy + Chain of Responsibility):** contrato `AiExtractor` +
+  `AiExtractionChain` + `createAiExtractionChain()` en `src/services/aiExtraction.ts`.
+  Los 3 servicios lo implementan. El logging por intento se inyecta vía callback
+  `onAttempt` para que cada caller use el suyo sin duplicar la cadena. Se mantiene
+  el módulo Gemini aparte para Vision/fallback visual (no son parte del fallback
+  de texto).
+- **H4 (HOF/Decorator):** `apiOk()`/`apiError()`/`withAuth()`/`withClientAuth()`
+  en `src/lib/apiHandler.ts`. Migración incremental (pilotos: rubros, coeficientes).
+- **H5 (Factory):** `loadProcessingClient(clientId)` en `clientProcessingConfig.ts`,
+  que trae los valores reales del cliente (corrige los hardcodeos).
+
+**Cambio de comportamiento deliberado (menor):** con `apiError`, los errores
+**no-Zod** en los POST migrados ahora responden **500** (antes 400 indiscriminado).
+Es más correcto (500 = error de servidor) y el shape `{ ok:false, error }` se
+preserva, por lo que el frontend (que muestra el `error`) no se ve afectado.
+
+**Alternativas descartadas:** (a) inyectar `params` en los HOF ya — se pospone;
+los pilotos son rutas sin `params`. (b) Mover ya las queries del pipeline a los
+repositorios (H6) — es Fase 2, requiere más cuidado.
+
+**Verificación:** `npm run typecheck`, `npm run lint` (0 errores; 13 warnings
+pre-existentes), `npm run build:jobs` y `npm run build` (next) — todos OK.
+
+**Impacto (archivos):** nuevos `src/services/aiExtraction.ts`,
+`src/lib/apiHandler.ts`; modificados los 3 extractores, el pipeline, la ruta de
+scan, `clientProcessingConfig.ts`, rubros, coeficientes, y 7 rutas/libs migradas
+a `loadProcessingClient`.
+
+---
+
 ## 2026-06-08 — Logs de métricas del pipeline (instrumentación)
 
 **Problema:** los logs sirven para leer una boleta pero no para analizar de forma

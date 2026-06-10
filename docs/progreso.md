@@ -1,6 +1,40 @@
 # Progreso del proyecto — drive-doc-processor
 
-Actualizado al 08/06/2026 (sesión 29).
+Actualizado al 10/06/2026 (sesión 30).
+
+---
+
+## Refactor de patrones de diseño — Fase 1 (10/06/2026)
+
+**Estado: implementado y verificado (typecheck + lint + build:jobs + next build OK).**
+
+A partir del reporte `docs/reporte-patrones-diseno.md` (auditoría de patrones y
+deuda), se ejecutó la **Fase 1** (quick wins de bajo riesgo, comportamiento
+preservado):
+
+- **H1 — Extractores IA (Strategy + Chain of Responsibility).** Nuevo
+  `src/services/aiExtraction.ts`: interfaz `AiExtractor`, clase
+  `AiExtractionChain` y factory `createAiExtractionChain()`. Los 3 servicios
+  (`GeminiExtractorService`, `AiExtractorService`, `ClaudeExtractorService`)
+  ahora `implements AiExtractor` (campo `provider`). Se eliminó el fallback
+  Gemini→OpenAI→Claude **duplicado** entre `processPendingDocuments.job.ts` y
+  `consortiums/[id]/invoices/scan/route.ts` (que además ya había divergido en el
+  logging). El timing `ms.ai` y el logging por intento (`pipelineLog` vs
+  `console.warn`) se preservan vía callback `onAttempt`.
+- **H4 — Boilerplate de rutas (HOF/Decorator).** Nuevo `src/lib/apiHandler.ts`:
+  `apiOk()`, `apiError()` (ZodError→400, resto→500), `withAuth()` y
+  `withClientAuth()` (guard + try/catch). Migradas como piloto: `rubros/route.ts`
+  y `coeficientes/route.ts`. Resto de rutas: migración incremental (Fase 1 dejó
+  la infraestructura lista).
+- **H5 — `loadProcessingClient()` (Factory).** En `clientProcessingConfig.ts`.
+  Colapsa el `findUnique({ select })` + mapeo manual a `ProcessingClient` que
+  estaba duplicado en 8 lugares (varios con `name: ""`, `batchSize: 10`,
+  `intervalMinutes: 60` hardcodeados → ahora trae los valores reales del
+  cliente). Migrados: scan, invoices, invoices/[invoiceId], receipt,
+  payments, payments/[paymentId], setup-sheet-protection, syncInvoicePayments.
+
+Pendiente (siguientes fases del reporte): H8/H6 (Fase 2), tests de
+caracterización + H3/H2 (Fase 3), H7 UI (Fase 4).
 
 ---
 

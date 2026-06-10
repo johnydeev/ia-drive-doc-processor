@@ -3,8 +3,7 @@ import { requireClientSession } from "@/lib/clientAuth";
 import { getPrismaClient } from "@/lib/prisma";
 import { GoogleDriveService } from "@/services/googleDrive.service";
 import { GoogleSheetsService, SheetsRowMapping } from "@/services/googleSheets.service";
-import { resolveGoogleConfig, resolveMapping, resolveSheetName, resolveFolders } from "@/lib/clientProcessingConfig";
-import { ClientDriveFolders, ClientGoogleConfig, ProcessingClient } from "@/types/client.types";
+import { loadProcessingClient, resolveGoogleConfig, resolveMapping, resolveSheetName, resolveFolders } from "@/lib/clientProcessingConfig";
 
 const DEFAULT_MAPPING: SheetsRowMapping = {
   boletaNumber: "A",
@@ -83,24 +82,10 @@ export async function DELETE(
     }
 
     // ── 3. Resolver config Google del cliente ─────────────────────────────
-    const clientRow = await prisma.client.findUnique({
-      where: { id: clientId },
-      select: { driveFoldersJson: true, googleConfigJson: true, extractionConfigJson: true },
-    });
-    if (!clientRow) {
+    const processingClient = await loadProcessingClient(clientId);
+    if (!processingClient) {
       return NextResponse.json({ ok: false, error: "Cliente no encontrado" }, { status: 404 });
     }
-
-    const processingClient: ProcessingClient = {
-      id: clientId,
-      name: "",
-      isActive: true,
-      batchSize: 10,
-      intervalMinutes: 60,
-      driveFoldersJson: (clientRow.driveFoldersJson as ClientDriveFolders | null) ?? null,
-      googleConfigJson: (clientRow.googleConfigJson as ClientGoogleConfig | null) ?? null,
-      extractionConfigJson: (clientRow.extractionConfigJson as Record<string, unknown> | null) ?? null,
-    };
 
     const googleConfig = resolveGoogleConfig(processingClient);
     if (!googleConfig) {

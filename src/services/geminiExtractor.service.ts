@@ -6,6 +6,7 @@ import {
   refineExtractionWithRawText,
 } from "@/lib/extraction";
 import { AiUsageMetrics } from "@/types/aiUsage.types";
+import { AiExtractor } from "@/services/aiExtraction";
 import { ExtractedDocumentData } from "@/types/extractedDocument.types";
 
 const DEFAULT_MODEL_CANDIDATES = [
@@ -32,7 +33,8 @@ function normalizeError(error: unknown): string {
   return firstLine.length > 220 ? `${firstLine.slice(0, 220)}...` : firstLine;
 }
 
-export class GeminiExtractorService {
+export class GeminiExtractorService implements AiExtractor {
+  readonly provider = "gemini" as const;
   private static workingModelName: string | null = null;
   private readonly genAI: GoogleGenerativeAI;
   private readonly preferredModel?: string;

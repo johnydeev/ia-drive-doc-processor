@@ -1,7 +1,55 @@
 import { env } from "@/config/env";
+import { getPrismaClient } from "@/lib/prisma";
 import { SheetsRowMapping } from "@/services/googleSheets.service";
-import { ClientDriveFolders, ClientGoogleConfig, ProcessingClient } from "@/types/client.types";
+import {
+  ClientDriveFolders,
+  ClientExtractionConfig,
+  ClientGoogleConfig,
+  ProcessingClient,
+} from "@/types/client.types";
 import { decrypt } from "@/utils/encryption.util";
+
+/**
+ * Carga un cliente desde la DB y lo mapea a `ProcessingClient`.
+ *
+ * Reemplaza el patrón duplicado en ~7 rutas que hacían el mismo
+ * `findUnique({ select: { driveFoldersJson, googleConfigJson, extractionConfigJson } })`
+ * + mapeo manual, varias con valores hardcodeados inconsistentes
+ * (`name: ""`, `batchSize: 10`, `intervalMinutes: 60`). Acá se traen los
+ * valores reales del cliente. Retorna null si el cliente no existe.
+ */
+export async function loadProcessingClient(
+  clientId: string
+): Promise<ProcessingClient | null> {
+  const prisma = getPrismaClient();
+  const row = await prisma.client.findUnique({
+    where: { id: clientId },
+    select: {
+      id: true,
+      name: true,
+      isActive: true,
+      batchSize: true,
+      intervalMinutes: true,
+      driveFoldersJson: true,
+      googleConfigJson: true,
+      extractionConfigJson: true,
+    },
+  });
+
+  if (!row) return null;
+
+  return {
+    id: row.id,
+    name: row.name,
+    isActive: row.isActive,
+    batchSize: row.batchSize,
+    intervalMinutes: row.intervalMinutes,
+    driveFoldersJson: (row.driveFoldersJson as ClientDriveFolders | null | undefined) ?? null,
+    googleConfigJson: (row.googleConfigJson as ClientGoogleConfig | null | undefined) ?? null,
+    extractionConfigJson:
+      (row.extractionConfigJson as ClientExtractionConfig | null | undefined) ?? null,
+  };
+}
 
 export function resolveSheetName(client: ProcessingClient): string {
   const fromConfig = client.extractionConfigJson?.sheetName;

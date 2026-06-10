@@ -1,13 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireClientSession } from "@/lib/clientAuth";
-import { getPrismaClient } from "@/lib/prisma";
 import { GoogleSheetsService, SheetsRowMapping } from "@/services/googleSheets.service";
 import {
+  loadProcessingClient,
   resolveGoogleConfig,
   resolveMapping,
   resolveSheetName,
 } from "@/lib/clientProcessingConfig";
-import { ClientDriveFolders, ClientGoogleConfig, ProcessingClient } from "@/types/client.types";
 import { syncInvoicePaymentsFromSheets, SyncPaymentsError } from "@/lib/syncInvoicePayments";
 
 const DEFAULT_MAPPING: SheetsRowMapping = {
@@ -46,22 +45,10 @@ function columnToIndex(column: string): number {
 }
 
 async function loadClientGoogleContext(clientId: string) {
-  const prisma = getPrismaClient();
-  const client = await prisma.client.findUnique({ where: { id: clientId } });
-  if (!client) {
+  const processingClient = await loadProcessingClient(clientId);
+  if (!processingClient) {
     return { error: NextResponse.json({ ok: false, error: "Cliente no encontrado" }, { status: 404 }) };
   }
-
-  const processingClient: ProcessingClient = {
-    id: clientId,
-    name: client.name,
-    isActive: client.isActive,
-    batchSize: client.batchSize,
-    intervalMinutes: client.intervalMinutes,
-    driveFoldersJson: (client.driveFoldersJson as ClientDriveFolders | null) ?? null,
-    googleConfigJson: (client.googleConfigJson as ClientGoogleConfig | null) ?? null,
-    extractionConfigJson: (client.extractionConfigJson as Record<string, unknown> | null) ?? null,
-  };
 
   const googleConfig = resolveGoogleConfig(processingClient);
   if (!googleConfig) {

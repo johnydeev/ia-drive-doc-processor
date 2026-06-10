@@ -6,9 +6,11 @@ import {
   refineExtractionWithRawText,
 } from "@/lib/extraction";
 import { AiUsageMetrics } from "@/types/aiUsage.types";
+import { AiExtractor } from "@/services/aiExtraction";
 import { ExtractedDocumentData } from "@/types/extractedDocument.types";
 
-export class ClaudeExtractorService {
+export class ClaudeExtractorService implements AiExtractor {
+  readonly provider = "anthropic" as const;
   private client: Anthropic;
   private model: string;
   private lastUsage: AiUsageMetrics | null = null;

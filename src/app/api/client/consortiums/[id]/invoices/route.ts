@@ -6,8 +6,7 @@ import { getPrismaClient } from "@/lib/prisma";
 import { InvoiceRepository } from "@/repositories/invoice.repository";
 import { GoogleSheetsService, SheetsRowMapping } from "@/services/googleSheets.service";
 import { GoogleDriveService } from "@/services/googleDrive.service";
-import { resolveGoogleConfig, resolveMapping, resolveSheetName, resolveFolders } from "@/lib/clientProcessingConfig";
-import { ClientDriveFolders, ClientGoogleConfig, ProcessingClient } from "@/types/client.types";
+import { loadProcessingClient, resolveGoogleConfig, resolveMapping, resolveSheetName, resolveFolders } from "@/lib/clientProcessingConfig";
 import { ExtractedDocumentData } from "@/types/extractedDocument.types";
 import { isPdf } from "@/lib/fileSignature";
 
@@ -233,22 +232,7 @@ export async function POST(
     }
 
     // Config del cliente (Drive + Sheets), resuelta una sola vez.
-    const clientRow = await prisma.client.findUnique({
-      where: { id: auth.session.clientId },
-      select: { driveFoldersJson: true, googleConfigJson: true, extractionConfigJson: true },
-    });
-    const processingClient: ProcessingClient | null = clientRow
-      ? {
-          id: auth.session.clientId,
-          name: "",
-          isActive: true,
-          batchSize: 10,
-          intervalMinutes: 60,
-          driveFoldersJson: (clientRow.driveFoldersJson as ClientDriveFolders | null) ?? null,
-          googleConfigJson: (clientRow.googleConfigJson as ClientGoogleConfig | null) ?? null,
-          extractionConfigJson: (clientRow.extractionConfigJson as Record<string, unknown> | null) ?? null,
-        }
-      : null;
+    const processingClient = await loadProcessingClient(auth.session.clientId);
     const googleConfig = processingClient ? resolveGoogleConfig(processingClient) : null;
 
     // ── Subir el PDF a Drive (ya leído y validado arriba) ──────────────────

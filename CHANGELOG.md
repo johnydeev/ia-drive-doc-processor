@@ -2,6 +2,29 @@
 
 ## [Unreleased]
 
+### Refactor
+- **Patrones de diseño — Fase 1 (2026-06-10)**. A partir del reporte de auditoría
+  `docs/reporte-patrones-diseno.md`. Sin cambios de comportamiento salvo lo
+  indicado abajo. Verificado con typecheck + lint + build:jobs + next build.
+  - **H1 — Extractores IA (Strategy + Chain of Responsibility):** nuevo
+    `src/services/aiExtraction.ts` (interfaz `AiExtractor`, `AiExtractionChain`,
+    `createAiExtractionChain()`). Los 3 servicios (`geminiExtractor`,
+    `aiExtractor`, `claudeExtractor`) implementan el contrato. Se eliminó el
+    fallback Gemini→OpenAI→Claude **duplicado** entre el pipeline
+    (`processPendingDocuments.job.ts`) y la ruta de scan manual
+    (`consortiums/[id]/invoices/scan/route.ts`), que ya había divergido en el
+    logging. El timing y el logging por intento se preservan vía callback.
+  - **H4 — Boilerplate de rutas (HOF/Decorator):** nuevo `src/lib/apiHandler.ts`
+    (`apiOk`, `apiError`, `withAuth`, `withClientAuth`). Migradas como piloto
+    `rubros/route.ts` y `coeficientes/route.ts`. Nota: los POST migrados ahora
+    devuelven **500** (no 400) para errores no-Zod — el shape `{ ok, error }` se
+    mantiene.
+  - **H5 — `loadProcessingClient()` (Factory):** en `clientProcessingConfig.ts`.
+    Reemplaza el `findUnique({ select })` + mapeo a `ProcessingClient` duplicado
+    en 8 lugares (scan, invoices, invoices/[invoiceId], receipt, payments,
+    payments/[paymentId], setup-sheet-protection, syncInvoicePayments); corrige
+    los valores hardcodeados (`name`, `batchSize`, `intervalMinutes`).
+
 ### Features
 - **Logs de métricas del pipeline (instrumentación para análisis) (2026-06-08)**.
   Una línea `[metrics] {JSON}` por boleta en el log del worker (additiva, greppable):

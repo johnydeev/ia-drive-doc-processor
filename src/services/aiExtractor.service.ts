@@ -6,9 +6,11 @@ import {
   refineExtractionWithRawText,
 } from "@/lib/extraction";
 import { AiUsageMetrics } from "@/types/aiUsage.types";
+import { AiExtractor } from "@/services/aiExtraction";
 import { ExtractedDocumentData } from "@/types/extractedDocument.types";
 
-export class AiExtractorService {
+export class AiExtractorService implements AiExtractor {
+  readonly provider = "openai" as const;
   private client: OpenAI;
   private model: string;
   private lastUsage: AiUsageMetrics | null = null;

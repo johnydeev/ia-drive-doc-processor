@@ -14,6 +14,7 @@ import { InvoiceRepository } from "@/repositories/invoice.repository";
 import { ProviderRepository } from "@/repositories/provider.repository";
 import { GoogleDriveService } from "@/services/googleDrive.service";
 import { GoogleSheetsService, SheetsRowMapping } from "@/services/googleSheets.service";
+import { AiExtractionChain, createAiExtractionChain } from "@/services/aiExtraction";
 import { PdfTextExtractorService } from "@/services/pdfTextExtractor.service";
 import { getPrismaClient } from "@/lib/prisma";
 import { isMissingAmount, cuitAppearsInText, appendNoAmountTag } from "@/lib/documentValidation";
@@ -50,8 +51,6 @@ export interface ProcessDriveFileInput {
 }
 
 type GeminiModule = typeof import("@/services/geminiExtractor.service");
-type OpenAiModule = typeof import("@/services/aiExtractor.service");
-type ClaudeModule = typeof import("@/services/claudeExtractor.service");
 
 type ProcessingContext = {
   resolvedConfig: ProcessJobConfig;
@@ -62,15 +61,13 @@ type ProcessingContext = {
   invoiceRepository: InvoiceRepository;
   consortiumRepository: ConsortiumRepository;
   providerRepository: ProviderRepository;
+  // El módulo Gemini se mantiene aparte de la cadena de texto porque la
+  // extracción de imágenes (Vision) y el fallback visual del emisor no son
+  // parte del fallback Gemini→OpenAI→Claude.
   geminiModule: GeminiModule | null;
-  openAiModule: OpenAiModule | null;
-  claudeModule: ClaudeModule | null;
+  aiChain: AiExtractionChain;
   geminiApiKey?: string;
-  openaiApiKey?: string;
-  anthropicApiKey?: string;
   geminiModel?: string;
-  openaiModel?: string;
-  anthropicModel?: string;
   existingDuplicateKeys: Set<string>;
 };
 
@@ -194,8 +191,11 @@ async function createProcessingContext(
   const openaiModel = config.aiConfig?.openaiModel?.trim() || env.OPENAI_MODEL;
   const anthropicModel = config.aiConfig?.anthropicModel?.trim() || env.ANTHROPIC_MODEL;
   const geminiModule = geminiApiKey ? await import("@/services/geminiExtractor.service") : null;
-  const openAiModule = openaiApiKey ? await import("@/services/aiExtractor.service") : null;
-  const claudeModule = anthropicApiKey ? await import("@/services/claudeExtractor.service") : null;
+  const aiChain = await createAiExtractionChain({
+    gemini: { apiKey: geminiApiKey, model: geminiModel },
+    openai: { apiKey: openaiApiKey, model: openaiModel },
+    anthropic: { apiKey: anthropicApiKey, model: anthropicModel },
+  });
 
   let existingDuplicateKeys = new Set<string>();
   try {
@@ -207,9 +207,8 @@ async function createProcessingContext(
   return {
     resolvedConfig: config, resolvedMapping: mapping, driveService, pdfExtractor,
     sheetsService, invoiceRepository, consortiumRepository, providerRepository,
-    geminiModule, openAiModule, claudeModule,
-    geminiApiKey, openaiApiKey, anthropicApiKey,
-    geminiModel, openaiModel, anthropicModel,
+    geminiModule, aiChain,
+    geminiApiKey, geminiModel,
     existingDuplicateKeys,
   };
 }
@@ -566,9 +565,7 @@ async function processDriveFile(
   const {
     resolvedConfig, resolvedMapping, driveService, pdfExtractor, sheetsService,
     invoiceRepository, consortiumRepository, providerRepository,
-    geminiModule, openAiModule, claudeModule,
-    geminiApiKey, openaiApiKey, anthropicApiKey,
-    geminiModel, openaiModel, anthropicModel,
+    geminiModule, aiChain, geminiApiKey, geminiModel,
     existingDuplicateKeys,
   } = context;
 
@@ -731,51 +728,23 @@ async function processDriveFile(
         pipelineLog.stepStart(cid, `[DEBUG-OCR] texto (${text.length} chars, sanitizado):\n${safeDebugLog(text)}`);
       }
 
-      const providerErrors: string[] = [];
+      // Fallback IA Gemini→OpenAI→Claude vía cadena reutilizable. El logging
+      // por intento se inyecta vía callback; el timing acumulado ("ai") lo
+      // mantiene runStep envolviendo la ejecución completa de la cadena.
+      const aiResult = await runStep(
+        "Extracción IA",
+        () =>
+          aiChain.run(text, (provider, ok, errorMsg) =>
+            pipelineLog.aiExtraction(cid, provider, ok, errorMsg)
+          ),
+        "ai"
+      );
 
-      if (geminiModule) {
-        try {
-          const extractor = new geminiModule.GeminiExtractorService({ apiKey: geminiApiKey, model: geminiModel });
-          extracted = await runStep("Extracción IA (Gemini)", () => extractor.extractStructuredData(text), "ai");
-          fileAiUsage = extractor.getLastUsage?.() ?? null;
-          accumulateTokenUsage(summary.tokenUsage, fileAiUsage);
-          pipelineLog.aiExtraction(cid, "gemini", true);
-        } catch (error) {
-          const msg = error instanceof Error ? error.message : "Gemini unknown error";
-          providerErrors.push(msg);
-          pipelineLog.aiExtraction(cid, "gemini", false, msg);
-        }
-      }
-
-      if (extracted === null && openAiModule) {
-        try {
-          const extractor = new openAiModule.AiExtractorService({ apiKey: openaiApiKey, model: openaiModel });
-          extracted = await runStep("Extracción IA (OpenAI)", () => extractor.extractStructuredData(text), "ai");
-          fileAiUsage = extractor.getLastUsage?.() ?? null;
-          accumulateTokenUsage(summary.tokenUsage, fileAiUsage);
-          pipelineLog.aiExtraction(cid, "openai", true);
-        } catch (error) {
-          const msg = error instanceof Error ? error.message : "OpenAI unknown error";
-          providerErrors.push(msg);
-          pipelineLog.aiExtraction(cid, "openai", false, msg);
-        }
-      }
-
-      if (extracted === null && claudeModule) {
-        try {
-          const extractor = new claudeModule.ClaudeExtractorService({ apiKey: anthropicApiKey, model: anthropicModel });
-          extracted = await runStep("Extracción IA (Claude)", () => extractor.extractStructuredData(text), "ai");
-          fileAiUsage = extractor.getLastUsage?.() ?? null;
-          accumulateTokenUsage(summary.tokenUsage, fileAiUsage);
-          pipelineLog.aiExtraction(cid, "anthropic", true);
-        } catch (error) {
-          const msg = error instanceof Error ? error.message : "Claude unknown error";
-          providerErrors.push(msg);
-          pipelineLog.aiExtraction(cid, "anthropic", false, msg);
-        }
-      }
-
-      if (extracted === null) {
+      if (aiResult) {
+        extracted = aiResult.data;
+        fileAiUsage = aiResult.usage;
+        accumulateTokenUsage(summary.tokenUsage, fileAiUsage);
+      } else {
         pipelineLog.aiOcrFallback(cid);
         extracted = buildOcrOnlyPayload();
       }
