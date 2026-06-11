@@ -4,6 +4,31 @@ Actualizado al 11/06/2026 (sesión 31).
 
 ---
 
+## Causa raíz REAL del 429: cuota DIARIA por modelo (free tier) — barrido restaurado (11/06/2026)
+
+**Estado: implementado y verificado. PENDIENTE: commit + rebuild del worker.**
+
+Confirmado en log de prod: `limit: 20, GenerateRequestsPerDayPerProjectPerModel-FreeTier`
+→ el free tier de Gemini da **20 requests/día POR MODELO**. El recorte de Google
+es la causa externa de toda la regresión. Corrección importante: el barrido de
+modelos original NO derrochaba cuota (los 429 no consumen) — **sumaba ~6 baldes
+diarios** (~80-120/día). Al unificar a 1 modelo (fix del 10/06) quedó 1 balde de
+20 → prod procesó 35 a la mañana y se frenó.
+
+**Fix:** se restauró el barrido (5 modelos, sin 2.5-pro) conservando lo bueno:
+si TODOS los baldes están agotados → `RateLimitError` → boleta a Pendientes (no
+se pierde). `workingModelName` restaurado para arrancar en el último modelo OK.
+
+**Frecuencia/batchSize:** NO se cambió — con tope diario, el ritmo no es la
+palanca. 1/5min ≈ 80/día ya está calibrado al free tier.
+
+**Recomendación al owner (decisión de negocio):** tier pago de Gemini — a este
+volumen (~100 boletas/día × ~3k tokens, flash-lite) cuesta **~USD 1-2/mes** y
+elimina el problema de cuota para siempre. Alternativa: crédito en OpenAI.
+La cuota diaria resetea a las **04:00 hora argentina** (medianoche Pacific).
+
+---
+
 ## Hallazgo: el throughput está limitado por config, no por bug (11/06/2026)
 
 **El "1 boleta cada 5 minutos" NO es un problema oculto:** el cliente tiene

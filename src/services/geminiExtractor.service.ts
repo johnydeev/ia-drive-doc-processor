@@ -7,27 +7,51 @@ import {
 } from "@/lib/extraction";
 import { AiUsageMetrics } from "@/types/aiUsage.types";
 import { AiExtractor } from "@/services/aiExtraction";
-import { callWithRetry } from "@/lib/aiErrors";
+import { isRateLimitError, RateLimitError } from "@/lib/aiErrors";
 import { ExtractedDocumentData } from "@/types/extractedDocument.types";
 
 /**
- * Modelo por defecto si el cliente no configura uno (GEMINI_MODEL / options.model).
+ * Lista de modelos candidatos (barrido por baldes de cuota).
  *
- * IMPORTANTE: se usa UN SOLO modelo por llamada (configurable). Antes se barría
- * una lista de 6 modelos y, ante un 429 (rate-limit de cuota), se reintentaba con
- * cada uno → 6× consumo de cuota por boleta, agotándola en pocas boletas. Un 429
- * es del proyecto/cuota, no del modelo: probar otro modelo no ayuda. Ahora se usa
- * 1 modelo + backoff acotado (callWithRetry) y, si persiste el 429, se propaga
- * como RateLimitError para que el pipeline deje la boleta en Pendientes.
+ * CONTEXTO (2026-06-11, confirmado en logs de prod): el free tier de Gemini tiene
+ * cuota DIARIA POR MODELO ("GenerateRequestsPerDayPerProjectPerModel-FreeTier",
+ * p. ej. limit=20 para 2.5-flash-lite). Un 429 de un modelo NO consume cuota y NO
+ * implica que los demás estén agotados: cada modelo es un balde independiente.
+ * Por eso el barrido de modelos SUMA los baldes diarios (~N×20 boletas/día) y es
+ * la estrategia correcta en free tier.
+ *
+ * Lo que se conserva del fix anti-429: si TODOS los modelos están sin cuota, se
+ * lanza RateLimitError → el pipeline devuelve la boleta a Pendientes (no se
+ * pierde, se reintenta en un ciclo posterior). Con tier pago esto deja de ser
+ * relevante (la cuota diaria es enorme) y el primer modelo responde siempre.
  */
-const DEFAULT_MODEL = "gemini-2.5-flash-lite";
+const DEFAULT_MODEL_CANDIDATES = [
+  "gemini-2.5-flash-lite",
+  "gemini-2.5-flash",
+  "gemini-flash-latest",
+  "gemini-2.0-flash",
+  "gemini-2.0-flash-lite",
+];
 
-/** Reintentos/backoff ante rate-limit (acotado: no derrochar cuota). */
-const RATE_LIMIT_RETRIES = 1;
-const RATE_LIMIT_BACKOFF_MS = 3000;
+function normalizeError(error: unknown): string {
+  if (error instanceof Error) {
+    const firstLine = error.message.split("\n")[0]?.trim() ?? error.message;
+    const compact = firstLine.length > 220 ? `${firstLine.slice(0, 220)}...` : firstLine;
+    const codeMatch = firstLine.match(/\[(\d{3})\s/);
+    if (codeMatch) {
+      return `HTTP ${codeMatch[1]}: ${compact}`;
+    }
+    return compact;
+  }
+  const text = String(error);
+  const firstLine = text.split("\n")[0]?.trim() ?? text;
+  return firstLine.length > 220 ? `${firstLine.slice(0, 220)}...` : firstLine;
+}
 
 export class GeminiExtractorService implements AiExtractor {
   readonly provider = "gemini" as const;
+  /** Último modelo que funcionó (compartido entre instancias): arranca el barrido ahí. */
+  private static workingModelName: string | null = null;
   private readonly genAI: GoogleGenerativeAI;
   private readonly preferredModel?: string;
   private lastUsage: AiUsageMetrics | null = null;
@@ -42,9 +66,28 @@ export class GeminiExtractorService implements AiExtractor {
     this.preferredModel = options?.model?.trim() || env.GEMINI_MODEL?.trim() || undefined;
   }
 
-  /** Único modelo a usar (configurable). */
-  private resolveModelName(): string {
-    return this.preferredModel ?? DEFAULT_MODEL;
+  /**
+   * Modelos a probar, en orden: el último que funcionó (evita re-pegar contra un
+   * balde ya agotado), el preferido del cliente, y los candidatos por defecto.
+   */
+  private buildModelCandidates(): string[] {
+    const ordered = [
+      GeminiExtractorService.workingModelName,
+      this.preferredModel,
+      ...DEFAULT_MODEL_CANDIDATES,
+    ].filter((value): value is string => Boolean(value));
+    return [...new Set(ordered)];
+  }
+
+  /**
+   * Si todos los intentos fallaron, decide qué lanzar: RateLimitError cuando todo
+   * fue cuota agotada (la boleta vuelve a Pendientes), o el error agregado.
+   */
+  private throwSweepFailure(context: string, errors: string[]): never {
+    if (errors.length > 0 && errors.every((e) => isRateLimitError(e))) {
+      throw new RateLimitError(`${context}: sin cuota en los ${errors.length} modelo(s) del barrido`);
+    }
+    throw new Error(`${context} failed for all candidate models. ${errors.join(" | ")}`);
   }
 
   private getModel(modelName: string): GenerativeModel {
@@ -82,10 +125,10 @@ export class GeminiExtractorService implements AiExtractor {
 
     this.lastUsage = null;
     const prompt = buildExtractionPrompt(text);
-    const modelName = this.resolveModelName();
+    const errors: string[] = [];
 
-    return callWithRetry(
-      async () => {
+    for (const modelName of this.buildModelCandidates()) {
+      try {
         const model = this.getModel(modelName);
         const result = await model.generateContent({
           contents: [{ role: "user", parts: [{ text: prompt }] }],
@@ -95,10 +138,14 @@ export class GeminiExtractorService implements AiExtractor {
         const parsed = parseExtractionOutput(outputText);
         const refined = refineExtractionWithRawText(parsed, text);
         this.captureUsage(modelName, result);
+        GeminiExtractorService.workingModelName = modelName;
         return refined;
-      },
-      { retries: RATE_LIMIT_RETRIES, backoffMs: RATE_LIMIT_BACKOFF_MS }
-    );
+      } catch (error) {
+        errors.push(`${modelName}: ${normalizeError(error)}`);
+      }
+    }
+
+    this.throwSweepFailure("Gemini extraction", errors);
   }
 
   getLastUsage(): AiUsageMetrics | null {
@@ -136,23 +183,28 @@ export class GeminiExtractorService implements AiExtractor {
       ],
     }];
 
-    // Fallback liviano: 1 modelo, sin reintentos. Si falla, devolvemos null.
-    try {
-      const model = this.getModel(this.resolveModelName());
-      const result = await model.generateContent({
-        contents,
-        generationConfig: { temperature: 0, responseMimeType: "application/json" },
-      });
-      const outputText = result.response.text() || "{}";
-      const clean = outputText.replace(/```json|```/g, "").trim();
-      const parsed = JSON.parse(clean) as { providerName?: string | null; providerTaxId?: string | null };
-      return {
-        providerName: parsed.providerName ?? null,
-        providerTaxId: parsed.providerTaxId ?? null,
-      };
-    } catch {
-      return { providerName: null, providerTaxId: null };
+    // Fallback liviano (enriquecimiento opcional): barre modelos; si todos
+    // fallan devuelve null sin lanzar — el caller sigue sin el dato visual.
+    for (const modelName of this.buildModelCandidates()) {
+      try {
+        const model = this.getModel(modelName);
+        const result = await model.generateContent({
+          contents,
+          generationConfig: { temperature: 0, responseMimeType: "application/json" },
+        });
+        const outputText = result.response.text() || "{}";
+        const clean = outputText.replace(/```json|```/g, "").trim();
+        const parsed = JSON.parse(clean) as { providerName?: string | null; providerTaxId?: string | null };
+        GeminiExtractorService.workingModelName = modelName;
+        return {
+          providerName: parsed.providerName ?? null,
+          providerTaxId: parsed.providerTaxId ?? null,
+        };
+      } catch {
+        continue;
+      }
     }
+    return { providerName: null, providerTaxId: null };
   }
 
   async extractStructuredDataFromImage(
@@ -175,10 +227,10 @@ export class GeminiExtractorService implements AiExtractor {
       ],
     }];
 
-    const modelName = this.resolveModelName();
+    const errors: string[] = [];
 
-    return callWithRetry(
-      async () => {
+    for (const modelName of this.buildModelCandidates()) {
+      try {
         const model = this.getModel(modelName);
         const result = await model.generateContent({
           contents,
@@ -188,9 +240,13 @@ export class GeminiExtractorService implements AiExtractor {
         const parsed = parseExtractionOutput(outputText);
         const refined = refineExtractionWithRawText(parsed, "");
         this.captureUsage(modelName, result);
+        GeminiExtractorService.workingModelName = modelName;
         return refined;
-      },
-      { retries: RATE_LIMIT_RETRIES, backoffMs: RATE_LIMIT_BACKOFF_MS }
-    );
+      } catch (error) {
+        errors.push(`${modelName}: ${normalizeError(error)}`);
+      }
+    }
+
+    this.throwSweepFailure("Gemini Vision image extraction", errors);
   }
 }

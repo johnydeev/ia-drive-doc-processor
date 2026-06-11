@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+### Fix
+- **Barrido de modelos Gemini restaurado (cuota diaria por modelo) (2026-06-11)**.
+  Log de prod reveló que el free tier de Gemini tiene cuota **diaria por modelo**
+  (`limit: 20`, `GenerateRequestsPerDayPerProjectPerModel-FreeTier`): el barrido
+  original sumaba ~6 baldes (los 429 no consumen cuota) y al unificar a 1 modelo
+  quedó 1 balde de 20/día. Se restaura el barrido (5 modelos, sin 2.5-pro, con
+  `workingModelName`) conservando el anti-pérdida: todos sin cuota →
+  `RateLimitError` → boleta a Pendientes. Corrige el análisis del fix del 10/06.
+  Recomendación: tier pago (~USD 1-2/mes a este volumen) como solución definitiva.
+
 ### Observabilidad
 - **Logs de diagnóstico de throughput (2026-06-11)**. Worker: profundidad de cola
   al reclamar cada job ("En cola: N detrás" — si es 0, el límite es el

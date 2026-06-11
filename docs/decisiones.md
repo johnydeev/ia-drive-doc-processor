@@ -4,6 +4,44 @@ Registro de decisiones tomadas ante problemas reales encontrados en producción.
 
 ---
 
+## 2026-06-11 — Causa raíz REAL del throughput: cuota diaria por modelo del free tier. Se restaura el barrido de modelos
+
+**Problema:** tras el fix del 10/06 (1 solo modelo), prod procesó 35 boletas a la
+mañana y se frenó: 429 en flash-lite por el resto del día. El log de prod dio la
+evidencia definitiva:
+`Quota exceeded ... limit: 20, quotaId: GenerateRequestsPerDayPerProjectPerModel-FreeTier`.
+**El free tier de Gemini tiene cuota DIARIA POR MODELO (20/día para
+gemini-2.5-flash-lite).** Google la recortó — esa es la causa externa de la
+regresión original ("antes 80/día, ahora ni la mitad").
+
+**Corrección del análisis del 10/06:** el "barrido de 6 modelos = 6× consumo"
+era INCORRECTO: un request rechazado con 429 **no consume cuota**. El barrido en
+realidad **sumaba los baldes diarios independientes de ~6 modelos** (~6×20),
+y por eso el sistema histórico llegaba a ~80/día. Al unificar a 1 modelo quedó
+un solo balde de 20/día → el freno de hoy. Lo que SÍ era un bug real (y quedó
+arreglado): las boletas con 429 se perdían en Sin Asignar y el mismo job
+reintentaba en loop quemando tiempo.
+
+**Decisión:** restaurar el barrido de modelos en `GeminiExtractorService`
+(flash-lite → 2.5-flash → flash-latest → 2.0-flash → 2.0-flash-lite; se quita
+2.5-pro, que suele tener free tier 0) **conservando el comportamiento anti-pérdida**:
+si TODOS los modelos están sin cuota → `RateLimitError` → la boleta vuelve a
+Pendientes. Se restaura también `workingModelName` (estática) para arrancar el
+barrido en el último modelo que funcionó (evita re-pegar contra baldes agotados).
+Se quita `callWithRetry` del servicio (el barrido lo reemplaza; la utilidad y sus
+tests quedan en `lib/aiErrors`).
+
+**Sobre frecuencia/batchSize:** con tope DIARIO, bajar el ritmo no suma cuota
+(1 boleta/5min ≈ 80/día ya coincide con el techo de baldes agotables). No se
+tocó la config. **Solución definitiva recomendada:** tier pago de Gemini (a este
+volumen ~USD 1-2/mes con flash-lite) o crédito en OpenAI — el barrido es un
+paliativo que depende de cuánta cuota gratis deje Google.
+
+**Impacto:** `geminiExtractor.service.ts`. Verificación: typecheck, 55 tests,
+build:jobs, lint OK. Deploy: rebuild del worker.
+
+---
+
 ## 2026-06-11 — Boletas trabadas en Pendientes + jobs zombie + crash del worker por DB
 
 **Problema (3 causas distintas confirmadas con logs + DB):**
