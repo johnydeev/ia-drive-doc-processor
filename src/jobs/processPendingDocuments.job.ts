@@ -17,6 +17,7 @@ import { LspServiceRepository } from "@/repositories/lspService.repository";
 import { GoogleDriveService } from "@/services/googleDrive.service";
 import { GoogleSheetsService, SheetsRowMapping } from "@/services/googleSheets.service";
 import { AiExtractionChain, createAiExtractionChain } from "@/services/aiExtraction";
+import { isRateLimitError, RateLimitError } from "@/lib/aiErrors";
 import { PdfTextExtractorService } from "@/services/pdfTextExtractor.service";
 import { isMissingAmount, cuitAppearsInText, appendNoAmountTag } from "@/lib/documentValidation";
 
@@ -590,6 +591,10 @@ async function processDriveFile(
         } catch (error) {
           const msg = error instanceof Error ? error.message : "Gemini Vision error";
           pipelineLog.aiExtraction(cid, "gemini", false, msg);
+          // Sin cuota (429): dejar la imagen en Pendientes para reintento posterior.
+          if (isRateLimitError(error)) {
+            throw new RateLimitError("IA Vision sin cuota (429)");
+          }
           extracted = buildOcrOnlyPayload();
         }
       } else {
@@ -642,12 +647,14 @@ async function processDriveFile(
       // Fallback IA Gemini→OpenAI→Claude vía cadena reutilizable. El logging
       // por intento se inyecta vía callback; el timing acumulado ("ai") lo
       // mantiene runStep envolviendo la ejecución completa de la cadena.
+      const aiErrors: string[] = [];
       const aiResult = await runStep(
         "Extracción IA",
         () =>
-          aiChain.run(text, (provider, ok, errorMsg) =>
-            pipelineLog.aiExtraction(cid, provider, ok, errorMsg)
-          ),
+          aiChain.run(text, (provider, ok, errorMsg) => {
+            pipelineLog.aiExtraction(cid, provider, ok, errorMsg);
+            if (!ok && errorMsg) aiErrors.push(errorMsg);
+          }),
         "ai"
       );
 
@@ -655,6 +662,11 @@ async function processDriveFile(
         extracted = aiResult.data;
         fileAiUsage = aiResult.usage;
         accumulateTokenUsage(summary.tokenUsage, fileAiUsage);
+      } else if (aiErrors.length > 0 && aiErrors.every((e) => isRateLimitError(e))) {
+        // Todos los proveedores de IA sin cuota (429): NO degradar a OCR_ONLY
+        // (terminaría en Sin Asignar). Se propaga como RateLimitError para dejar
+        // la boleta en Pendientes y reintentarla en un ciclo posterior.
+        throw new RateLimitError(`IA sin cuota — ${aiErrors.length} proveedor(es) en 429`);
       } else {
         pipelineLog.aiOcrFallback(cid);
         extracted = buildOcrOnlyPayload();
@@ -989,6 +1001,31 @@ async function processDriveFile(
     pipelineLog.fileCompleted(cid, file.name, { processed: 1, unassigned: 0, duplicate: isDuplicate });
 
   } catch (error) {
+    // ── Rate-limit de IA (429): caso aparte ────────────────────────────────
+    // NO se pierde la boleta ni se marca como fallida. Se devuelve a Pendientes
+    // (si hubo lock en Procesando) y el job se completa OK; el scheduler la
+    // re-encola en un ciclo posterior, cuando la cuota se haya recuperado. Así
+    // se evita el loop de reintentos inmediatos que quemaba cuota.
+    if (error instanceof RateLimitError) {
+      m.result = "rate_limited";
+      m.reason = "rate_limit";
+      m.reasonText = error.message;
+      summary.skipped += 1;
+      pipelineLog.stepStart(cid, `⏸️  Rate-limit IA → boleta devuelta a Pendientes para reintento posterior`);
+      if (resolvedConfig.driveProcessingFolderId && resolvedConfig.drivePendingFolderId) {
+        try {
+          await driveService.moveFileToFolder(
+            file.id,
+            resolvedConfig.driveProcessingFolderId,
+            resolvedConfig.drivePendingFolderId
+          );
+        } catch {
+          // best-effort: si no se puede devolver, el scheduler igual la reintentará
+        }
+      }
+      return;
+    }
+
     summary.failed += 1;
     const errorMessage = error instanceof Error ? error.message : "Unknown error";
     summary.errors.push({ fileId: file.id, fileName: file.name, error: errorMessage });

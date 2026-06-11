@@ -4,6 +4,57 @@ Registro de decisiones tomadas ante problemas reales encontrados en producción.
 
 ---
 
+## 2026-06-10 — Regresión 429 (rate-limit IA): 1 modelo + backoff + re-encolar
+
+**Problema:** throughput cayó a la mitad por errores 429 (cuota) de Gemini.
+Evidencia en `logs/2026-06-08_15-43_worker.txt`: cada fallo lista los **6 modelos
+candidatos, todos con HTTP 429** ("failed for all candidate models"), y el mismo
+job se reintenta por minutos. OpenAI también en 429.
+
+**Causa raíz (confirmada por código + logs):** `GeminiExtractorService` barría una
+lista de 6 modelos y, ante **cualquier** error, pasaba al siguiente. Un 429 es
+rate-limit del **proyecto/cuota** → reintentar con otro modelo no ayuda y
+**multiplica ×6** el consumo, agotando la cuota en pocas boletas. Las boletas con
+429 caían a `OCR_ONLY` → Sin Asignar (se perdían).
+
+**Hipótesis descartada:** el usuario atribuía la regresión a un "cambio de orden
+del pipeline" (IA antes que OCR). Verificado con git: el orden texto→IA es el mismo
+desde el seed inicial; la IA de texto siempre estructuró los campos (no hubo nunca
+un parser de reglas que la reemplazara). Lo que el usuario recordaba como "IA solo
+para imágenes" es la IA-Vision, que sigue reservada al fallback visual.
+
+**Decisión:**
+1. **1 modelo configurable** (no barrer 6). Default `gemini-2.5-flash-lite`,
+   override por `GEMINI_MODEL`. Un modelo deprecado da 404 (no 429) → se propaga y
+   la cadena cae a OpenAI/Claude.
+2. **`callWithRetry`** (función pura, testeada): reintenta SOLO ante rate-limit con
+   backoff acotado (1 reintento, 3s); al agotarse lanza `RateLimitError`. Errores
+   normales se propagan sin reintentar.
+3. **Re-encolar, no perder:** ante 429 de todos los proveedores, el pipeline lanza
+   `RateLimitError`; el catch devuelve el archivo a Pendientes (desde Procesando) y
+   completa el job OK (skipped, no failed). El **scheduler** lo re-encola en un
+   ciclo posterior (no hay job PENDING/PROCESSING ni Invoice → crea uno nuevo).
+
+**Por qué re-encolar vía scheduler y no worker-retry:** el worker reintenta de
+inmediato (se vio el loop rápido en los logs), que vuelve a pegar 429 y quema
+cuota. Dejar la boleta en Pendientes + job COMPLETED hace que el reintento sea
+espaciado por `intervalMinutes` del cliente, dando tiempo a recuperar cuota. No
+requiere tocar worker ni scheduler.
+
+**Alternativas descartadas:** (a) "no usar IA cuando hay texto extraíble" (lo
+pedido) — inviable: la IA es la que estructura los campos, no hay parser. (b)
+worker-retry inmediato — causa el loop que quema cuota.
+
+**Verificación:** 16 tests nuevos (TDD) + suite total 55; typecheck, lint (0
+errores), build:jobs y next build OK.
+
+**Impacto:** nuevo `src/lib/aiErrors.ts`; reescrito `geminiExtractor.service.ts`
+(1 modelo + retry); `processPendingDocuments.job.ts` (detección 429 en flujo texto
+e imagen + manejo en el catch). Sin migración de DB. **Deploy:** rebuild del worker
+(lo hace el owner).
+
+---
+
 ## 2026-06-10 — Refactor de patrones de diseño, Fase 3 parcial (tests + MatchStrategy)
 
 **Problema:** (según `docs/reporte-patrones-diseno.md`) el proyecto no tenía

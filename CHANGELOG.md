@@ -2,6 +2,20 @@
 
 ## [Unreleased]
 
+### Fix
+- **Regresión 429 / throughput de boletas (2026-06-10)**. Se corrige la caída de
+  procesamiento por rate-limit (cuota) de Gemini. **Causa raíz:** el extractor
+  barría 6 modelos y reintentaba con cada uno ante un 429 → 6× consumo de cuota por
+  boleta (confirmado en `logs/2026-06-08_15-43_worker.txt`). **Fix:**
+  - `geminiExtractor.service.ts` usa **1 modelo configurable** (`GEMINI_MODEL` o
+    default `gemini-2.5-flash-lite`) en vez de barrer 6.
+  - Nuevo `src/lib/aiErrors.ts`: `isRateLimitError`, `RateLimitError` y
+    `callWithRetry` (backoff acotado que reintenta solo ante 429). 16 tests (TDD).
+  - El pipeline ya **no pierde** boletas con 429: las devuelve a Pendientes y el
+    scheduler las re-encola en un ciclo posterior (sin loop de reintento inmediato).
+  Sin migración de DB; requiere rebuild del worker. La hipótesis del "cambio de
+  orden del pipeline" se descartó con git (el orden texto→IA es el de siempre).
+
 ### Tests
 - **Test runner (Vitest) + red de seguridad (2026-06-10)**. Primer runner de tests
   del proyecto: **Vitest 4** + `vite-tsconfig-paths`, `vitest.config.ts`, scripts

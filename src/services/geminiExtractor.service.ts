@@ -1,4 +1,4 @@
-﻿import { GoogleGenerativeAI, GenerativeModel } from "@google/generative-ai";
+import { GoogleGenerativeAI, GenerativeModel, GenerateContentResult } from "@google/generative-ai";
 import { env } from "@/config/env";
 import {
   buildExtractionPrompt,
@@ -7,35 +7,27 @@ import {
 } from "@/lib/extraction";
 import { AiUsageMetrics } from "@/types/aiUsage.types";
 import { AiExtractor } from "@/services/aiExtraction";
+import { callWithRetry } from "@/lib/aiErrors";
 import { ExtractedDocumentData } from "@/types/extractedDocument.types";
 
-const DEFAULT_MODEL_CANDIDATES = [
-  "gemini-2.5-flash-lite",
-  "gemini-2.5-flash",
-  "gemini-flash-latest",
-  "gemini-2.0-flash",
-  "gemini-2.0-flash-lite",
-  "gemini-2.5-pro",
-];
+/**
+ * Modelo por defecto si el cliente no configura uno (GEMINI_MODEL / options.model).
+ *
+ * IMPORTANTE: se usa UN SOLO modelo por llamada (configurable). Antes se barría
+ * una lista de 6 modelos y, ante un 429 (rate-limit de cuota), se reintentaba con
+ * cada uno → 6× consumo de cuota por boleta, agotándola en pocas boletas. Un 429
+ * es del proyecto/cuota, no del modelo: probar otro modelo no ayuda. Ahora se usa
+ * 1 modelo + backoff acotado (callWithRetry) y, si persiste el 429, se propaga
+ * como RateLimitError para que el pipeline deje la boleta en Pendientes.
+ */
+const DEFAULT_MODEL = "gemini-2.5-flash-lite";
 
-function normalizeError(error: unknown): string {
-  if (error instanceof Error) {
-    const firstLine = error.message.split("\n")[0]?.trim() ?? error.message;
-    const compact = firstLine.length > 220 ? `${firstLine.slice(0, 220)}...` : firstLine;
-    const codeMatch = firstLine.match(/\[(\d{3})\s/);
-    if (codeMatch) {
-      return `HTTP ${codeMatch[1]}: ${compact}`;
-    }
-    return compact;
-  }
-  const text = String(error);
-  const firstLine = text.split("\n")[0]?.trim() ?? text;
-  return firstLine.length > 220 ? `${firstLine.slice(0, 220)}...` : firstLine;
-}
+/** Reintentos/backoff ante rate-limit (acotado: no derrochar cuota). */
+const RATE_LIMIT_RETRIES = 1;
+const RATE_LIMIT_BACKOFF_MS = 3000;
 
 export class GeminiExtractorService implements AiExtractor {
   readonly provider = "gemini" as const;
-  private static workingModelName: string | null = null;
   private readonly genAI: GoogleGenerativeAI;
   private readonly preferredModel?: string;
   private lastUsage: AiUsageMetrics | null = null;
@@ -50,16 +42,37 @@ export class GeminiExtractorService implements AiExtractor {
     this.preferredModel = options?.model?.trim() || env.GEMINI_MODEL?.trim() || undefined;
   }
 
-  private buildModelCandidates(): string[] {
-    const ordered = [this.preferredModel, GeminiExtractorService.workingModelName, ...DEFAULT_MODEL_CANDIDATES].filter(
-      (value): value is string => Boolean(value)
-    );
-
-    return [...new Set(ordered)];
+  /** Único modelo a usar (configurable). */
+  private resolveModelName(): string {
+    return this.preferredModel ?? DEFAULT_MODEL;
   }
 
   private getModel(modelName: string): GenerativeModel {
     return this.genAI.getGenerativeModel({ model: modelName });
+  }
+
+  private captureUsage(modelName: string, result: GenerateContentResult): void {
+    const usageMetadata = (
+      result.response as unknown as {
+        usageMetadata?: {
+          promptTokenCount?: number;
+          candidatesTokenCount?: number;
+          totalTokenCount?: number;
+        };
+      }
+    ).usageMetadata;
+
+    const inputTokens = Number(usageMetadata?.promptTokenCount ?? 0);
+    const outputTokens = Number(usageMetadata?.candidatesTokenCount ?? 0);
+    const totalTokens = Number(usageMetadata?.totalTokenCount ?? inputTokens + outputTokens);
+
+    this.lastUsage = {
+      provider: "gemini",
+      model: modelName,
+      inputTokens: Number.isFinite(inputTokens) ? inputTokens : 0,
+      outputTokens: Number.isFinite(outputTokens) ? outputTokens : 0,
+      totalTokens: Number.isFinite(totalTokens) ? totalTokens : 0,
+    };
   }
 
   async extractStructuredData(text: string): Promise<ExtractedDocumentData> {
@@ -69,61 +82,23 @@ export class GeminiExtractorService implements AiExtractor {
 
     this.lastUsage = null;
     const prompt = buildExtractionPrompt(text);
-    const errors: string[] = [];
+    const modelName = this.resolveModelName();
 
-    for (const modelName of this.buildModelCandidates()) {
-      try {
+    return callWithRetry(
+      async () => {
         const model = this.getModel(modelName);
-        const response = await model.generateContent({
+        const result = await model.generateContent({
           contents: [{ role: "user", parts: [{ text: prompt }] }],
-          generationConfig: {
-            temperature: 0,
-            responseMimeType: "application/json",
-          },
+          generationConfig: { temperature: 0, responseMimeType: "application/json" },
         });
-
-        const outputText = response.response.text() || "{}";
+        const outputText = result.response.text() || "{}";
         const parsed = parseExtractionOutput(outputText);
         const refined = refineExtractionWithRawText(parsed, text);
-        const usageMetadata = (
-          response.response as unknown as {
-            usageMetadata?: {
-              promptTokenCount?: number;
-              candidatesTokenCount?: number;
-              totalTokenCount?: number;
-            };
-          }
-        ).usageMetadata;
-
-        const inputTokens = Number(usageMetadata?.promptTokenCount ?? 0);
-        const outputTokens = Number(usageMetadata?.candidatesTokenCount ?? 0);
-        const totalTokens = Number(
-          usageMetadata?.totalTokenCount ?? inputTokens + outputTokens
-        );
-
-        this.lastUsage = {
-          provider: "gemini",
-          model: modelName,
-          inputTokens: Number.isFinite(inputTokens) ? inputTokens : 0,
-          outputTokens: Number.isFinite(outputTokens) ? outputTokens : 0,
-          totalTokens: Number.isFinite(totalTokens) ? totalTokens : 0,
-        };
-
-        GeminiExtractorService.workingModelName = modelName;
+        this.captureUsage(modelName, result);
         return refined;
-      } catch (error) {
-        errors.push(`${modelName}: ${normalizeError(error)}`);
-      }
-    }
-
-    const allErrors = errors.join(" | ");
-    if (allErrors.toLowerCase().includes("free_tier") && allErrors.toLowerCase().includes("limit: 0")) {
-      throw new Error(
-        "Gemini API key/project has zero available free-tier quota (limit: 0). Verify AI Studio key project and quota activation."
-      );
-    }
-
-    throw new Error(`Gemini extraction failed for all candidate models. ${errors.join(" | ")}`);
+      },
+      { retries: RATE_LIMIT_RETRIES, backoffMs: RATE_LIMIT_BACKOFF_MS }
+    );
   }
 
   getLastUsage(): AiUsageMetrics | null {
@@ -161,25 +136,23 @@ export class GeminiExtractorService implements AiExtractor {
       ],
     }];
 
-    for (const modelName of this.buildModelCandidates()) {
-      try {
-        const model = this.getModel(modelName);
-        const response = await model.generateContent({
-          contents,
-          generationConfig: { temperature: 0, responseMimeType: "application/json" },
-        });
-        const outputText = response.response.text() || "{}";
-        const clean = outputText.replace(/```json|```/g, "").trim();
-        const parsed = JSON.parse(clean) as { providerName?: string | null; providerTaxId?: string | null };
-        return {
-          providerName: parsed.providerName ?? null,
-          providerTaxId: parsed.providerTaxId ?? null,
-        };
-      } catch {
-        continue;
-      }
+    // Fallback liviano: 1 modelo, sin reintentos. Si falla, devolvemos null.
+    try {
+      const model = this.getModel(this.resolveModelName());
+      const result = await model.generateContent({
+        contents,
+        generationConfig: { temperature: 0, responseMimeType: "application/json" },
+      });
+      const outputText = result.response.text() || "{}";
+      const clean = outputText.replace(/```json|```/g, "").trim();
+      const parsed = JSON.parse(clean) as { providerName?: string | null; providerTaxId?: string | null };
+      return {
+        providerName: parsed.providerName ?? null,
+        providerTaxId: parsed.providerTaxId ?? null,
+      };
+    } catch {
+      return { providerName: null, providerTaxId: null };
     }
-    return { providerName: null, providerTaxId: null };
   }
 
   async extractStructuredDataFromImage(
@@ -202,48 +175,22 @@ export class GeminiExtractorService implements AiExtractor {
       ],
     }];
 
-    const errors: string[] = [];
+    const modelName = this.resolveModelName();
 
-    for (const modelName of this.buildModelCandidates()) {
-      try {
+    return callWithRetry(
+      async () => {
         const model = this.getModel(modelName);
-        const response = await model.generateContent({
+        const result = await model.generateContent({
           contents,
           generationConfig: { temperature: 0, responseMimeType: "application/json" },
         });
-        const outputText = response.response.text() || "{}";
+        const outputText = result.response.text() || "{}";
         const parsed = parseExtractionOutput(outputText);
         const refined = refineExtractionWithRawText(parsed, "");
-
-        const usageMetadata = (
-          response.response as unknown as {
-            usageMetadata?: {
-              promptTokenCount?: number;
-              candidatesTokenCount?: number;
-              totalTokenCount?: number;
-            };
-          }
-        ).usageMetadata;
-
-        const inputTokens = Number(usageMetadata?.promptTokenCount ?? 0);
-        const outputTokens = Number(usageMetadata?.candidatesTokenCount ?? 0);
-        const totalTokens = Number(usageMetadata?.totalTokenCount ?? inputTokens + outputTokens);
-
-        this.lastUsage = {
-          provider: "gemini",
-          model: modelName,
-          inputTokens: Number.isFinite(inputTokens) ? inputTokens : 0,
-          outputTokens: Number.isFinite(outputTokens) ? outputTokens : 0,
-          totalTokens: Number.isFinite(totalTokens) ? totalTokens : 0,
-        };
-
-        GeminiExtractorService.workingModelName = modelName;
+        this.captureUsage(modelName, result);
         return refined;
-      } catch (error) {
-        errors.push(`${modelName}: ${normalizeError(error)}`);
-      }
-    }
-
-    throw new Error(`Gemini Vision image extraction failed for all candidate models. ${errors.join(" | ")}`);
+      },
+      { retries: RATE_LIMIT_RETRIES, backoffMs: RATE_LIMIT_BACKOFF_MS }
+    );
   }
 }

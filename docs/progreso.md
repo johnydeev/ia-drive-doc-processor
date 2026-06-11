@@ -4,6 +4,42 @@ Actualizado al 10/06/2026 (sesión 30).
 
 ---
 
+## Fix regresión 429 (rate-limit IA) — throughput de boletas (10/06/2026)
+
+**Estado: implementado y verificado (test + typecheck + lint + build:jobs + next build OK).
+Pendiente: deploy del worker por el owner + observar throughput real.**
+
+**Problema:** caída de throughput (~80 boletas/jornada → menos de la mitad) por
+errores 429 (cuota) de Gemini. Confirmado en `logs/2026-06-08_15-43_worker.txt`
+(54 ocurrencias). **Causa raíz:** el `GeminiExtractorService` barría **6 modelos**
+candidatos y, ante un 429, reintentaba con cada uno → **6× consumo de cuota por
+boleta** (un 429 es del proyecto/cuota, no del modelo: probar otro no ayuda).
+Además, la boleta con 429 caía a `OCR_ONLY` → **Sin Asignar** (se "perdía").
+(La hipótesis del "cambio de orden del pipeline" se descartó con git: el orden
+texto→IA es el mismo desde el seed; la IA de texto siempre fue necesaria.)
+
+**Fix (causa raíz, no síntoma):**
+- **1 modelo configurable** en vez de 6 (`geminiExtractor.service.ts`). Elimina el
+  ×6. Modelo por `GEMINI_MODEL`/`options.model` o default `gemini-2.5-flash-lite`.
+- **Backoff acotado ante 429** (`callWithRetry` en `lib/aiErrors.ts`): 1 reintento
+  con espera; si persiste, lo convierte en `RateLimitError`.
+- **No perder la boleta:** ante 429 de todos los proveedores, el pipeline lanza
+  `RateLimitError` → el catch **devuelve el archivo a Pendientes** (desde
+  Procesando) y completa el job OK (no failed). El **scheduler la re-encola** en un
+  ciclo posterior, cuando la cuota se recuperó. Sin loops de reintento inmediato.
+  No toca worker ni scheduler (solo el pipeline).
+
+**Nuevos módulos/tests:** `src/lib/aiErrors.ts` (`isRateLimitError`, `RateLimitError`,
+`callWithRetry`) con 16 tests (TDD).
+
+**Eficacia esperada:** ~6× menos consumo de cuota por boleta → muchas más boletas
+antes del límite; y las que igual peguen 429 ya **no se pierden** (se reintentan).
+Si Google recortó la cuota **diaria**, esto mitiga mucho pero no es infinito —
+opciones no-código: cuota real en OpenAI/Claude (la cadena ya hace fallback),
+`GEMINI_MODEL` con mejor cuota, o tier pago.
+
+---
+
 ## Refactor de patrones de diseño — Fase 3 (parcial) (10/06/2026)
 
 **Estado: runner de tests + red de seguridad + H3 implementados y verificados
