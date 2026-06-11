@@ -1,7 +1,12 @@
-import { Consortium, Period } from "@prisma/client";
+import { Consortium, Period, PrismaClient } from "@prisma/client";
 import { getPrismaClient } from "@/lib/prisma";
 
 export class ConsortiumRepository {
+  constructor(private readonly injectedPrisma?: PrismaClient) {}
+  private get prisma(): PrismaClient {
+    return this.injectedPrisma ?? getPrismaClient();
+  }
+
   /**
    * Busca un consorcio por nombre canónico. Solo lectura — nunca crea.
    * Retorna null si no existe.
@@ -10,7 +15,7 @@ export class ConsortiumRepository {
     clientId: string,
     canonicalName: string
   ): Promise<(Consortium & { periods: Period[] }) | null> {
-    const prisma = getPrismaClient();
+    const prisma = this.prisma;
 
     return prisma.consortium.findUnique({
       where: {
@@ -23,8 +28,19 @@ export class ConsortiumRepository {
     });
   }
 
+  /**
+   * Trae todos los consorcios del cliente con los campos necesarios para el
+   * matching del pipeline (nombre canónico, rawName, CUIT, alias internos).
+   */
+  async findAllForMatching(clientId: string) {
+    return this.prisma.consortium.findMany({
+      where: { clientId },
+      select: { id: true, canonicalName: true, rawName: true, cuit: true, matchNames: true },
+    });
+  }
+
   async findActivePeriod(consortiumId: string): Promise<Period | null> {
-    const prisma = getPrismaClient();
+    const prisma = this.prisma;
 
     return prisma.period.findFirst({
       where: {
@@ -38,7 +54,7 @@ export class ConsortiumRepository {
   }
 
   async closePeriodAndCreateNext(consortiumId: string): Promise<Period> {
-    const prisma = getPrismaClient();
+    const prisma = this.prisma;
 
     return prisma.$transaction(async (tx) => {
       const current = await tx.period.findFirst({
@@ -81,7 +97,7 @@ export class ConsortiumRepository {
   async listByClient(
     clientId: string
   ): Promise<Array<Consortium & { periods: Period[]; _count: { invoices: number } }>> {
-    const prisma = getPrismaClient();
+    const prisma = this.prisma;
 
     return prisma.consortium.findMany({
       where: { clientId },
@@ -103,7 +119,7 @@ export class ConsortiumRepository {
    * Si no hay ninguno → usa el mes/año actual del sistema.
    */
   async resolveMajorityMonth(clientId: string): Promise<{ year: number; month: number }> {
-    const prisma = getPrismaClient();
+    const prisma = this.prisma;
     const activePeriods = await prisma.period.findMany({
       where: { consortium: { clientId }, status: "ACTIVE" },
       select: { year: true, month: true },
@@ -141,7 +157,7 @@ export class ConsortiumRepository {
     cutoffDay?: number;
     driveFolderProcessedId?: string;
   }): Promise<Consortium & { periods: Period[] }> {
-    const prisma = getPrismaClient();
+    const prisma = this.prisma;
     const { year, month } = await this.resolveMajorityMonth(input.clientId);
 
     const created = await prisma.$transaction(async (tx) => {

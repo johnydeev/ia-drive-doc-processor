@@ -2,7 +2,35 @@
 
 ## [Unreleased]
 
+### Tests
+- **Test runner (Vitest) + red de seguridad (2026-06-10)**. Primer runner de tests
+  del proyecto: **Vitest 4** + `vite-tsconfig-paths`, `vitest.config.ts`, scripts
+  `test`/`test:watch`. 39 tests en 3 suites: `consortiumNormalizer`,
+  `AiExtractionChain` y `assignmentMatching`. Caracterización detectó que el ejemplo
+  `"BROWN ALMTE AV 708" → "ALMIRANTE BROWN 708"` del JSDoc/CLAUDE.md es aspiracional
+  (real: `"BROWN ALMIRANTE AV 708"`; se resuelve vía matchNames/fuzzy).
+
 ### Refactor
+- **Patrones de diseño — Fase 3 parcial: H3 MatchStrategy (2026-06-10)**. La lógica
+  de matching de consorcio/proveedor se extrajo de `resolveAssignment`
+  (`processPendingDocuments.job.ts`) a un módulo puro y testeado
+  `src/lib/assignmentMatching.ts` (`matchConsortium`/`matchProvider`, 4 niveles cada
+  uno). El pipeline delega en él; logging y mensajes quedan en el caller.
+  Comportamiento preservado. **Pendiente:** H2 (descomponer `processDriveFile` en
+  pasos) requiere caracterización del pipeline completo (mock de ~8 dependencias) →
+  sesión dedicada.
+- **Patrones de diseño — Fase 2 (2026-06-10)**. Consistencia de capas y
+  observabilidad. Sin cambios de comportamiento. Verificado con typecheck + lint
+  + build:jobs + next build.
+  - **H6 — Repository + Inyección de dependencias:** los 5 repositorios reciben
+    `PrismaClient` por constructor (getter lazy, mockeable en tests). El pipeline
+    (`resolveAssignment`) ya no accede a Prisma directo: las queries se movieron a
+    `ConsortiumRepository.findAllForMatching`, `ProviderRepository.findAllForMatching`
+    y un nuevo `LspServiceRepository`. Respeta la arquitectura por capas.
+  - **H8 — Consolidación de logging:** `lib/logger.ts` gana `repoLog`/`apiLog`
+    (+ `shortLogId`). Migrados `invoice.repository.ts` (cierra PII de `clientId`/hash
+    en la capa de datos) y los `console.warn` de la ruta de scan. Resto incremental;
+    scripts de diagnóstico y bootstrap mantienen `console.*` a propósito.
 - **Patrones de diseño — Fase 1 (2026-06-10)**. A partir del reporte de auditoría
   `docs/reporte-patrones-diseno.md`. Sin cambios de comportamiento salvo lo
   indicado abajo. Verificado con typecheck + lint + build:jobs + next build.

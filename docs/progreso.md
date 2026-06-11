@@ -4,6 +4,75 @@ Actualizado al 10/06/2026 (sesión 30).
 
 ---
 
+## Refactor de patrones de diseño — Fase 3 (parcial) (10/06/2026)
+
+**Estado: runner de tests + red de seguridad + H3 implementados y verificados
+(test + typecheck + lint + build:jobs + next build OK). H2 pendiente (ver abajo).**
+
+- **Runner de tests (vitest).** Se montó **Vitest 4** + `vite-tsconfig-paths`
+  (resuelve el alias `@/`). Config en `vitest.config.ts` (entorno node, include
+  `src/**/*.test.ts`). Scripts: `npm test` (`vitest run`) y `npm run test:watch`.
+  Es el **primer test runner del proyecto**.
+- **Red de seguridad (39 tests, 3 archivos):**
+  - `consortiumNormalizer.test.ts` — caracteriza la normalización + fuzzy/alias.
+  - `aiExtraction.test.ts` — caracteriza `AiExtractionChain` (orden de fallback,
+    callback `onAttempt`, caso null) con un fake real del contrato `AiExtractor`.
+  - `assignmentMatching.test.ts` — cubre los 4 niveles de match de consorcio y
+    proveedor (ver H3).
+  - **Hallazgo de caracterización:** el JSDoc del normalizer (y el CLAUDE.md)
+    muestran `"BROWN ALMTE AV 708"` → `"ALMIRANTE BROWN 708"`, pero el
+    comportamiento **real** es `"BROWN ALMIRANTE AV 708"` (expande la abreviatura,
+    no reordena ni quita "AV"). Ese caso se resuelve vía `matchNames`/fuzzy. El
+    ejemplo del comentario es aspiracional; el test documenta lo real.
+- **H3 — MatchStrategy (Chain of Responsibility).** Se extrajo la lógica de
+  matching de `resolveAssignment` a un módulo puro y testeable
+  `lib/assignmentMatching.ts` (`matchConsortium`, `matchProvider` + helpers
+  `normCuit`/`normName`). El pipeline ahora delega en estas funciones; el logging y
+  los mensajes de "no encontrado" quedan en el caller. Comportamiento preservado
+  (incluido el log puntual `providerCuitMatchesConsortium`). `resolveAssignment`
+  quedó notablemente más corto.
+
+### Pendiente — H2 (descomposición del pipeline)
+`processDriveFile` (~595 líneas, 6 caminos de salida) **no se descompuso todavía**.
+Hacerlo con seguridad exige primero tests de caracterización del pipeline completo,
+que requieren mockear ~8 dependencias (Drive, PDF/OCR, Sheets, 4 repos, cadena IA)
++ los `await import()` dinámicos. Es un esfuerzo de su propia sesión y el cambio
+más riesgoso del proyecto. Se recomienda abordarlo aparte. La inyección de
+dependencias (Fase 2 · H6) y la extracción del matching (H3) ya dejaron el terreno
+preparado.
+
+---
+
+## Refactor de patrones de diseño — Fase 2 (10/06/2026)
+
+**Estado: implementado y verificado (typecheck + lint + build:jobs + next build OK).**
+
+Consistencia de capas y observabilidad (prerrequisito para los tests de Fase 3):
+
+- **H6 — Repository + Inyección de dependencias.**
+  - **H6a:** los 5 repositorios (`consortium`, `invoice`, `provider`, `payment`,
+    `client`) ahora reciben `PrismaClient` por constructor (opcional) con un getter
+    lazy `injectedPrisma ?? getPrismaClient()`. Preserva el comportamiento (la
+    conexión se resuelve al usar, no al construir) y habilita mockear Prisma en
+    tests.
+  - **H6b:** `resolveAssignment` (en `processPendingDocuments.job.ts`) ya **no
+    accede a Prisma directo**. Las 6 queries se movieron a métodos de repo:
+    `ConsortiumRepository.findAllForMatching`, `ProviderRepository.findAllForMatching`
+    y un **nuevo `LspServiceRepository`** (`findByProviderId`, `findByProviderName`,
+    `setProviderId`). El pipeline ahora respeta las capas que el CLAUDE.md declara.
+- **H8 — Consolidación de logging.** El logger (`lib/logger.ts`) se extendió con
+  los tags `repo`/`api` y los namespaces `repoLog`/`apiLog` (+ `shortLogId`
+  exportado). Migrados: `invoice.repository.ts` (4 `console.*` con `clientId`/hash
+  → `repoLog`, cerrando el riesgo de PII en la capa de datos) y los `console.warn`
+  de la ruta de scan → `apiLog`. El resto de `console.*` de dominio queda como
+  migración incremental; los scripts `jobs/diagnose-*.ts` y el bootstrap
+  (`prisma.ts`, `env.ts`) mantienen `console.*` a propósito.
+
+Pendiente (Fase 3): tests de caracterización de `processDriveFile` (6 caminos) →
+H3 (MatchStrategy) → H2 (descomponer el pipeline en pasos). Fase 4: H7 (UI).
+
+---
+
 ## Refactor de patrones de diseño — Fase 1 (10/06/2026)
 
 **Estado: implementado y verificado (typecheck + lint + build:jobs + next build OK).**

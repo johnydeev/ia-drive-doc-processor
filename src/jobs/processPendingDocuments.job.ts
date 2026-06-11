@@ -1,5 +1,6 @@
 import { env } from "@/config/env";
-import { normalizeConsortiumName, consortiumFuzzyMatch, consortiumAliasMatch } from "@/lib/consortiumNormalizer";
+import { normalizeConsortiumName } from "@/lib/consortiumNormalizer";
+import { matchConsortium, matchProvider } from "@/lib/assignmentMatching";
 import { identifyLSPProvider, LSPProvider, LSP_FALLBACK_NAMES } from "@/lib/extraction";
 import { refineExtractionWithRawText } from "@/lib/extraction";
 import { createEmptyTokenUsageSummary } from "@/lib/createEmptyTokenUsageSummary";
@@ -12,11 +13,11 @@ import { ClientGoogleConfig } from "@/types/client.types";
 import { ConsortiumRepository } from "@/repositories/consortium.repository";
 import { InvoiceRepository } from "@/repositories/invoice.repository";
 import { ProviderRepository } from "@/repositories/provider.repository";
+import { LspServiceRepository } from "@/repositories/lspService.repository";
 import { GoogleDriveService } from "@/services/googleDrive.service";
 import { GoogleSheetsService, SheetsRowMapping } from "@/services/googleSheets.service";
 import { AiExtractionChain, createAiExtractionChain } from "@/services/aiExtraction";
 import { PdfTextExtractorService } from "@/services/pdfTextExtractor.service";
-import { getPrismaClient } from "@/lib/prisma";
 import { isMissingAmount, cuitAppearsInText, appendNoAmountTag } from "@/lib/documentValidation";
 
 export interface ProcessJobConfig {
@@ -61,6 +62,7 @@ type ProcessingContext = {
   invoiceRepository: InvoiceRepository;
   consortiumRepository: ConsortiumRepository;
   providerRepository: ProviderRepository;
+  lspServiceRepository: LspServiceRepository;
   // El módulo Gemini se mantiene aparte de la cadena de texto porque la
   // extracción de imágenes (Vision) y el fallback visual del emisor no son
   // parte del fallback Gemini→OpenAI→Claude.
@@ -184,6 +186,7 @@ async function createProcessingContext(
   const invoiceRepository = new InvoiceRepository();
   const consortiumRepository = new ConsortiumRepository();
   const providerRepository = new ProviderRepository();
+  const lspServiceRepository = new LspServiceRepository();
   const geminiApiKey = config.aiConfig?.geminiApiKey?.trim() || env.GEMINI_API_KEY?.trim();
   const openaiApiKey = config.aiConfig?.openaiApiKey?.trim() || env.OPENAI_API_KEY?.trim();
   const anthropicApiKey = config.aiConfig?.anthropicApiKey?.trim() || env.ANTHROPIC_API_KEY?.trim();
@@ -207,6 +210,7 @@ async function createProcessingContext(
   return {
     resolvedConfig: config, resolvedMapping: mapping, driveService, pdfExtractor,
     sheetsService, invoiceRepository, consortiumRepository, providerRepository,
+    lspServiceRepository,
     geminiModule, aiChain,
     geminiApiKey, geminiModel,
     existingDuplicateKeys,
@@ -240,6 +244,7 @@ async function resolveAssignment(
   fileId: string,
   consortiumRepository: ConsortiumRepository,
   providerRepository: ProviderRepository,
+  lspServiceRepository: LspServiceRepository,
   lspProvider: LSPProvider | null
 ): Promise<AssignmentResult> {
   const base: AssignmentResult = {
@@ -251,8 +256,6 @@ async function resolveAssignment(
     statementsFolderId: null, periodMonth: null, periodYear: null,
     consortiumMatchMethod: null, providerMatchMethod: null, reasonCategory: null,
   };
-
-  const prisma = getPrismaClient();
 
   // ── 0. LSP fast path: resolver proveedor por CUIT + LspService por clientNumber ──
 
@@ -266,10 +269,7 @@ async function resolveAssignment(
   let lspProviderAlias: string | null = null;
 
   if (lspProvider && allTaxIds.length > 0) {
-    const allProviders = await prisma.provider.findMany({
-      where: { clientId },
-      select: { id: true, canonicalName: true, cuit: true, paymentAlias: true },
-    });
+    const allProviders = await providerRepository.findAllForMatching(clientId);
 
     for (const cuit of allTaxIds) {
       const found = allProviders.find((p) => normCuit(p.cuit) === cuit);
@@ -293,25 +293,16 @@ async function resolveAssignment(
 
   if (lspProvider && lspProvider !== "GENERIC_LSP" && normalizedClientNumber) {
     try {
-      const lspInclude = {
-        consortium: { select: { id: true, canonicalName: true, rawName: true, bank: true, statementsFolderId: true } },
-        providerRef: { select: { id: true, canonicalName: true, cuit: true, paymentAlias: true } },
-      } as const;
-
       // Intento 1: buscar por providerId (FK) si lo tenemos
       let lspService = lspProviderId
-        ? await prisma.lspService.findFirst({
-            where: { clientId, providerId: lspProviderId, clientNumber: normalizedClientNumber },
-            include: lspInclude,
-          })
+        ? await lspServiceRepository.findByProviderId(clientId, lspProviderId, normalizedClientNumber)
         : null;
 
       // Intento 2: fallback a campo texto providerName (nombre canónico)
       if (!lspService) {
-        lspService = await prisma.lspService.findFirst({
-          where: { clientId, providerName: lspProviderCanonicalName!, clientNumber: normalizedClientNumber },
-          include: lspInclude,
-        });
+        lspService = await lspServiceRepository.findByProviderName(
+          clientId, lspProviderCanonicalName!, normalizedClientNumber
+        );
       }
 
       if (lspService) {
@@ -319,10 +310,9 @@ async function resolveAssignment(
 
         // Actualizar providerId si no estaba seteado y lo tenemos
         if (lspProviderId && !lspService.providerId) {
-          await prisma.lspService.update({
-            where: { id: lspService.id },
-            data: { providerId: lspProviderId },
-          }).catch(() => { /* non-fatal */ });
+          await lspServiceRepository
+            .setProviderId(lspService.id, lspProviderId)
+            .catch(() => { /* non-fatal */ });
         }
 
         // Resolver proveedor: preferir CUIT lookup, luego FK del LspService
@@ -370,57 +360,14 @@ async function resolveAssignment(
 
   const rawConsortium = extracted.consortium?.trim() ?? null;
 
-  const allConsortiums = await prisma.consortium.findMany({
-    where: { clientId },
-    select: { id: true, canonicalName: true, rawName: true, cuit: true, matchNames: true },
-  });
+  const allConsortiums = await consortiumRepository.findAllForMatching(clientId);
 
-  let consortiumRow: typeof allConsortiums[0] | undefined;
-  let matchMethod = "";
+  // Matching en 4 niveles (CUIT → exacto → fuzzy → alias), ver lib/assignmentMatching.
+  const consortiumMatch = matchConsortium(allConsortiums, rawConsortium, allTaxIds);
 
-  // Intento 0: match por CUIT (allTaxIds) — incluye CUITs alternativos en matchNames
-  if (allTaxIds.length > 0) {
-    for (const cuit of allTaxIds) {
-      const found = allConsortiums.find((c) => {
-        if (c.cuit && normCuit(c.cuit) === cuit) return true;
-        const altNames = (c.matchNames ?? "").split("|").map(n => n.trim()).filter(Boolean);
-        return altNames.some(alt => {
-          const normAlt = normCuit(alt);
-          return normAlt.length >= 10 && normAlt === cuit;
-        });
-      });
-      if (found) {
-        consortiumRow = found;
-        matchMethod = `CUIT (${cuit})`;
-        break;
-      }
-    }
-  }
-
-  // Intentos por nombre requieren rawConsortium
-  if (!consortiumRow && rawConsortium) {
-    const canonicalName = normalizeConsortiumName(rawConsortium);
-
-    // Intento 1: match exacto por canonicalName
-    consortiumRow = allConsortiums.find((c) => c.canonicalName === canonicalName);
-    if (consortiumRow) matchMethod = "exacto";
-
-    // Intento 2: fuzzy match
-    if (!consortiumRow) {
-      const fuzzy = allConsortiums.find((c) => consortiumFuzzyMatch(rawConsortium, c.canonicalName));
-      if (fuzzy) { consortiumRow = fuzzy; matchMethod = "fuzzy"; }
-    }
-
-    // Intento 3: alias match
-    if (!consortiumRow) {
-      const aliased = allConsortiums.find((c) => {
-        const names = (c.matchNames ?? "").split("|").map((a) => a.trim()).filter(Boolean);
-        return consortiumAliasMatch(rawConsortium, names);
-      });
-      if (aliased) { consortiumRow = aliased; matchMethod = "alias"; }
-    }
-
-    if (!consortiumRow) {
+  if (!consortiumMatch) {
+    if (rawConsortium) {
+      const canonicalName = normalizeConsortiumName(rawConsortium);
       pipelineLog.consortiumNotFound(
         clientId,
         rawConsortium,
@@ -433,14 +380,12 @@ async function resolveAssignment(
         reasonCategory: "consortium_not_found",
       };
     }
-  }
-
-  if (!consortiumRow) {
     return { ...base, unassignedReason: "No se pudo extraer el consorcio del PDF ni matchear por CUIT", reasonCategory: "consortium_not_found" };
   }
 
-  pipelineLog.consortiumMatch(clientId, matchMethod, consortiumRow.canonicalName);
-  base.consortiumMatchMethod = normalizeMatchMethod(matchMethod);
+  const consortiumRow = consortiumMatch.row;
+  pipelineLog.consortiumMatch(clientId, consortiumMatch.method, consortiumRow.canonicalName);
+  base.consortiumMatchMethod = normalizeMatchMethod(consortiumMatch.method);
 
   const consortium = await consortiumRepository.findByCanonicalName(clientId, consortiumRow.canonicalName);
   if (!consortium) {
@@ -464,60 +409,25 @@ async function resolveAssignment(
 
   // ── 2. Proveedor ─────────────────────────────────────────────────────────
 
-  const allProviders = await prisma.provider.findMany({
-    where: { clientId },
-    select: { id: true, canonicalName: true, cuit: true, matchNames: true, paymentAlias: true },
-  });
+  const allProviders = await providerRepository.findAllForMatching(clientId);
 
   const rawCuit     = extracted.providerTaxId?.trim() ?? null;
   const rawName     = extracted.provider?.trim() ?? null;
   const normOcrCuit = normCuit(rawCuit);
   const normOcrName = normName(rawName);
 
-  let matched: typeof allProviders[0] | undefined;
-  let providerMatchMethod = "";
+  // Matching en 4 niveles (CUIT allTaxIds → CUIT providerTaxId → nombre exacto →
+  // nombre parcial), ver lib/assignmentMatching.
+  const providerMatch = matchProvider(allProviders, rawCuit, rawName, allTaxIds, consortiumCuitNorm);
 
-  // Intento 0: CUIT match usando allTaxIds, excluyendo CUIT del consorcio
-  if (allTaxIds.length > 0) {
-    const providerCuits = allTaxIds.filter((c) => c !== consortiumCuitNorm);
-    for (const cuit of providerCuits) {
-      const found = allProviders.find((p) => normCuit(p.cuit) === cuit);
-      if (found) {
-        matched = found;
-        providerMatchMethod = `CUIT allTaxIds (${cuit})`;
-        break;
-      }
-    }
-  }
-
-  // Intento 1: CUIT normalizado de providerTaxId (legacy), excluyendo CUIT del consorcio
-  if (!matched && normOcrCuit.length >= 10 && normOcrCuit !== consortiumCuitNorm) {
-    matched = allProviders.find((p) => normCuit(p.cuit) === normOcrCuit);
-    if (matched) providerMatchMethod = `CUIT providerTaxId (${normOcrCuit})`;
-  } else if (!matched && normOcrCuit.length >= 10 && normOcrCuit === consortiumCuitNorm) {
+  // Log informativo: el CUIT del OCR coincide con el del consorcio (no se usa como
+  // proveedor). Se emite salvo que el proveedor se haya resuelto por allTaxIds.
+  const matchedByAllTaxIds = providerMatch?.method.startsWith("CUIT allTaxIds") ?? false;
+  if (normOcrCuit.length >= 10 && normOcrCuit === consortiumCuitNorm && !matchedByAllTaxIds) {
     pipelineLog.providerCuitMatchesConsortium(clientId, normOcrCuit);
   }
 
-  // Intento 2: nombre / matchNames exacto
-  if (!matched && normOcrName.length >= 3) {
-    matched = allProviders.find((p) => {
-      if (normName(p.canonicalName) === normOcrName) return true;
-      const names = (p.matchNames ?? "").split("|").map((n) => n.trim()).filter(Boolean);
-      return names.some((n) => normName(n) === normOcrName);
-    });
-    if (matched) providerMatchMethod = `nombre exacto ("${normOcrName}")`;
-  }
-
-  // Intento 3: nombre parcial
-  if (!matched && normOcrName.length >= 5) {
-    matched = allProviders.find((p) =>
-      normName(p.canonicalName).includes(normOcrName) ||
-      normOcrName.includes(normName(p.canonicalName).slice(0, 5))
-    );
-    if (matched) providerMatchMethod = `nombre parcial ("${normOcrName}")`;
-  }
-
-  if (!matched) {
+  if (!providerMatch) {
     pipelineLog.providerNotFound(clientId, rawCuit, rawName, normOcrCuit, normOcrName);
     return {
       ...base,
@@ -527,7 +437,8 @@ async function resolveAssignment(
     };
   }
 
-  pipelineLog.providerMatch(clientId, providerMatchMethod, matched.canonicalName);
+  const matched = providerMatch.row;
+  pipelineLog.providerMatch(clientId, providerMatch.method, matched.canonicalName);
 
   try {
     await providerRepository.linkToConsortium(matched.id, consortium.id);
@@ -552,7 +463,7 @@ async function resolveAssignment(
     periodMonth: base.periodMonth,
     periodYear: base.periodYear,
     consortiumMatchMethod: base.consortiumMatchMethod,
-    providerMatchMethod: normalizeMatchMethod(providerMatchMethod),
+    providerMatchMethod: normalizeMatchMethod(providerMatch.method),
     reasonCategory: null,
   };
 }
@@ -564,7 +475,7 @@ async function processDriveFile(
 ): Promise<void> {
   const {
     resolvedConfig, resolvedMapping, driveService, pdfExtractor, sheetsService,
-    invoiceRepository, consortiumRepository, providerRepository,
+    invoiceRepository, consortiumRepository, providerRepository, lspServiceRepository,
     geminiModule, aiChain, geminiApiKey, geminiModel,
     existingDuplicateKeys,
   } = context;
@@ -858,7 +769,7 @@ async function processDriveFile(
 
     const assignStart = Date.now();
     let assignment = await resolveAssignment(
-      extracted, cid, file.id, consortiumRepository, providerRepository, lspProvider
+      extracted, cid, file.id, consortiumRepository, providerRepository, lspServiceRepository, lspProvider
     );
     m.ms.assign = Date.now() - assignStart;
 
@@ -898,7 +809,7 @@ async function processDriveFile(
             }
 
             const visualAssignment = await resolveAssignment(
-              extracted, cid, file.id, consortiumRepository, providerRepository, lspProvider
+              extracted, cid, file.id, consortiumRepository, providerRepository, lspServiceRepository, lspProvider
             );
 
             if (!visualAssignment.unassigned) {

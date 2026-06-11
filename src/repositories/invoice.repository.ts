@@ -1,11 +1,12 @@
 import { createHash } from "crypto";
-import { Invoice, Prisma } from "@prisma/client";
+import { Invoice, Prisma, PrismaClient } from "@prisma/client";
 import {
   buildBusinessKeyParts,
   buildBusinessKeyString,
   BusinessKeyParts,
 } from "@/lib/businessKey";
 import { getPrismaClient } from "@/lib/prisma";
+import { repoLog, shortLogId } from "@/lib/logger";
 import { ExtractedDocumentData } from "@/types/extractedDocument.types";
 
 export interface DuplicateLookupResult {
@@ -35,6 +36,16 @@ export interface SaveInvoiceInput {
 }
 
 export class InvoiceRepository {
+  /**
+   * Prisma se inyecta opcionalmente (para tests). En runtime cae al singleton
+   * vía getter lazy, preservando el comportamiento previo (la conexión se
+   * resuelve al usar el repo, no al construirlo).
+   */
+  constructor(private readonly injectedPrisma?: PrismaClient) {}
+  private get prisma(): PrismaClient {
+    return this.injectedPrisma ?? getPrismaClient();
+  }
+
   computeDocumentHash(input: Buffer | string): string {
     return createHash("sha256").update(input).digest("hex");
   }
@@ -44,7 +55,7 @@ export class InvoiceRepository {
   }
 
   async findDuplicateByHash(clientId: string, documentHash: string): Promise<DuplicateLookupResult | null> {
-    const prisma = getPrismaClient();
+    const prisma = this.prisma;
     const invoice = await prisma.invoice.findUnique({
       where: {
         clientId_documentHash: {
@@ -58,8 +69,9 @@ export class InvoiceRepository {
       return null;
     }
 
-    console.log(
-      `[invoice-repo] duplicate-by-hash source=db clientId=${clientId} hash=${shortHash(documentHash)}`
+    repoLog.debug(
+      "invoice",
+      `duplicate-by-hash client=${shortLogId(clientId)} hash=${shortHash(documentHash)}`
     );
 
     return this.mapInvoiceDuplicate(invoice);
@@ -104,24 +116,23 @@ export class InvoiceRepository {
 
     if (conditionCount < 2) return null;
 
-    const prisma = getPrismaClient();
+    const prisma = this.prisma;
     const invoice = await prisma.invoice.findFirst({ where: whereClause });
 
     if (!invoice) {
       return null;
     }
 
-    console.log(
-      `[invoice-repo] duplicate-by-business-key source=db clientId=${clientId} key=${shortKey(
-        businessKey
-      )}`
+    repoLog.debug(
+      "invoice",
+      `duplicate-by-business-key client=${shortLogId(clientId)} key=${shortKey(businessKey)}`
     );
 
     return this.mapInvoiceDuplicate(invoice);
   }
 
   async findByPeriod(periodId: string): Promise<Invoice[]> {
-    const prisma = getPrismaClient();
+    const prisma = this.prisma;
     return prisma.invoice.findMany({
       where: { periodId },
       orderBy: { createdAt: "desc" },
@@ -129,7 +140,7 @@ export class InvoiceRepository {
   }
 
   async findByConsortium(consortiumId: string, clientId: string): Promise<Invoice[]> {
-    const prisma = getPrismaClient();
+    const prisma = this.prisma;
     return prisma.invoice.findMany({
       where: { consortiumId, clientId },
       orderBy: { createdAt: "desc" },
@@ -142,7 +153,7 @@ export class InvoiceRepository {
       input.documentHash
     );
 
-    const prisma = getPrismaClient();
+    const prisma = this.prisma;
 
     try {
       await prisma.invoice.upsert({
@@ -212,16 +223,18 @@ export class InvoiceRepository {
         },
       });
 
-      console.log(
-        `[invoice-repo] save source=db clientId=${input.clientId} hash=${shortHash(input.documentHash)} duplicate=${input.isDuplicate}`
+      repoLog.debug(
+        "invoice",
+        `save client=${shortLogId(input.clientId)} hash=${shortHash(input.documentHash)} duplicate=${input.isDuplicate}`
       );
     } catch (error) {
       const message = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
       const isUniqueConflict = message.includes("p2002") || message.includes("unique constraint");
 
       if (isUniqueConflict) {
-        console.warn(
-          `[invoice-repo] save unique-conflict clientId=${input.clientId} hash=${shortHash(input.documentHash)}`
+        repoLog.warn(
+          "invoice",
+          `save unique-conflict client=${shortLogId(input.clientId)} hash=${shortHash(input.documentHash)}`
         );
         return;
       }

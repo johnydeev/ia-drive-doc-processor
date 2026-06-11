@@ -8,7 +8,7 @@
  */
 
 type LogLevel = "info" | "warn" | "error" | "success" | "debug";
-type ProcessTag = "scheduler" | "worker" | "job" | "assign" | "run-cycle";
+type ProcessTag = "scheduler" | "worker" | "job" | "assign" | "run-cycle" | "repo" | "api";
 
 const LEVEL_PREFIX: Record<LogLevel, string> = {
   info:    "ℹ️ ",
@@ -377,8 +377,44 @@ export const cycleLog = {
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
+// Repository logs (capa de datos)
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * Logger para la capa de repositorios. Centraliza lo que antes eran `console.log`
+ * sueltos (`[invoice-repo] ...`) para que pasen por el mismo formato/nivel y no
+ * se filtre PII sin control. El primer argumento es el nombre del repo (sub-tag).
+ */
+export const repoLog = {
+  debug(repo: string, message: string) { log("debug", "repo", message, repo); },
+  info(repo: string, message: string) { log("info", "repo", message, repo); },
+  warn(repo: string, message: string) { log("warn", "repo", message, repo); },
+  error(repo: string, message: string) { log("error", "repo", message, repo); },
+};
+
+// ═══════════════════════════════════════════════════════════════════════════
+// API route logs
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * Logger para rutas API. Reemplaza los `console.warn`/`console.error` ad-hoc en
+ * los route handlers. El primer argumento es el nombre de la ruta (sub-tag).
+ */
+export const apiLog = {
+  debug(route: string, message: string) { log("debug", "api", message, route); },
+  info(route: string, message: string) { log("info", "api", message, route); },
+  warn(route: string, message: string) { log("warn", "api", message, route); },
+  error(route: string, message: string) { log("error", "api", message, route); },
+};
+
+// ═══════════════════════════════════════════════════════════════════════════
 // Helpers
 // ═══════════════════════════════════════════════════════════════════════════
+
+/** Acorta un id (UUID) para logs: `abcd…wxyz`. Exportado para callers externos. */
+export function shortLogId(id: string): string {
+  return shortId(id);
+}
 
 function shortId(id: string): string {
   if (id.length <= 10) return id;

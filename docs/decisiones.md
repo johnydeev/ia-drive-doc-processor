@@ -4,6 +4,93 @@ Registro de decisiones tomadas ante problemas reales encontrados en producción.
 
 ---
 
+## 2026-06-10 — Refactor de patrones de diseño, Fase 3 parcial (tests + MatchStrategy)
+
+**Problema:** (según `docs/reporte-patrones-diseno.md`) el proyecto no tenía
+**ningún test runner**, lo que impedía refactorizar el núcleo con red de seguridad.
+Además la lógica de matching (consorcio/proveedor) vivía inline en
+`resolveAssignment`, sin tests y mezclada con acceso a datos y logging.
+
+**Decisión:**
+- **Test runner: Vitest 4** (no Jest). Razón: el proyecto es Vite-friendly/ESM +
+  TypeScript; Vitest no necesita transpilación extra y resuelve los path aliases
+  vía `vite-tsconfig-paths`. Se consultó la doc actual (Context7) para la config.
+- **Caracterización antes de refactorizar:** se escribieron tests que documentan el
+  comportamiento **real** (no el deseado). Esto reveló que el ejemplo
+  `"BROWN ALMTE AV 708" → "ALMIRANTE BROWN 708"` del JSDoc/CLAUDE.md es aspiracional
+  (el real es `"BROWN ALMIRANTE AV 708"`); el sistema funciona igual vía
+  `matchNames`/fuzzy. Se documentó en el test en vez de "arreglar" el normalizer
+  (habría cambiado comportamiento en una fase que debe preservarlo).
+- **H3 — MatchStrategy:** extraer la lógica de matching a `lib/assignmentMatching.ts`
+  (funciones puras). Se mantuvieron en el caller el logging y los mensajes de
+  unassigned. El log puntual `providerCuitMatchesConsortium` se replicó con la
+  condición exacta (`cuit OCR == consorcio` salvo match por allTaxIds) para
+  preservar el comportamiento observable.
+
+**TDD:** H3 se hizo test-first (RED con el módulo inexistente → GREEN extrayendo →
+REFACTOR conectando `resolveAssignment`). Un caso de prueba inicial estaba mal
+diseñado (matcheaba por "exacto" en vez de "fuzzy") — se corrigió el caso, no el
+código.
+
+**Pendiente — H2:** descomponer `processDriveFile` en pasos (Pipeline) NO se hizo:
+requiere tests de caracterización del pipeline completo (mockear ~8 dependencias +
+imports dinámicos), de alcance/riesgo alto. Se deja para una sesión dedicada. La DI
+(H6) y H3 ya prepararon el terreno.
+
+**Alternativas descartadas:** Jest (más setup en ESM/TS); migrar a la resolución
+nativa de paths de Vite (el plugin funciona; evitar el riesgo de romper el runner
+recién montado).
+
+**Impacto (archivos):** nuevos `vitest.config.ts`, `src/lib/assignmentMatching.ts`
+y 3 archivos `*.test.ts`; `package.json` (devDeps vitest/vite-tsconfig-paths +
+scripts test); `processPendingDocuments.job.ts` (resolveAssignment usa el módulo de
+matching).
+
+---
+
+## 2026-06-10 — Refactor de patrones de diseño, Fase 2 (capas + observabilidad)
+
+**Problema:** (según `docs/reporte-patrones-diseno.md`)
+1. El pipeline (`resolveAssignment`) accedía a Prisma **directo**
+   (`prisma.provider/consortium/lspService.*`) aunque recibía repositorios como
+   parámetros — violando la arquitectura por capas que el propio CLAUDE.md
+   declara, y haciendo el pipeline imposible de testear sin DB real.
+2. Cada método de repo hacía `const prisma = getPrismaClient()` (no inyectable).
+3. 89 `console.*` conviviendo con un logger estructurado; los del
+   `invoice.repository` escribían `clientId`/hash sin pasar por el Facade
+   (riesgo de PII / formato inconsistente).
+
+**Decisión:**
+- **H6a — Inyección de Prisma:** constructor `(injectedPrisma?: PrismaClient)` +
+  getter lazy `this.prisma`. Se eligió el getter lazy (en vez de evaluar
+  `getPrismaClient()` en el default param del constructor) para **preservar
+  exactamente** el comportamiento previo: la conexión se resuelve al usar el repo,
+  no al instanciarlo (importa porque los repos se construyen en rutas/contexto que
+  podrían no tener DB al import-time). Permite `new XRepository(mockPrisma)` en tests.
+- **H6b — Mover queries a repos:** se creó `LspServiceRepository` (entidad propia)
+  y métodos `findAllForMatching` en consortium/provider. `resolveAssignment` recibe
+  ahora `lspServiceRepository` como parámetro. Se mantuvo el `.catch(() => {})` del
+  `setProviderId` (no-fatal) en el caller. TypeScript valida que los `select`/
+  `include` movidos devuelvan exactamente los campos que el pipeline usa.
+- **H8 — Logging:** `repoLog`/`apiLog` en el Facade. Migración representativa
+  (invoice.repository + scan); el resto es incremental. Los scripts de diagnóstico
+  y el bootstrap conservan `console.*` a propósito (no son dominio).
+
+**Alternativas descartadas:** poner los métodos de LspService dentro de
+`ConsortiumRepository` (LspService es su propia entidad → repo propio). Migrar los
+89 `console.*` de una (bajo valor/alto ruido → incremental).
+
+**Verificación:** typecheck, lint (0 errores; 13 warnings pre-existentes),
+build:jobs y next build (Compiled successfully) — OK. (El warning `EINVAL copyfile`
+del output `standalone` es un issue conocido de Windows, ajeno a estos cambios.)
+
+**Impacto (archivos):** nuevo `src/repositories/lspService.repository.ts`;
+modificados los 5 repos (DI), `processPendingDocuments.job.ts` (resolveAssignment
+sin Prisma directo), `lib/logger.ts` (repoLog/apiLog/shortLogId),
+`invoice.repository.ts` y scan route (logging).
+
+---
+
 ## 2026-06-10 — Refactor de patrones de diseño, Fase 1 (extractores IA, rutas, carga de cliente)
 
 **Problema:** auditoría de patrones (`docs/reporte-patrones-diseno.md`) detectó

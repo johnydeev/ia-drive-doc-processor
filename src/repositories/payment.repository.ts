@@ -1,4 +1,4 @@
-import { Payment, Invoice, Prisma } from "@prisma/client";
+import { Payment, Invoice, Prisma, PrismaClient } from "@prisma/client";
 import { getPrismaClient } from "@/lib/prisma";
 
 export interface CreatePaymentInput {
@@ -15,11 +15,16 @@ export interface CreatePaymentInput {
 }
 
 export class PaymentRepository {
+  constructor(private readonly injectedPrisma?: PrismaClient) {}
+  private get prisma(): PrismaClient {
+    return this.injectedPrisma ?? getPrismaClient();
+  }
+
   async getPaymentsByInvoiceId(
     invoiceId: string,
     clientId: string
   ): Promise<Payment[]> {
-    const prisma = getPrismaClient();
+    const prisma = this.prisma;
     return prisma.payment.findMany({
       where: { invoiceId, clientId },
       orderBy: { createdAt: "asc" },
@@ -29,7 +34,7 @@ export class PaymentRepository {
   async createPayment(
     input: CreatePaymentInput
   ): Promise<{ payment: Payment; invoice: Invoice }> {
-    const prisma = getPrismaClient();
+    const prisma = this.prisma;
 
     return prisma.$transaction(async (tx) => {
       // 1. Obtener invoice con lock implícito via transacción
@@ -158,7 +163,7 @@ export class PaymentRepository {
     paymentId: string,
     clientId: string
   ): Promise<void> {
-    const prisma = getPrismaClient();
+    const prisma = this.prisma;
 
     await prisma.$transaction(async (tx) => {
       // Obtener el payment a eliminar

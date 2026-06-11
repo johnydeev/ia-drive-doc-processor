@@ -3,6 +3,7 @@ import { requireClientSession } from "@/lib/clientAuth";
 import { getPrismaClient } from "@/lib/prisma";
 import { PdfTextExtractorService } from "@/services/pdfTextExtractor.service";
 import { loadProcessingClient, resolveAiConfig } from "@/lib/clientProcessingConfig";
+import { apiLog } from "@/lib/logger";
 import {
   normalizeConsortiumName,
   consortiumFuzzyMatch,
@@ -178,7 +179,7 @@ export async function POST(
         const imageMime = file.type as "image/jpeg" | "image/png";
         extracted = await extractor.extractStructuredDataFromImage(buffer, imageMime) as unknown as Record<string, unknown>;
       } catch (err) {
-        console.warn("[scan] Gemini Vision failed:", err instanceof Error ? err.message : err);
+        apiLog.warn("scan", `Gemini Vision falló: ${err instanceof Error ? err.message : String(err)}`);
       }
     } else {
       // PDF: extracción de texto + IA (cadena Gemini → OpenAI → Claude).
@@ -192,7 +193,7 @@ export async function POST(
         anthropic: { apiKey: anthropicKey, model: anthropicModel },
       });
       const result = await chain.run(text, (provider, ok, errorMsg) => {
-        if (!ok) console.warn(`[scan] ${provider} failed:`, errorMsg);
+        if (!ok) apiLog.warn("scan", `${provider} falló: ${errorMsg ?? "desconocido"}`);
       });
       extracted = result ? (result.data as unknown as Record<string, unknown>) : null;
     }

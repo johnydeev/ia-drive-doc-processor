@@ -1,10 +1,15 @@
-import { Client } from "@prisma/client";
+import { Client, PrismaClient } from "@prisma/client";
 import { getPrismaClient } from "@/lib/prisma";
 import { ClientDriveFolders, ClientGoogleConfig, ProcessingClient } from "@/types/client.types";
 
 export class ClientRepository {
+  constructor(private readonly injectedPrisma?: PrismaClient) {}
+  private get prisma(): PrismaClient {
+    return this.injectedPrisma ?? getPrismaClient();
+  }
+
   async listActiveClients(): Promise<ProcessingClient[]> {
-    const prisma = getPrismaClient();
+    const prisma = this.prisma;
     const rows = await prisma.client.findMany({
       where: { isActive: true, role: "CLIENT" },
       orderBy: { createdAt: "asc" },
