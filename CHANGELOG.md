@@ -3,6 +3,19 @@
 ## [Unreleased]
 
 ### Fix
+- **Destrabe de Pendientes + jobs zombie + robustez del worker (2026-06-11)**.
+  Tres fixes tras verificar en prod (DB + logs):
+  - **Scheduler:** los PDFs de Pendientes que ya tienen Invoice ahora se **mueven
+    a Duplicados** (o Escaneados) en vez de saltearse eternamente — destraba los
+    14 archivos que loopeaban. Nuevo log `alreadyLoadedMoved`.
+  - **Scheduler:** reaper de **jobs zombie** (PROCESSING > 30 min, de workers
+    caídos) → PENDING o FAILED según intentos. Recupera 2 boletas perdidas de
+    mayo. Nuevo log `staleJobsRecovered`.
+  - **Worker:** `claimNextJob` blindado con try/catch + espera — un corte del
+    pooler de Supabase (P1017) ya no crashea el proceso.
+  Verificado además en prod que el fix 429 funciona: 35 boletas el 11/06, todas
+  con `gemini-2.5-flash-lite`, sin barrido de modelos. Requiere rebuild de
+  scheduler y worker.
 - **Regresión 429 / throughput de boletas (2026-06-10)**. Se corrige la caída de
   procesamiento por rate-limit (cuota) de Gemini. **Causa raíz:** el extractor
   barría 6 modelos y reintentaba con cada uno ante un 429 → 6× consumo de cuota por

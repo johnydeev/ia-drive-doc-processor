@@ -1,6 +1,41 @@
 # Progreso del proyecto — drive-doc-processor
 
-Actualizado al 10/06/2026 (sesión 30).
+Actualizado al 11/06/2026 (sesión 31).
+
+---
+
+## Verificación en prod del fix 429 + destrabe de Pendientes + robustez (11/06/2026)
+
+**Estado: código implementado y verificado. PENDIENTE: rebuild de scheduler y
+worker por el owner (los fixes de hoy no corren hasta el deploy).**
+
+### Verificación del fix 429 en producción (DB Supabase, solo lectura) ✅
+- **35 Invoice creadas el 11/06**, todas con `aiProvider=gemini`,
+  `aiModel=gemini-2.5-flash-lite` (el modelo único nuevo), ~2.4-3.5k tokens c/u,
+  una cada ~5 min. **Cero** rastros del barrido de 6 modelos. El fix funciona.
+- 603 Invoice totales del cliente: **603 con consorcio**, 600 con proveedor y
+  monto → las Invoice del sistema son cargas válidas (no residuos de fallos).
+
+### Diagnóstico de los archivos trabados en Pendientes
+- Los **14 PDFs** que loopeaban en Pendientes **ya tienen Invoice** → boletas ya
+  cargadas cuyo archivo nunca salió de la carpeta. El scheduler los salteaba pero
+  no los movía → loop infinito (nunca llegaban al pipeline, así que tampoco se
+  evaluaban como duplicados).
+- **2 jobs PROCESSING zombie** (desde 11/05 y 20/05, crashes del worker) **sin
+  Invoice** → 2 boletas perdidas, recuperables.
+
+### Fixes implementados (pendientes de deploy)
+1. **Scheduler — destrabe de boletas ya cargadas:** si un archivo de Pendientes
+   ya tiene Invoice, se **mueve a Duplicados** (o Escaneados) en vez de saltearlo
+   eternamente. Auto-destraba los 14 al primer ciclo post-deploy.
+2. **Scheduler — reaper de jobs zombie:** PROCESSING con `startedAt` > 30 min se
+   considera muerto → vuelve a PENDING (o FAILED si agotó intentos). Recupera
+   las 2 boletas perdidas automáticamente y previene recurrencia.
+3. **Worker — blindaje de conexión DB:** `claimNextJob` dentro de try/catch con
+   espera y reintento. Antes, un corte del pooler de Supabase (P1017, visto 2
+   veces el 11/06 afectando a web+worker+scheduler a la vez) crasheaba el proceso.
+4. (Intento de UPDATE manual de los 2 zombies en Supabase: bloqueado por
+   permisos — innecesario, el reaper lo hace solo al deployar.)
 
 ---
 

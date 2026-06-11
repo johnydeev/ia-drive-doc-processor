@@ -105,6 +105,14 @@ export const schedulerLog = {
     log("info", "scheduler", `Límite de lote alcanzado (${created}/${total} PDFs) — "${clientName}" [${shortId(clientId)}]. Resto se procesará en el próximo ciclo.`);
   },
 
+  alreadyLoadedMoved(clientId: string, clientName: string, fileName: string, dest: string) {
+    log("info", "scheduler", `Boleta ya cargada — "${fileName}" movida a ${dest} (sale de Pendientes). "${clientName}" [${shortId(clientId)}]`);
+  },
+
+  staleJobsRecovered(clientId: string, clientName: string, requeued: number, failed: number) {
+    log("warn", "scheduler", `Jobs zombie (worker reiniciado a mitad de proceso): ${requeued} reencolado(s), ${failed} marcado(s) FAILED — "${clientName}" [${shortId(clientId)}]`);
+  },
+
   clientError(clientId: string, clientName: string, error: string) {
     log("error", "scheduler", `Error en cliente "${clientName}" [${shortId(clientId)}]: ${error}`);
   },

@@ -20,6 +20,17 @@ const controlService = new SchedulerControlService();
 // (leído del DB en cada ciclo → cambiarlo en la DB toma efecto sin reiniciar).
 const globalMinutes = parseProcessIntervalMinutes(env.PROCESS_INTERVAL_MINUTES);
 
+/**
+ * Jobs zombie: si el worker se reinicia a mitad de un job (crash, deploy), el
+ * registro queda en PROCESSING para siempre y bloquea el re-encolado de ese
+ * archivo. Una boleta real tarda segundos/minutos → un PROCESSING más viejo que
+ * este umbral se considera muerto y se devuelve a PENDING (o FAILED si ya agotó
+ * intentos). Visto en prod: 2 jobs PROCESSING desde mayo por crashes del worker.
+ */
+const STALE_JOB_MAX_AGE_MS = 30 * 60_000;
+/** Debe coincidir con el default de ProcessingJob.maxAttempts en el schema. */
+const STALE_JOB_FAILED_AFTER_ATTEMPTS = 3;
+
 let localRunning = false;
 const lastRunByClient = new Map<string, number>();
 
@@ -85,6 +96,25 @@ const runOnce = async (): Promise<void> => {
           continue;
         }
 
+        // Recuperar jobs zombie (PROCESSING viejos de workers caídos): los que
+        // agotaron intentos pasan a FAILED; el resto vuelve a PENDING para que
+        // el worker los procese (la boleta no se pierde).
+        const staleCutoff = new Date(now - STALE_JOB_MAX_AGE_MS);
+        const staleFailed = await prisma.processingJob.updateMany({
+          where: {
+            clientId: client.id, status: "PROCESSING", startedAt: { lt: staleCutoff },
+            attempts: { gte: STALE_JOB_FAILED_AFTER_ATTEMPTS - 1 },
+          },
+          data: { status: "FAILED", errorMessage: "Job zombie: el worker se reinició durante el procesamiento", finishedAt: new Date() },
+        });
+        const staleRequeued = await prisma.processingJob.updateMany({
+          where: { clientId: client.id, status: "PROCESSING", startedAt: { lt: staleCutoff } },
+          data: { status: "PENDING", startedAt: null, attempts: { increment: 1 } },
+        });
+        if (staleRequeued.count > 0 || staleFailed.count > 0) {
+          schedulerLog.staleJobsRecovered(client.id, client.name, staleRequeued.count, staleFailed.count);
+        }
+
         const driveService = new GoogleDriveService(googleConfig);
         const files = await driveService.listPendingPdfFiles(folders.pending);
 
@@ -103,6 +133,27 @@ const runOnce = async (): Promise<void> => {
             select: { id: true },
           });
           if (existingInvoice) {
+            // Boleta YA cargada (tiene Invoice) pero el archivo sigue en
+            // Pendientes (el move post-proceso falló, o el PDF fue devuelto a
+            // la carpeta). Antes solo se salteaba → quedaba loopeando en
+            // Pendientes para siempre y nunca se evaluaba como duplicado
+            // (visto en prod: 14 archivos así). Se mueve a Duplicados (o
+            // Escaneados) para destrabarlo. No se reprocesa ni se toca DB/Sheets.
+            const alreadyLoadedDest = folders.duplicates ?? folders.scanned;
+            if (alreadyLoadedDest && alreadyLoadedDest !== folders.pending) {
+              try {
+                await driveService.moveFileToFolder(file.id, folders.pending, alreadyLoadedDest);
+                schedulerLog.alreadyLoadedMoved(
+                  client.id, client.name, file.name,
+                  folders.duplicates ? "Duplicados" : "Escaneados"
+                );
+              } catch (moveError) {
+                schedulerLog.clientError(
+                  client.id, client.name,
+                  `No se pudo mover boleta ya cargada "${file.name}": ${moveError instanceof Error ? moveError.message : "Unknown"}`
+                );
+              }
+            }
             continue;
           }
 

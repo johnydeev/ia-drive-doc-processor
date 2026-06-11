@@ -221,7 +221,23 @@ async function runWorker(): Promise<void> {
   let cycleSkipped = 0;
 
   while (true) {
-    const job = await claimNextJob();
+    // Blindaje: un hipo de conexión a la DB (p. ej. el pooler de Supabase cierra
+    // una conexión idle → P1017 "Server has closed the connection") NO debe tumbar
+    // el worker. Antes `claimNextJob()` estaba fuera del try/catch y un error de DB
+    // crasheaba el proceso (Docker lo reiniciaba en loop). Ahora se loguea, se
+    // espera y se reintenta en el próximo ciclo (Prisma reconecta solo).
+    let job: Awaited<ReturnType<typeof claimNextJob>>;
+    try {
+      job = await claimNextJob();
+    } catch (error) {
+      workerLog.unhandledError(
+        "claim",
+        error instanceof Error ? error.message : "Unknown error"
+      );
+      await sleep(POLL_INTERVAL_MS);
+      continue;
+    }
+
     if (!job) {
       if (cycleProcessed + cycleFailed + cycleUnassigned > 0) {
         workerLog.cycleSummary({

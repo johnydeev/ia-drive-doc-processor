@@ -4,6 +4,45 @@ Registro de decisiones tomadas ante problemas reales encontrados en producción.
 
 ---
 
+## 2026-06-11 — Boletas trabadas en Pendientes + jobs zombie + crash del worker por DB
+
+**Problema (3 causas distintas confirmadas con logs + DB):**
+1. **14 PDFs loopeando en Pendientes:** el scheduler saltea archivos que ya tienen
+   Invoice (`if (existingInvoice) continue`) pero **no los saca de la carpeta** →
+   loop infinito. Nunca entran al pipeline, así que tampoco van a Duplicados.
+   Verificado en DB: esas Invoice son cargas válidas (603/603 con consorcio).
+2. **2 jobs PROCESSING zombie** (11/05 y 20/05): el worker crasheó a mitad del job
+   y el registro quedó PROCESSING para siempre, bloqueando el re-encolado. Sin
+   Invoice → 2 boletas perdidas.
+3. **Worker crasheaba ante cortes del pooler de Supabase** (P1017 "Server has
+   closed the connection"): los cortes afectan a web+worker+scheduler en el mismo
+   minuto (evento del lado de Supabase), pero solo el worker moría porque
+   `claimNextJob()` estaba fuera del try/catch del loop.
+
+**Decisiones:**
+- **Scheduler mueve (no saltea) los ya-cargados:** archivo en Pendientes con
+  Invoice existente → move a `duplicates` (o `scanned`) + log. Se eligió mover en
+  el scheduler y NO encolarlo para que el pipeline lo deduplique: encolar
+  implicaría descarga+extracción por archivo y cambiar la semántica del skip
+  (riesgo de carreras). El move es directo, visible y barato.
+- **Reaper de zombies en el scheduler:** PROCESSING con startedAt > 30 min →
+  PENDING (attempts+1) o FAILED si attempts ≥ maxAttempts-1 (constante 3 espejo
+  del schema; Prisma updateMany no compara columnas entre sí). 30 min es ~10× el
+  peor caso real de una boleta. Corre por cliente en cada ciclo (updateMany barato).
+- **Blindaje del worker:** try/catch + sleep alrededor de `claimNextJob` (Prisma
+  reconecta solo en el siguiente poll). No se tocó el pooler/connection string.
+- **Datos:** el UPDATE manual de los 2 zombies fue bloqueado por permisos del
+  entorno; se descartó por innecesario — el reaper los recupera al deployar.
+
+**Verificación previa (lectura DB):** el fix 429 del 10/06 quedó confirmado en
+prod: 35 Invoice el 11/06, todas `gemini-2.5-flash-lite`, sin barrido de modelos.
+
+**Impacto:** `scheduler.ts` (move-out + reaper + constantes), `logger.ts`
+(`alreadyLoadedMoved`, `staleJobsRecovered`), `jobWorkerMain.ts` (blindaje).
+Sin migración. **Deploy:** rebuild de scheduler y worker (owner).
+
+---
+
 ## 2026-06-10 — Regresión 429 (rate-limit IA): 1 modelo + backoff + re-encolar
 
 **Problema:** throughput cayó a la mitad por errores 429 (cuota) de Gemini.
