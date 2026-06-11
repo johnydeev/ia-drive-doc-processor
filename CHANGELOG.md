@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Observabilidad
+- **Logs de diagnóstico de throughput (2026-06-11)**. Worker: profundidad de cola
+  al reclamar cada job ("En cola: N detrás" — si es 0, el límite es el
+  scheduler/batchSize; si crece, el límite es el worker) y heartbeat "cola vacía"
+  cada 5 min. Scheduler: contador "Ya cargadas" en el resumen del ciclo.
+  Contexto: se detectó que el throughput de 1 boleta/5min era el techo de
+  `batchSize=1` + `intervalMinutes=5` (config del cliente, editable desde el
+  panel admin), no un bug.
+
 ### Fix
 - **Destrabe de Pendientes + jobs zombie + robustez del worker (2026-06-11)**.
   Tres fixes tras verificar en prod (DB + logs):

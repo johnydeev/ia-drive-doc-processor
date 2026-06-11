@@ -125,12 +125,15 @@ export const schedulerLog = {
     log("warn", "scheduler", "Ciclo omitido — el anterior aún está corriendo");
   },
 
-  cycleSummary(summary: { totalFound: number; totalQueued: number; totalSkipped: number }) {
+  cycleSummary(summary: { totalFound: number; totalQueued: number; totalSkipped: number; totalAlreadyLoaded?: number }) {
     miniDivider("scheduler");
     log("info", "scheduler", `📊 RESUMEN DEL CICLO AUTOMÁTICO`);
     log("info", "scheduler", `  Encontrados:  ${summary.totalFound}`);
     log("info", "scheduler", `  Encolados:    ${summary.totalQueued}`);
     log("info", "scheduler", `  Ya en cola:   ${summary.totalSkipped}`);
+    if (summary.totalAlreadyLoaded) {
+      log("info", "scheduler", `  Ya cargadas:  ${summary.totalAlreadyLoaded} (con Invoice — movidas fuera de Pendientes)`);
+    }
     miniDivider("scheduler");
   },
 };
@@ -146,6 +149,16 @@ export const workerLog = {
 
   polling() {
     // Silencioso — no loguear cada poll de 2s
+  },
+
+  /** Cuántos jobs PENDING quedan detrás del que se acaba de reclamar. */
+  queueDepth(pending: number) {
+    log("info", "worker", `  En cola: ${pending} job(s) pendiente(s) detrás de este`);
+  },
+
+  /** Heartbeat de baja frecuencia cuando la cola está vacía (proceso vivo). */
+  idleHeartbeat() {
+    log("debug", "worker", "Cola vacía — esperando jobs (heartbeat)");
   },
 
   jobClaimed(jobId: string, fileId: string, fileName: string | null, clientName: string) {

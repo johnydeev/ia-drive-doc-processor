@@ -55,6 +55,7 @@ const runOnce = async (): Promise<void> => {
     let totalFound = 0;
     let totalQueued = 0;
     let totalSkipped = 0;
+    let totalAlreadyLoaded = 0;
 
     for (const client of clients) {
       // intervalMinutes viene del DB (listActiveClients lo re-lee cada ciclo).
@@ -139,6 +140,7 @@ const runOnce = async (): Promise<void> => {
             // Pendientes para siempre y nunca se evaluaba como duplicado
             // (visto en prod: 14 archivos así). Se mueve a Duplicados (o
             // Escaneados) para destrabarlo. No se reprocesa ni se toca DB/Sheets.
+            totalAlreadyLoaded += 1;
             const alreadyLoadedDest = folders.duplicates ?? folders.scanned;
             if (alreadyLoadedDest && alreadyLoadedDest !== folders.pending) {
               try {
@@ -201,7 +203,7 @@ const runOnce = async (): Promise<void> => {
     }
 
     if (totalFound >= 1) {
-      schedulerLog.cycleSummary({ totalFound, totalQueued, totalSkipped });
+      schedulerLog.cycleSummary({ totalFound, totalQueued, totalSkipped, totalAlreadyLoaded });
     }
 
     schedulerLog.cycleEnd();

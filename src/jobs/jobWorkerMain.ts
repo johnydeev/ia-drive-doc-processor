@@ -212,6 +212,9 @@ async function handleJob(job: {
   return summary;
 }
 
+/** Heartbeat idle: loguear "cola vacía" como mucho cada 5 min (no cada poll de 2s). */
+const IDLE_HEARTBEAT_MS = 5 * 60_000;
+
 async function runWorker(): Promise<void> {
   workerLog.starting();
 
@@ -219,6 +222,7 @@ async function runWorker(): Promise<void> {
   let cycleFailed = 0;
   let cycleUnassigned = 0;
   let cycleSkipped = 0;
+  let lastIdleLogAt = Date.now();
 
   while (true) {
     // Blindaje: un hipo de conexión a la DB (p. ej. el pooler de Supabase cierra
@@ -251,8 +255,24 @@ async function runWorker(): Promise<void> {
         cycleUnassigned = 0;
         cycleSkipped = 0;
       }
+      if (Date.now() - lastIdleLogAt >= IDLE_HEARTBEAT_MS) {
+        workerLog.idleHeartbeat();
+        lastIdleLogAt = Date.now();
+      }
       await sleep(POLL_INTERVAL_MS);
       continue;
+    }
+
+    // Profundidad de cola: distingue al instante "worker hambriento" (0 detrás →
+    // el límite es el scheduler/batchSize) de "cola atascada" (crece → el límite
+    // es el worker). No crítico: si el count falla, se sigue igual.
+    try {
+      const pendingBehind = await getPrismaClient().processingJob.count({
+        where: { status: "PENDING" },
+      });
+      workerLog.queueDepth(pendingBehind);
+    } catch {
+      // ignorar — es solo telemetría
     }
 
     try {

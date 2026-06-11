@@ -4,6 +4,26 @@ Actualizado al 11/06/2026 (sesión 31).
 
 ---
 
+## Hallazgo: el throughput está limitado por config, no por bug (11/06/2026)
+
+**El "1 boleta cada 5 minutos" NO es un problema oculto:** el cliente tiene
+`batchSize=1` + `intervalMinutes=5` en la DB → el scheduler encola 1 PDF por
+ciclo de 5 min. Techo teórico: 12/hora ≈ **80/jornada** (exactamente el
+throughput histórico "bueno"). Con el fix 429 el sistema volvió a pegarse a ese
+techo. **Para superar 80/día: subir `batchSize` desde el panel admin**
+(Admin → Clientes → editar; acepta 1-500, el scheduler lo relee cada ciclo, sin
+deploy). Con el fix 429 (1 llamada IA por boleta en vez de 6) hay margen para
+batchSize 5-10 sin riesgo de rate-limit (el worker procesa secuencial).
+
+**Mejoras de logs para diagnóstico (pendientes de deploy):**
+- Worker: `queueDepth` al reclamar un job ("En cola: N detrás") — distingue al
+  instante worker hambriento (límite=scheduler/batchSize) de cola atascada
+  (límite=worker). Es la métrica que faltó para ver esto de entrada.
+- Worker: heartbeat "cola vacía" cada 5 min (proceso vivo visible).
+- Scheduler: contador "Ya cargadas" en el resumen del ciclo.
+
+---
+
 ## Verificación en prod del fix 429 + destrabe de Pendientes + robustez (11/06/2026)
 
 **Estado: código implementado y verificado. PENDIENTE: rebuild de scheduler y
