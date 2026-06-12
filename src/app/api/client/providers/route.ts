@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { requireAuthenticatedSession } from "@/lib/adminAuth";
 import { getPrismaClient } from "@/lib/prisma";
+import { cuitDigits, cuitsEqual, formatCuit } from "@/lib/cuit";
 
 const createSchema = z.object({
   canonicalName: z.string().min(2),
@@ -40,13 +41,17 @@ export async function POST(request: Request) {
     const body = createSchema.parse(await request.json());
     const prisma = getPrismaClient();
 
-    // Normalizar CUIT: quitar guiones para comparación
-    const cuitNorm = body.cuit.replace(/-/g, "").trim();
+    // CUIT canónico (XX-XXXXXXXX-X) para guardar; dígitos para comparar.
+    // La DB puede tener formatos mixtos históricos → el dedup compara por
+    // dígitos en memoria (insensible al formato), no por igualdad literal.
+    const cuitCanonical = formatCuit(body.cuit) ?? body.cuit.trim();
+    const cuitNorm = cuitDigits(body.cuit);
 
-    const existing = await prisma.provider.findFirst({
-      where: { clientId: auth.session.clientId, cuit: { in: [body.cuit, cuitNorm] } },
+    const existingCuits = await prisma.provider.findMany({
+      where: { clientId: auth.session.clientId },
+      select: { cuit: true },
     });
-    if (existing) {
+    if (existingCuits.some((p) => cuitsEqual(p.cuit, body.cuit))) {
       return NextResponse.json(
         { ok: false, error: "Ya existe un proveedor con ese CUIT para este cliente" },
         { status: 409 }
@@ -57,7 +62,7 @@ export async function POST(request: Request) {
       data: {
         clientId: auth.session.clientId,
         canonicalName: body.canonicalName.trim(),
-        cuit: body.cuit.trim(),
+        cuit: cuitCanonical,
         paymentAlias: body.paymentAlias?.trim() || null,
       },
     });
@@ -69,7 +74,8 @@ export async function POST(request: Request) {
       where: {
         clientId: auth.session.clientId,
         providerId: null,
-        providerTaxId: { in: [body.cuit, cuitNorm] },
+        // Cubre los formatos con que pudo guardarse el CUIT en la invoice.
+        providerTaxId: { in: [body.cuit, cuitNorm, cuitCanonical] },
       },
       select: { id: true, driveFileId: true },
     });
@@ -106,7 +112,7 @@ export async function POST(request: Request) {
         where: {
           clientId: auth.session.clientId,
           providerId: null,
-          providerTaxId: { in: [body.cuit, cuitNorm] },
+          providerTaxId: { in: [body.cuit, cuitNorm, cuitCanonical] },
           driveFileId: { not: null },
         },
       });

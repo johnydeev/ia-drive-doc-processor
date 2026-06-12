@@ -382,6 +382,7 @@ Customizable por cliente en `extractionConfigJson.columnMapping`.
 - **Edge Runtime (`middleware.ts`):** Usar Web Crypto API, no `import { createHmac } from "crypto"`.
 - **Tokens de IA:** `extractRelevantLines(text, 80)` — primeras 80 líneas no vacías.
 - **Formato de monto:** siempre `es-AR` con `Intl.NumberFormat`.
+- **CUIT:** fuente única `src/lib/cuit.ts`. COMPARAR siempre por dígitos (`cuitDigits`/`cuitsEqual`), GUARDAR/MOSTRAR siempre canónico `XX-XXXXXXXX-X` (`formatCuit`), EXTRAER de texto con `extractCuitsFromText` (regex+checksum). Nunca crear normalizadores locales ni comparar CUITs con igualdad literal/`contains`.
 - **clientAuth vs adminAuth:** usar `requireClientSession` para endpoints de clientes, `requireAuthenticatedSession` para los del panel admin.
 - **Documentación:** Siempre actualizar `docs/progreso.md`, `docs/decisiones.md` y `CHANGELOG.md` después de cada cambio significativo. Ver sección "Regla obligatoria de documentación" arriba.
 ---

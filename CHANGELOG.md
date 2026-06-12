@@ -2,6 +2,28 @@
 
 ## [Unreleased]
 
+### Refactor
+- **Normalización canónica de CUIT en todo el sistema (2026-06-12)**. Nueva fuente
+  única `src/lib/cuit.ts` (13 tests TDD): comparar siempre por dígitos
+  (`cuitDigits`/`cuitsEqual`), guardar siempre canónico `XX-XXXXXXXX-X`
+  (`formatCuit`). Consolidadas 6 copias de normalizadores locales (job, matching,
+  scan, panel, extraction, validación). Escrituras normalizadas: alta manual de
+  proveedores, sync ALTA, import Excel (cuyo dedup por `contains` no matcheaba
+  formatos mixtos — bug). La IA ahora devuelve `providerTaxId` y `allTaxIds`
+  canónicos desde el schema Zod. Nuevo `scripts/normalize-cuits-db.ts` (dry-run /
+  `--apply`) para unificar el stock existente.
+
+### Fix
+- **CUITs extraídos del texto por regex+checksum (2026-06-12)**. Una boleta clara
+  con proveedor correctamente cargado caía en Sin Asignar: la IA listó un solo
+  CUIT (el del consorcio) malformado → el saneo lo descartó → `allTaxIds` vacío →
+  sin puente CUIT entre el nombre de fantasía de la factura y la razón social
+  cargada. Nuevo `extractCuitsFromText()` en `lib/documentValidation.ts` (regex
+  con prefijos válidos + verificación mod-11; 8 tests TDD): el pipeline une los
+  CUITs reales del papel a los de la IA (solo no-LSP). Probado e2e con el PDF
+  real: ahora matchea por CUIT. Recuperar las boletas afectadas con "Reprocesar
+  Sin Asignar" tras el rebuild del worker.
+
 ### Fix
 - **Barrido de modelos Gemini restaurado (cuota diaria por modelo) (2026-06-11)**.
   Log de prod reveló que el free tier de Gemini tiene cuota **diaria por modelo**

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import styles from "./page.module.css";
 import { useAuthGuard } from "@/lib/useAuthGuard";
+import { cuitDigits as normCuit } from "@/lib/cuit";
 
 const TIPOS_COMPROBANTE = [
   "A", "B", "C", "E", "M", "X",
@@ -83,7 +84,7 @@ function toInputDate(iso: string | null | undefined): string {
 function todayInputDate(): string {
   return new Date().toISOString().slice(0, 10);
 }
-function normCuit(v: string | null | undefined): string { return (v ?? "").replace(/\D/g, ""); }
+// normCuit: usar la fuente única lib/cuit (los CUITs de DB pueden venir con o sin guiones).
 function normName(v: string | null | undefined): string {
   return (v ?? "").toLowerCase().replace(/[.,\-_]/g, " ").replace(/\s+/g, " ").trim();
 }

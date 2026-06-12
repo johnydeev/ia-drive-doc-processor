@@ -3,6 +3,7 @@ import {
   consortiumFuzzyMatch,
   consortiumAliasMatch,
 } from "@/lib/consortiumNormalizer";
+import { cuitDigits } from "@/lib/cuit";
 
 /**
  * Estrategias de matching de consorcio y proveedor, extraídas del pipeline
@@ -34,10 +35,8 @@ export interface MatchResult<T> {
   method: string;
 }
 
-/** CUIT/DNI normalizado: solo dígitos. */
-export function normCuit(v: string | null | undefined): string {
-  return (v ?? "").replace(/\D/g, "");
-}
+/** CUIT/DNI normalizado: solo dígitos. Alias de cuitDigits (lib/cuit). */
+export const normCuit = cuitDigits;
 
 /** Nombre normalizado para comparación: minúsculas, sin sufijos legales ni puntuación. */
 export function normName(v: string | null | undefined): string {

@@ -1,6 +1,7 @@
 import { env } from "@/config/env";
 import { normalizeConsortiumName } from "@/lib/consortiumNormalizer";
-import { matchConsortium, matchProvider } from "@/lib/assignmentMatching";
+import { matchConsortium, matchProvider, normName } from "@/lib/assignmentMatching";
+import { cuitDigits, formatCuit, extractCuitsFromText } from "@/lib/cuit";
 import { identifyLSPProvider, LSPProvider, LSP_FALLBACK_NAMES } from "@/lib/extraction";
 import { refineExtractionWithRawText } from "@/lib/extraction";
 import { createEmptyTokenUsageSummary } from "@/lib/createEmptyTokenUsageSummary";
@@ -150,19 +151,8 @@ function formatPeriodLabel(month: number, year: number): string {
   return `${String(month).padStart(2, "0")}/${year}`;
 }
 
-function normCuit(v: string | null | undefined): string {
-  return (v ?? "").replace(/\D/g, "");
-}
-
-function normName(v: string | null | undefined): string {
-  const LEGAL_SUFFIXES = /\b(s\.?r\.?l\.?|s\.?a\.?|s\.?a\.?s\.?|s\.?c\.?s?\.?|s\.?h\.?|ltda?\.?|e\.?i\.?r\.?l\.?|s\.?a\.?u\.?)\b/gi;
-  return (v ?? "")
-    .toLowerCase()
-    .replace(LEGAL_SUFFIXES, " ")
-    .replace(/[.,\-_]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
+// normCuit/normName locales eliminadas: usar cuitDigits (lib/cuit) y normName
+// (lib/assignmentMatching) — fuente única, sin normalizadores duplicados.
 
 /** Normaliza el método de match a una categoría sin PII (sin el detalle entre paréntesis). */
 function normalizeMatchMethod(m: string | null | undefined): string | null {
@@ -261,7 +251,7 @@ async function resolveAssignment(
   // ── 0. LSP fast path: resolver proveedor por CUIT + LspService por clientNumber ──
 
   const normalizedClientNumber = extracted.clientNumber?.replace(/\s+/g, "").replace(/^0+/, "") || null;
-  const allTaxIds = (extracted.allTaxIds ?? []).map((c) => normCuit(c)).filter((c) => c.length >= 10);
+  const allTaxIds = (extracted.allTaxIds ?? []).map((c) => cuitDigits(c)).filter((c) => c.length >= 10);
 
   // Resolver proveedor LSP por CUIT en tabla Provider
   let lspProviderId: string | null = null;
@@ -273,7 +263,7 @@ async function resolveAssignment(
     const allProviders = await providerRepository.findAllForMatching(clientId);
 
     for (const cuit of allTaxIds) {
-      const found = allProviders.find((p) => normCuit(p.cuit) === cuit);
+      const found = allProviders.find((p) => cuitDigits(p.cuit) === cuit);
       if (found) {
         lspProviderId = found.id;
         lspProviderCanonical = found.canonicalName;
@@ -406,7 +396,7 @@ async function resolveAssignment(
   base.periodMonth = activePeriod?.month ?? null;
   base.periodYear = activePeriod?.year ?? null;
 
-  const consortiumCuitNorm = normCuit((consortium as any).cuit);
+  const consortiumCuitNorm = cuitDigits((consortium as any).cuit);
 
   // ── 2. Proveedor ─────────────────────────────────────────────────────────
 
@@ -414,7 +404,7 @@ async function resolveAssignment(
 
   const rawCuit     = extracted.providerTaxId?.trim() ?? null;
   const rawName     = extracted.provider?.trim() ?? null;
-  const normOcrCuit = normCuit(rawCuit);
+  const normOcrCuit = cuitDigits(rawCuit);
   const normOcrName = normName(rawName);
 
   // Matching en 4 niveles (CUIT allTaxIds → CUIT providerTaxId → nombre exacto →
@@ -743,6 +733,24 @@ async function processDriveFile(
       }
       if (Array.isArray(extracted.allTaxIds) && extracted.allTaxIds.length > 0) {
         extracted.allTaxIds = extracted.allTaxIds.filter((c) => cuitAppearsInText(c, docText));
+      }
+
+      // Refuerzo determinístico: CUITs reales del texto por regex + checksum.
+      // La IA puede omitirlos o malformatearlos (visto en prod: listó solo el
+      // CUIT del consorcio con un dígito de más → allTaxIds quedó vacío → un
+      // proveedor correctamente cargado no matcheó y la boleta fue a Sin
+      // Asignar). El matching ya excluye el CUIT del consorcio, así que sumar
+      // todos los CUITs del papel es seguro.
+      const textCuits = extractCuitsFromText(docText);
+      if (textCuits.length > 0) {
+        // Formato canónico XX-XXXXXXXX-X en ambos orígenes → el Set deduplica
+        // bien aunque la IA y el regex hayan visto el mismo CUIT.
+        const merged = new Set([
+          ...(extracted.allTaxIds ?? []).map((c) => formatCuit(c) ?? c),
+          ...textCuits.map((c) => formatCuit(c) ?? c),
+        ]);
+        extracted.allTaxIds = [...merged];
+        pipelineLog.stepStart(cid, `→ CUITs del texto (regex+checksum): ${textCuits.length} — allTaxIds total: ${extracted.allTaxIds.length}`);
       }
     }
 

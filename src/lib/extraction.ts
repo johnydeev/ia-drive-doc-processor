@@ -1,18 +1,20 @@
 import { z } from "zod";
+import { formatCuit } from "@/lib/cuit";
 import { ExtractedDocumentData } from "@/types/extractedDocument.types";
 
+/**
+ * Normaliza un CUIT devuelto por la IA al formato canónico `XX-XXXXXXXX-X`
+ * (lib/cuit). Si no tiene 11 dígitos se conserva el crudo (el saneo del
+ * pipeline decide después si descartarlo).
+ */
 function normalizeCuit(value: string | null): string | null {
   if (!value) {
     return null;
   }
-
-  const digits = value.replace(/\D/g, "");
-  if (digits.length !== 11) {
-    const trimmed = value.trim();
-    return trimmed.length > 0 ? trimmed : null;
-  }
-
-  return `${digits.slice(0, 2)}-${digits.slice(2, 10)}-${digits.slice(10)}`;
+  const formatted = formatCuit(value);
+  if (formatted) return formatted;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
 }
 
 function normalizeAmount(value: number | string | null): number | null {
@@ -46,7 +48,11 @@ export const EXTRACTED_DOCUMENT_SCHEMA = z
     alias: z.string().nullable().default(null),
     clientNumber: z.string().nullable().default(null),
     paymentMethod: z.enum(["DEBITO_AUTOMATICO", "TRANSFERENCIA", "EFECTIVO"]).nullable().default(null),
-    allTaxIds: z.array(z.string()).nullable().default(null),
+    allTaxIds: z
+      .array(z.string())
+      .nullable()
+      .default(null)
+      .transform((arr) => (arr === null ? null : arr.map((v) => normalizeCuit(v) ?? v))),
   })
   .passthrough();
 

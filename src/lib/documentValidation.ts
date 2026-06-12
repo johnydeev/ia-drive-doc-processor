@@ -1,8 +1,11 @@
+import { cuitDigits } from "@/lib/cuit";
+
 /**
  * Validaciones de documento para el pipeline (funciones puras, testeables).
  * - isMissingAmount: distingue "no hay monto" (null) de un monto $0 válido.
  * - cuitAppearsInText: detecta CUIT inventado (no presente en el texto del doc).
  * - appendNoAmountTag: etiqueta el nombre del archivo sin monto.
+ * (La extracción/normalización de CUIT vive en lib/cuit.ts — fuente única.)
  */
 
 /** true si NO hay monto extraíble (nullish). `0` es un monto válido → false. */
@@ -16,10 +19,9 @@ export function isMissingAmount(amount: number | null | undefined): boolean {
  * 10 no se considera (evita matches triviales).
  */
 export function cuitAppearsInText(cuit: string | null | undefined, text: string): boolean {
-  const c = (cuit ?? "").replace(/\D/g, "");
+  const c = cuitDigits(cuit);
   if (c.length < 10) return false;
-  const t = (text ?? "").replace(/\D/g, "");
-  return t.includes(c);
+  return cuitDigits(text).includes(c);
 }
 
 /** Agrega " - SIN MONTO" antes de la extensión del nombre actual del archivo. */
@@ -28,3 +30,4 @@ export function appendNoAmountTag(fileName: string): string {
   if (dot <= 0) return `${fileName} - SIN MONTO`;
   return `${fileName.slice(0, dot)} - SIN MONTO${fileName.slice(dot)}`;
 }
+

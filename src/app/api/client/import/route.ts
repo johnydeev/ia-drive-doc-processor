@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireClientSession } from "@/lib/clientAuth";
 import { getPrismaClient } from "@/lib/prisma";
 import { isZip } from "@/lib/fileSignature";
+import { cuitDigits, cuitsEqual, formatCuit } from "@/lib/cuit";
 
 /**
  * POST /api/client/import
@@ -119,14 +120,14 @@ export async function POST(request: NextRequest) {
           continue;
         }
 
-        // Crear consorcio + período activo
+        // Crear consorcio + período activo (CUIT al formato canónico)
         await prisma.$transaction(async (tx) => {
           const consortium = await tx.consortium.create({
             data: {
               clientId,
               canonicalName: nombre,
               rawName:       nombre,
-              cuit:          cuit || null,
+              cuit:          cuit ? (formatCuit(cuit) ?? cuit) : null,
               matchNames:    matchNames || null,
               paymentAlias:  paymentAlias || null,
               cutoffDay:     5,
@@ -175,14 +176,17 @@ export async function POST(request: NextRequest) {
           select: { id: true },
         });
 
-        // Verificar si ya existe por CUIT (si viene CUIT)
-        const normCuit = cuit?.replace(/\D/g, "") ?? "";
-        const existingByCuit = normCuit.length >= 10
-          ? await prisma.provider.findFirst({
-              where: { clientId, cuit: { contains: normCuit } },
-              select: { id: true },
-            })
-          : null;
+        // Verificar si ya existe por CUIT (si viene CUIT). Comparación por
+        // dígitos en memoria: `contains` literal fallaba si en DB estaba con
+        // guiones y el Excel lo traía sin guiones (o viceversa).
+        let existingByCuit = false;
+        if (cuitDigits(cuit).length >= 10) {
+          const clientCuits = await prisma.provider.findMany({
+            where: { clientId, cuit: { not: null } },
+            select: { cuit: true },
+          });
+          existingByCuit = clientCuits.some((p) => cuitsEqual(p.cuit, cuit));
+        }
 
         if (existingByName || existingByCuit) {
           result.proveedores.skipped++;
@@ -193,7 +197,7 @@ export async function POST(request: NextRequest) {
           data: {
             clientId,
             canonicalName: nombre,
-            cuit:          cuit || null,
+            cuit:          cuit ? (formatCuit(cuit) ?? cuit) : null,
             matchNames:    matchNames || null,
             paymentAlias:  paymentAlias || null,
           },

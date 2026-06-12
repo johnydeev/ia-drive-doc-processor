@@ -12,10 +12,7 @@ import {
 import { isPdf, isPng, isJpeg } from "@/lib/fileSignature";
 import { env } from "@/config/env";
 
-/** CUIT/DNI normalizado: solo dígitos. */
-function normCuit(v: string | null | undefined): string {
-  return (v ?? "").replace(/\D/g, "");
-}
+import { cuitDigits as normCuit } from "@/lib/cuit";
 
 type ConsortiumMatchRow = {
   id: string;

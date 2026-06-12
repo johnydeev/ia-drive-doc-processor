@@ -3,6 +3,7 @@ import { requireClientSession } from "@/lib/clientAuth";
 import { getPrismaClient } from "@/lib/prisma";
 import { GoogleSheetsService } from "@/services/googleSheets.service";
 import { resolveGoogleConfig } from "@/lib/clientProcessingConfig";
+import { formatCuit } from "@/lib/cuit";
 
 export async function POST(request: NextRequest) {
   const auth = requireClientSession(request);
@@ -108,14 +109,15 @@ export async function POST(request: NextRequest) {
       const newConsortiums = directory.consortiums.filter(c => !existingConsortiumMap.has(c.canonicalName));
       const existingToUpdate = directory.consortiums.filter(c => existingConsortiumMap.has(c.canonicalName));
 
-      // Crear nuevos en batch
+      // Crear nuevos en batch. CUIT siempre al formato canónico XX-XXXXXXXX-X
+      // (las planillas suelen traerlo sin guiones; la DB lo guarda con guiones).
       if (newConsortiums.length > 0) {
         await tx.consortium.createMany({
           data: newConsortiums.map(c => ({
             clientId,
             canonicalName: c.canonicalName,
             rawName: c.canonicalName,
-            cuit: c.cuit,
+            cuit: formatCuit(c.cuit) ?? c.cuit,
             matchNames: c.matchNames,
             paymentAlias: c.paymentAlias,
           })),
@@ -126,7 +128,7 @@ export async function POST(request: NextRequest) {
       await Promise.all(existingToUpdate.map(c =>
         tx.consortium.update({
           where: { id: existingConsortiumMap.get(c.canonicalName)! },
-          data: { cuit: c.cuit, matchNames: c.matchNames, paymentAlias: c.paymentAlias },
+          data: { cuit: formatCuit(c.cuit) ?? c.cuit, matchNames: c.matchNames, paymentAlias: c.paymentAlias },
         })
       ));
 
@@ -215,13 +217,13 @@ export async function POST(request: NextRequest) {
       const newProviders = directory.providers.filter(p => !existingProviderMap.has(p.canonicalName));
       const existingProvidersToUpdate = directory.providers.filter(p => existingProviderMap.has(p.canonicalName));
 
-      // Crear nuevos en batch
+      // Crear nuevos en batch (CUIT al formato canónico, ver consorcios arriba)
       if (newProviders.length > 0) {
         await tx.provider.createMany({
           data: newProviders.map(p => ({
             clientId,
             canonicalName: p.canonicalName,
-            cuit: p.cuit,
+            cuit: formatCuit(p.cuit) ?? p.cuit,
             matchNames: p.matchNames,
             paymentAlias: p.paymentAlias,
             providerType: p.providerType,
@@ -233,7 +235,7 @@ export async function POST(request: NextRequest) {
       await Promise.all(existingProvidersToUpdate.map(p =>
         tx.provider.update({
           where: { id: existingProviderMap.get(p.canonicalName)! },
-          data: { cuit: p.cuit, matchNames: p.matchNames, paymentAlias: p.paymentAlias, providerType: p.providerType },
+          data: { cuit: formatCuit(p.cuit) ?? p.cuit, matchNames: p.matchNames, paymentAlias: p.paymentAlias, providerType: p.providerType },
         })
       ));
 

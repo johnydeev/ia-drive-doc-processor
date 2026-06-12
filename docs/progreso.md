@@ -1,6 +1,52 @@
 # Progreso del proyecto — drive-doc-processor
 
-Actualizado al 11/06/2026 (sesión 31).
+Actualizado al 12/06/2026 (sesión 32).
+
+---
+
+## Normalización canónica de CUIT en todo el sistema (12/06/2026)
+
+**Estado: implementado y verificado (68 tests + e2e con PDF real + next build).
+PENDIENTE: commit + rebuild del worker. Opcional: `npx tsx
+scripts/normalize-cuits-db.ts --apply` para unificar el stock existente.**
+
+A pedido del owner (solución general, no puntual): nueva fuente única
+`src/lib/cuit.ts` (`cuitDigits`, `formatCuit` → canónico `XX-XXXXXXXX-X`,
+`cuitsEqual`, `isValidCuit`, `extractCuitsFromText`). Se consolidaron las **6
+copias** de normalizadores locales y se normalizaron las **escrituras** (alta
+manual, sync ALTA, import Excel — cuyo dedup por `contains` estaba roto para
+formatos mixtos) y la respuesta de la IA (`allTaxIds` incluido, que antes pasaba
+crudo). Regla permanente: **comparar por dígitos, guardar canónico** — ver
+"Convenciones de código" del CLAUDE.md.
+
+**Herramienta de diagnóstico genérica:** el script one-off del caso Riobamba se
+reemplazó por `scripts/diag-boleta.ts` — para CUALQUIER PDF: extrae el texto con
+el extractor real, lista los CUITs (regex+checksum) y, con `<clientId|nombre>`,
+corre el matching real contra la DB y muestra el veredicto (solo lectura, sin IA).
+Uso: `npx tsx scripts/diag-boleta.ts <ruta.pdf> [cliente] [--texto]`.
+
+---
+
+## Fix: proveedor cargado no matcheaba — CUITs por regex+checksum (12/06/2026)
+
+**Estado: implementado y verificado (63 tests + prueba e2e con el PDF real).
+PENDIENTE: commit + rebuild del worker + "Reprocesar Sin Asignar".**
+
+Caso real: "Riobamba 1261 piso 1701.pdf" fue a Sin Asignar pese a tener proveedor
+cargado (LUZARDO JAVIEL JOSE EMILIO). La factura muestra nombre de fantasía
+("DESTAPACIONES RECOLETA") y la IA listó un único CUIT malformado (el del
+consorcio, con un dígito de más) → el saneo lo descartó → sin CUITs → sin match.
+
+**Fix:** `extractCuitsFromText()` (regex + checksum mod-11, determinístico) en
+`documentValidation.ts`; el pipeline une los CUITs reales del texto a los de la
+IA (solo no-LSP). Probado con el PDF real: ahora matchea por
+`CUIT allTaxIds (20940370362)`. Tras el deploy, recuperar las boletas afectadas
+del día (Riobamba 1261, Jufre 37, y otras del mismo proveedor) con
+**"Reprocesar Sin Asignar"** desde el panel.
+
+Verificación post-reinicio del scheduler (12/06 10:14): cuota restablecida
+(flash-lite respondió al 1er intento), pipeline sano (18s end-to-end), logs
+nuevos operativos (En cola / heartbeat / metrics).
 
 ---
 

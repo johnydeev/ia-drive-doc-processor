@@ -4,6 +4,72 @@ Registro de decisiones tomadas ante problemas reales encontrados en producción.
 
 ---
 
+## 2026-06-12 — Normalización canónica de CUIT en TODO el sistema (lib/cuit.ts)
+
+**Problema:** a raíz del caso Riobamba (ver entrada anterior), el owner pidió una
+solución general, no puntual: los CUITs vienen en cualquier formato según el
+origen (boleta sin guiones, DB con guiones, ALTA/Excel variable) y el sistema
+tenía **6 copias** de normalizadores locales (`normCuit` en job, matching, scan,
+panel, extraction, validación) + **3 puntos de entrada que guardaban el CUIT "como
+venga"** (alta manual, import Excel, sync ALTA). El dedup del import usaba
+`contains` con dígitos → no matcheaba contra CUITs guardados con guiones (bug).
+
+**Decisión: fuente única `src/lib/cuit.ts`** (TDD, 13 tests):
+- `cuitDigits()` → comparar SIEMPRE por dígitos.
+- `formatCuit()` → guardar/mostrar SIEMPRE canónico `XX-XXXXXXXX-X`.
+- `cuitsEqual()` → igualdad insensible al formato.
+- `isValidCuit()` + `extractCuitsFromText()` (regex + checksum mod-11, movida acá).
+
+**Aplicación sistémica:**
+- Consolidadas las 6 copias → todas importan de lib/cuit.
+- `extraction.ts`: providerTaxId Y `allTaxIds` (antes pasaba crudo) de la IA se
+  normalizan a canónico en el schema Zod.
+- Escrituras canónicas: alta manual de proveedores (dedup por dígitos en memoria),
+  sync-directory (consorcios+proveedores), import Excel (dedup `contains` roto →
+  `cuitsEqual`).
+- Pipeline: merge IA+regex deduplica en formato canónico.
+- `scripts/normalize-cuits-db.ts`: normaliza el stock existente (dry-run por
+  defecto, `--apply` para ejecutar — lo corre el owner cuando quiera; no es
+  urgente porque las comparaciones ya son por dígitos).
+
+**Verificación:** 68 tests; e2e con el PDF real de Riobamba → MATCH por
+`CUIT allTaxIds`; typecheck + build:jobs + next build + lint OK.
+
+---
+
+## 2026-06-12 — CUITs extraídos por regex+checksum del texto (no depender solo de la IA)
+
+**Problema (caso real "Riobamba 1261 piso 1701.pdf"):** boleta clara, proveedor
+correctamente cargado (LUZARDO JAVIEL JOSE EMILIO, 20-94037036-2) → terminó en
+Sin Asignar. Cadena del fallo: la factura muestra el nombre de fantasía
+("DESTAPACIONES RECOLETA") que no coincide con la razón social cargada → el único
+puente es el CUIT → la IA listó UN solo CUIT en `allTaxIds`: el del consorcio y
+**malformado** (12 dígitos, duplicó el verificador) → el saneo anti-alucinación lo
+descartó → `allTaxIds` vacío → match por nombre imposible → Sin Asignar. Una
+segunda boleta del mismo proveedor (JUFRE 37) cayó igual el mismo día.
+
+**Causa raíz:** depender 100% de que la IA liste bien los CUITs, cuando los CUITs
+están en texto plano extraíble de forma determinística.
+
+**Decisión:** nueva función pura `extractCuitsFromText()` en
+`lib/documentValidation.ts` (TDD, 8 tests): regex de candidatos (prefijos válidos
+20/23/24/25/26/27/30/33/34 + 8 dígitos + verificador, separadores opcionales,
+`\b` contra números más largos) + **verificación mod-11 del dígito verificador**
+(elimina falsos positivos: números de comprobante, CAE, teléfonos). En el
+pipeline (solo no-LSP, junto al saneo anti-alucinación) se unen los CUITs del
+texto a los de la IA. Es seguro: el matching ya excluye el CUIT del consorcio.
+
+**Verificación:** prueba end-to-end con el PDF real → `extractCuitsFromText`
+devuelve ambos CUITs y `matchProvider` resuelve LUZARDO por
+`CUIT allTaxIds (20940370362)`. Suite 63 tests + typecheck + build:jobs + lint OK.
+
+**Impacto:** `documentValidation.ts` (+test), `processPendingDocuments.job.ts`
+(merge + log). Deploy: rebuild del worker. Las boletas afectadas se recuperan con
+"Reprocesar Sin Asignar". El script one-off del diagnóstico se generalizó en
+`scripts/diag-boleta.ts` (ver entrada de normalización de CUIT).
+
+---
+
 ## 2026-06-11 — Causa raíz REAL del throughput: cuota diaria por modelo del free tier. Se restaura el barrido de modelos
 
 **Problema:** tras el fix del 10/06 (1 solo modelo), prod procesó 35 boletas a la
