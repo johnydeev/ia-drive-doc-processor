@@ -21,6 +21,7 @@ import { getPrismaClient, isDatabaseConfigured } from "@/lib/prisma";
 import { PdfTextExtractorService } from "@/services/pdfTextExtractor.service";
 import { extractCuitsFromText, cuitDigits, formatCuit } from "@/lib/cuit";
 import { matchConsortium, matchProvider } from "@/lib/assignmentMatching";
+import { identifyLSPProvider } from "@/lib/extraction";
 
 loadEnv();
 
@@ -38,6 +39,7 @@ async function main() {
   const extractor = new PdfTextExtractorService();
   const text = await extractor.extractTextFromPdf(buffer);
   console.log(`\n=== TEXTO: fuente=${extractor.getLastTextSource()} chars=${text.length} emitterBlock=${extractor.getLastHasEmitterBlock()} ===`);
+  console.log(`=== TIPO (router): ${identifyLSPProvider(text) ?? "factura común"} ===`);
   if (dumpText) console.log(`\n${text}\n`);
 
   // 2. CUITs determinísticos del papel

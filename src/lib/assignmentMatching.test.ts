@@ -120,4 +120,45 @@ describe("matchProvider", () => {
     const rows = [provider({ id: "p1", canonicalName: "TIGRE ASCENSORES S.A.", cuit: "30-65511651-2" })];
     expect(matchProvider(rows, "30-00000000-0", "OTRA EMPRESA", [], "30111111111")).toBeNull();
   });
+
+  describe("CUIT compartido entre varios proveedores (ej. SUTERH/FATERYH/SERACARH)", () => {
+    const sindicales = [
+      provider({ id: "p-fateryh", canonicalName: "FATERYH", cuit: "30-54675623-4" }),
+      provider({ id: "p-suterh", canonicalName: "SUTERH", cuit: "30-54675623-4" }),
+      provider({ id: "p-seracarh", canonicalName: "SERACARH", cuit: "30-54675623-4" }),
+    ];
+
+    it("desambigua por nombre cuando varios proveedores comparten el CUIT (allTaxIds)", () => {
+      const result = matchProvider(sindicales, null, "SUTERH", ["30546756234"], "30111111111");
+      expect(result?.row.id).toBe("p-suterh");
+    });
+
+    it("desambigua por nombre con el CUIT legacy (providerTaxId)", () => {
+      const result = matchProvider(sindicales, "30-54675623-4", "SERACARH", [], "30111111111");
+      expect(result?.row.id).toBe("p-seracarh");
+    });
+
+    it("desambigua también por matchNames", () => {
+      const rows = [
+        provider({ id: "p-a", canonicalName: "FED. TRABAJADORES EDIFICIOS", cuit: "30-54675623-4", matchNames: "FATERYH" }),
+        provider({ id: "p-b", canonicalName: "SINDICATO EDIFICIOS", cuit: "30-54675623-4", matchNames: "SUTERH" }),
+      ];
+      const result = matchProvider(rows, null, "SUTERH", ["30546756234"], "30111111111");
+      expect(result?.row.id).toBe("p-b");
+    });
+
+    it("si el nombre no desambigua, devuelve el primero (comportamiento estable)", () => {
+      const result = matchProvider(sindicales, null, "ALGO QUE NO COINCIDE", ["30546756234"], "30111111111");
+      expect(result?.row.id).toBe("p-fateryh");
+      expect(result?.method).toMatch(/CUIT/);
+    });
+
+    it("con CUIT único (sin colisión) el nombre no influye", () => {
+      const rows = [
+        provider({ id: "p1", canonicalName: "EDESUR S.A.", cuit: "30-65511651-2" }),
+      ];
+      const result = matchProvider(rows, null, "OTRO NOMBRE", ["30655116512"], "30111111111");
+      expect(result?.row.id).toBe("p1");
+    });
+  });
 });

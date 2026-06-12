@@ -1,4 +1,5 @@
 import { env } from "@/config/env";
+import { nextQuotaResetUtc } from "@/lib/quotaReset";
 import { parseProcessIntervalMinutes } from "@/jobs/runProcessingCycle";
 import { processSingleDriveFileJob } from "@/jobs/processPendingDocuments.job";
 import { getPrismaClient } from "@/lib/prisma";
@@ -194,6 +195,23 @@ async function handleJob(job: {
 
   const success = summary !== null && summary.failed === 0;
   await finalizeJob(job.id, job.driveFileName, job.attempts, job.maxAttempts, job.startedAt, success, errorMessage);
+
+  // Circuit breaker de cuota IA: si la boleta se difirió por 429 en TODOS los
+  // proveedores, pausar el ENCOLADO del cliente hasta el próximo reset de
+  // cuota (medianoche del Pacífico). No toca el toggle manual `enabled`; la
+  // pausa vence sola. Evita el churn de rebotes contra baldes vacíos.
+  if (summary && (summary.rateLimited ?? 0) > 0) {
+    try {
+      const until = nextQuotaResetUtc();
+      await prisma.schedulerState.updateMany({
+        where: { clientId: client.id },
+        data: { aiPausedUntil: until },
+      });
+      workerLog.aiQuotaPauseSet(client.name, until.toISOString());
+    } catch {
+      // No crítico: si falla, el rebote suave (1 boleta/intervalo) sigue siendo el fallback.
+    }
+  }
 
   if (summary) {
     const now = new Date();

@@ -4,6 +4,46 @@ Actualizado al 12/06/2026 (sesión 32).
 
 ---
 
+## Circuit breaker de cuota IA (12/06/2026)
+
+**Estado: implementado y verificado (85 tests). ⚠️ PENDIENTE: MIGRACIÓN
+`20260612000100_add_scheduler_ai_paused_until` (la ejecuta el owner con su
+procedimiento) + rebuild de worker y scheduler.**
+
+Cuando la cuota diaria de IA se agota (429 en TODOS los proveedores), el worker
+setea `SchedulerState.aiPausedUntil` = próximo reset (medianoche del Pacífico,
+DST-safe, `lib/quotaReset.ts`) y el scheduler deja de escanear/encolar para ese
+cliente hasta que venza — **se reanuda solo**, sin tocar el toggle manual
+`enabled`. Elimina el churn de rebotes contra baldes vacíos. Logs:
+`⏸️ Cuota IA agotada...` (worker) y `⏸️ Pausa por cuota IA...` (scheduler).
+
+---
+
+## Boletas sindicales SUTERH / FATERYH / SERACARH (12/06/2026)
+
+**Estado: implementado y verificado (81 tests; detección 12/12 PDFs reales).
+PENDIENTE: commit + rebuild del worker + carga de directorio (abajo).**
+
+Soporte para los 3 tipos de boletas del sindicato de encargados, con el patrón
+LSP existente (router + prompt específico). Patrón único: **código de
+formulario + razón social** (F0201→SUTERH, F0106→SERACARH, F0101→FATERYH); las
+tres comparten el CUIT recaudador 30-54675623-4 → se agregó **desambiguación
+por nombre en matchProvider** cuando varios proveedores comparten CUIT (mejora
+general, TDD). Detalles en `docs/decisiones.md`.
+
+**Carga de directorio pendiente (ALTA o panel):**
+| Proveedor | CUIT |
+|---|---|
+| SUTERH | 30-54675623-4 |
+| FATERYH | 30-54675623-4 |
+| SERACARH | 30-54675623-4 |
+
+Y agregar a `matchNames` del consorcio **BOEDO 414**: `BOEDO 410` (la boleta
+sindical dice "AVDA BOEDO 00410 /14" → normaliza a BOEDO 410). BROWN 706,
+CALLAO 1441 y PUEYRREDON 2418 matchean directo (verificado).
+
+---
+
 ## Normalización canónica de CUIT en todo el sistema (12/06/2026)
 
 **Estado: implementado y verificado (68 tests + e2e con PDF real + next build).

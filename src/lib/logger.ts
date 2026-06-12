@@ -113,6 +113,10 @@ export const schedulerLog = {
     log("warn", "scheduler", `Jobs zombie (worker reiniciado a mitad de proceso): ${requeued} reencolado(s), ${failed} marcado(s) FAILED — "${clientName}" [${shortId(clientId)}]`);
   },
 
+  aiQuotaPaused(clientId: string, clientName: string, untilIso: string) {
+    log("warn", "scheduler", `⏸️  Pausa por cuota IA agotada — no se encolan boletas hasta ${untilIso} (reset de cuota). "${clientName}" [${shortId(clientId)}]`);
+  },
+
   clientError(clientId: string, clientName: string, error: string) {
     log("error", "scheduler", `Error en cliente "${clientName}" [${shortId(clientId)}]: ${error}`);
   },
@@ -159,6 +163,11 @@ export const workerLog = {
   /** Heartbeat de baja frecuencia cuando la cola está vacía (proceso vivo). */
   idleHeartbeat() {
     log("debug", "worker", "Cola vacía — esperando jobs (heartbeat)");
+  },
+
+  /** Circuit breaker: cuota IA agotada → se pausa el encolado del cliente. */
+  aiQuotaPauseSet(clientName: string, untilIso: string) {
+    log("warn", "worker", `⏸️  Cuota IA agotada (429 en todos los proveedores) — scheduler del cliente "${clientName}" pausado hasta ${untilIso}`);
   },
 
   jobClaimed(jobId: string, fileId: string, fileName: string | null, clientName: string) {

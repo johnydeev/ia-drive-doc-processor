@@ -124,6 +124,11 @@ const LSP_ROUTER_TO_CANONICAL: Record<string, string> = {
   "NATURGY":     "NATURGY S.A.",
   "CAMUZZI":     "CAMUZZI GAS PAMPEANA S.A.",
   "LITORAL_GAS": "LITORAL GAS S.A.",
+  // Boletas sindicales: sin clientNumber (no usan LspService); el nombre
+  // canónico sugerido en el directorio es el mismo nombre corto.
+  "SUTERH":      "SUTERH",
+  "FATERYH":     "FATERYH",
+  "SERACARH":    "SERACARH",
 };
 
 function buildDriveFileUrl(fileId: string, webViewLink?: string | null): string {
@@ -1019,6 +1024,7 @@ async function processDriveFile(
       m.reason = "rate_limit";
       m.reasonText = error.message;
       summary.skipped += 1;
+      summary.rateLimited = (summary.rateLimited ?? 0) + 1;
       pipelineLog.stepStart(cid, `⏸️  Rate-limit IA → boleta devuelta a Pendientes para reintento posterior`);
       if (resolvedConfig.driveProcessingFolderId && resolvedConfig.drivePendingFolderId) {
         try {

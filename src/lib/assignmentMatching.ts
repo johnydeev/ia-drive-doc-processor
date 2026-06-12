@@ -56,6 +56,29 @@ function parseMatchNames(matchNames: string | null): string[] {
 }
 
 /**
+ * Desambiguación cuando VARIOS proveedores comparten el mismo CUIT (caso real:
+ * SUTERH/FATERYH/SERACARH usan el CUIT recaudador de la Federación). Entre los
+ * candidatos del CUIT se elige el que coincida por nombre/matchNames con el
+ * nombre extraído del documento; si ninguno coincide, se mantiene el primero
+ * (comportamiento estable previo).
+ */
+function pickByName(candidates: ProviderMatchRow[], rawName: string | null): ProviderMatchRow {
+  if (candidates.length === 1) return candidates[0];
+  const n = normName(rawName);
+  if (n.length >= 3) {
+    const byName = candidates.find(
+      (p) =>
+        normName(p.canonicalName) === n ||
+        parseMatchNames(p.matchNames).some((m) => normName(m) === n) ||
+        normName(p.canonicalName).includes(n) ||
+        n.includes(normName(p.canonicalName))
+    );
+    if (byName) return byName;
+  }
+  return candidates[0];
+}
+
+/**
  * Matchea un consorcio en 4 niveles (en orden de confianza):
  *   0. CUIT (allTaxIds) — incluye CUITs alternativos en matchNames
  *   1. Nombre exacto normalizado
@@ -124,15 +147,19 @@ export function matchProvider(
   if (allTaxIds.length > 0) {
     const providerCuits = allTaxIds.filter((c) => c !== consortiumCuitNorm);
     for (const cuit of providerCuits) {
-      const found = allProviders.find((p) => normCuit(p.cuit) === cuit);
-      if (found) return { row: found, method: `CUIT allTaxIds (${cuit})` };
+      const candidates = allProviders.filter((p) => normCuit(p.cuit) === cuit);
+      if (candidates.length > 0) {
+        return { row: pickByName(candidates, rawName), method: `CUIT allTaxIds (${cuit})` };
+      }
     }
   }
 
   // Intento 1: CUIT normalizado de providerTaxId (legacy), excluyendo CUIT del consorcio
   if (normOcrCuit.length >= 10 && normOcrCuit !== consortiumCuitNorm) {
-    const found = allProviders.find((p) => normCuit(p.cuit) === normOcrCuit);
-    if (found) return { row: found, method: `CUIT providerTaxId (${normOcrCuit})` };
+    const candidates = allProviders.filter((p) => normCuit(p.cuit) === normOcrCuit);
+    if (candidates.length > 0) {
+      return { row: pickByName(candidates, rawName), method: `CUIT providerTaxId (${normOcrCuit})` };
+    }
   }
 
   // Intento 2: nombre / matchNames exacto

@@ -85,6 +85,9 @@ export type LSPProvider =
   | "LITORAL_GAS"
   | "ABSA"
   | "PERSONAL"
+  | "SUTERH"
+  | "FATERYH"
+  | "SERACARH"
   | "GENERIC_LSP";
 
 /** Nombres de fallback para proveedores LSP cuando no se encuentran en la DB */
@@ -98,6 +101,9 @@ export const LSP_FALLBACK_NAMES: Partial<Record<LSPProvider, string>> = {
   LITORAL_GAS: "LITORAL GAS S.A.",
   ABSA: "ABSA",
   PERSONAL: "PERSONAL",
+  SUTERH: "SUTERH",
+  FATERYH: "FATERYH",
+  SERACARH: "SERACARH",
 };
 
 /**
@@ -108,6 +114,24 @@ export const LSP_FALLBACK_NAMES: Partial<Record<LSPProvider, string>> = {
  */
 export function identifyLSPProvider(text: string): LSPProvider | null {
   const upper = text.slice(0, 4000).toUpperCase();
+
+  // ── Boletas sindicales (SUTERH / FATERYH / SERACARH) ─────────────────────
+  // No son servicios públicos (van ANTES del gate isUtilityBill) pero usan el
+  // mismo mecanismo de prompt específico. Las tres comparten el CUIT recaudador
+  // 30-54675623-4 (FATERYH recauda todo); el patrón único que distingue cada
+  // tipo es el CÓDIGO DE FORMULARIO + la razón social del encabezado:
+  //   F0201 / "SINDICATO UNICO ..."        → SUTERH  (aportes CPF + sindical)
+  //   F0106 / concepto "SERACARH"          → SERACARH (contribución SERACARH)
+  //   F0101 / "FEDERACION ARGENTINA ..."   → FATERYH (FMVDD, OS, ART 27 bis)
+  if (
+    upper.includes("TRABAJADORES DE EDIFICIOS DE RENTA Y HORIZONTAL") ||
+    upper.includes("FATERYH") ||
+    upper.includes("SUTERH")
+  ) {
+    if (upper.includes("F0201") || upper.includes("SINDICATO UNICO")) return "SUTERH";
+    if (upper.includes("F0106") || upper.includes("SERACARH")) return "SERACARH";
+    return "FATERYH";
+  }
 
   // Primero verificar si es una LSP
   if (!isUtilityBill(upper)) {
@@ -233,9 +257,69 @@ export function buildExtractionPrompt(text: string): string {
       return buildGasPrompt(relevantText, lspProvider);
     case "PERSONAL":
       return buildPersonalPrompt(relevantText);
+    case "SUTERH":
+    case "FATERYH":
+    case "SERACARH":
+      return buildSindicalPrompt(relevantText, lspProvider);
     default:
       return buildGenericUtilityBillPrompt(relevantText);
   }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Boletas sindicales (SUTERH / FATERYH / SERACARH)
+// ═══════════════════════════════════════════════════════════════════════════
+
+const SINDICAL_ENTITY_LABELS: Record<"SUTERH" | "FATERYH" | "SERACARH", string> = {
+  SUTERH: "SUTERH (Sindicato Único de Trabajadores de Edificios de Renta y Horizontal, formulario F0201)",
+  FATERYH: "FATERYH (Federación Argentina de Trabajadores de Edificios de Renta y Horizontal, formulario F0101)",
+  SERACARH: "SERACARH (contribución SERACARH, boleta emitida por FATERYH, formulario F0106)",
+};
+
+/**
+ * Prompt para boletas sindicales de edificios. Estructura idéntica entre los 3
+ * tipos (solo cambia la entidad y los conceptos): encabezado con razón social +
+ * código de formulario, CUIT recaudador fijo 30-54675623-4, y campos rotulados
+ * (CONSORCIO:, PERIODO:, Nº BOLETA:, VENCIMIENTO:, TOTAL A PAGAR:).
+ */
+function buildSindicalPrompt(relevantText: string, tipo: "SUTERH" | "FATERYH" | "SERACARH"): string {
+  return [
+    `Extrae datos de una boleta sindical de ${SINDICAL_ENTITY_LABELS[tipo]}.`,
+    JSON_RESPONSE_INSTRUCTION,
+
+    "=== REGLAS ESPECÍFICAS BOLETA SINDICAL ===",
+
+    `- provider: siempre '${tipo}'. No usar la razón social completa.`,
+
+    "- providerTaxId: siempre '30-54675623-4' (CUIT recaudador de la Federación,",
+    "  compartido por SUTERH/FATERYH/SERACARH). NO usar ningún otro CUIT.",
+
+    "- consortium: el texto que sigue a 'CONSORCIO:' (la dirección del edificio).",
+    "  Copiarlo tal cual aparece, sin la localidad ('CIUDAD DE BUENOS AIRES',",
+    "  'CAPITAL FEDERAL'). Ej: 'CONSORCIO: AVDA BOEDO 00410 /14-...' → 'AVDA BOEDO 00410 /14'.",
+
+    "- boletaNumber: el valor de 'Nº BOLETA:' (formato NN-NNNNNNNN). Copiarlo completo.",
+
+    "- dueDate: el valor de 'VENCIMIENTO:' en formato YYYY-MM-DD.",
+    "  La fecha viene como DD/MM/YYYY → convertir. Siempre es la fecha de pago válida.",
+
+    "- amount: el valor de 'TOTAL A PAGAR:'. Formato numérico.",
+
+    "- detail: los conceptos de la tabla separados por coma, más el período.",
+    "  Ej: 'CPF aporte, CPF contribución, Aporte sindical — Período 05/2026'.",
+
+    "- observation: el valor de 'PERIODO:' (MM/YYYY).",
+
+    "- clientNumber: siempre null (estas boletas no tienen número de cliente).",
+
+    "- paymentMethod: si dice 'SE DEBITARA DIRECTAMENTE EN SU CUENTA BANCARIA'",
+    "  → DEBITO_AUTOMATICO. Si no, null.",
+
+    "- allTaxIds: ['30-54675623-4'] (es el único CUIT presente en la boleta).",
+
+    "Texto de la boleta sindical:",
+    relevantText,
+  ].join("\n\n");
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

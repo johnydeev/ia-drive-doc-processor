@@ -78,6 +78,19 @@ const runOnce = async (): Promise<void> => {
           continue;
         }
 
+        // Circuit breaker de cuota IA: si el worker detectó 429 en todos los
+        // proveedores, hay una pausa con vencimiento (aiPausedUntil). Mientras
+        // esté vigente no se escanea Drive ni se encola nada para el cliente;
+        // al vencer (reset de cuota, medianoche del Pacífico) se reanuda sola.
+        const quotaPause = await prisma.schedulerState.findFirst({
+          where: { clientId: client.id, aiPausedUntil: { gt: new Date() } },
+          select: { aiPausedUntil: true },
+        });
+        if (quotaPause?.aiPausedUntil) {
+          schedulerLog.aiQuotaPaused(client.id, client.name, quotaPause.aiPausedUntil.toISOString());
+          continue;
+        }
+
         schedulerLog.clientScanning(client.id, client.name);
 
         const sheetName = resolveSheetName(client);

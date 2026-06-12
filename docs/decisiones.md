@@ -4,6 +4,75 @@ Registro de decisiones tomadas ante problemas reales encontrados en producción.
 
 ---
 
+## 2026-06-12 — Circuit breaker de cuota IA: pausa automática del encolado hasta el reset
+
+**Problema:** cuando se agotan TODOS los baldes diarios de IA (visto el 12/06 a
+las 13:39: 5 modelos Gemini en 429 + OpenAI sin crédito), las boletas rebotan a
+Pendientes y el scheduler las re-encola cada `intervalMinutes` → churn inútil
+(descarga + parse + 6 llamadas 429 por rebote) hasta el reset de cuota.
+
+**Decisión (pedido del owner, con un ajuste de diseño):** pausa automática con
+vencimiento, **separada del toggle manual `enabled`** — apagar/encender el mismo
+switch que usa el usuario mezclaría intenciones (¿lo apagó él o el sistema?).
+- Nuevo campo `SchedulerState.aiPausedUntil` (migración
+  `20260612000100_add_scheduler_ai_paused_until`).
+- **Worker**: si una boleta termina `rate_limited` (429 en todos los proveedores
+  → nuevo `summary.rateLimited`), setea `aiPausedUntil = próximo reset` y loguea.
+- **Scheduler**: si `aiPausedUntil > now`, saltea el cliente SIN escanear Drive ni
+  encolar (log `⏸️ Pausa por cuota IA...`). Al vencer, se reanuda solo — no hay
+  que "encender" nada.
+- **`lib/quotaReset.ts`** (TDD, 4 tests): próximo reset = medianoche
+  America/Los_Angeles + 5 min de buffer, calculado con Intl (**DST-safe**: 07:00
+  UTC en PDT, 08:00 UTC en PST — un offset hardcodeado estaría mal medio año).
+
+**Fallback seguro:** si el update de la pausa falla, queda el comportamiento
+anterior (rebote suave 1/intervalo). Si el 429 fuera transitorio (RPM, no RPD),
+el costo del falso positivo es diferir hasta el reset — aceptable dado que la
+señal exige TODOS los proveedores agotados.
+
+**Verificación:** 85 tests; typecheck + build:jobs + next build + lint OK.
+**Pendiente owner:** ejecutar la migración (procedimiento completo) + rebuild.
+
+---
+
+## 2026-06-12 — Soporte de boletas sindicales: SUTERH / FATERYH / SERACARH
+
+**Problema:** el cliente recibe 3 tipos nuevos de boletas (aportes del sindicato
+de encargados): SUTERH (F0201), FATERYH (F0101) y SERACARH (F0106, emitida por
+FATERYH). Texto plano perfecto, campos rotulados, pero: las TRES comparten el
+**mismo CUIT recaudador (30-54675623-4)** y el nombre del consorcio viene como
+dirección con formato propio ("AVDA BOEDO 00410 /14-CIUDAD DE...").
+
+**Patrón único identificado** (verificado contra 12 PDFs reales, 12/12):
+- Familia: "TRABAJADORES DE EDIFICIOS DE RENTA Y HORIZONTAL" / FATERYH / SUTERH.
+- Tipo: **código de formulario + razón social** — F0201/"SINDICATO UNICO"→SUTERH;
+  F0106/"SERACARH"→SERACARH; F0101/"FEDERACION"→FATERYH. El CUIT NO distingue
+  el tipo (es compartido), por eso NO se usa como discriminador.
+- Campos rotulados fijos: `CONSORCIO:`, `PERIODO: MM/YYYY`, `Nº BOLETA:`,
+  `VENCIMIENTO:`, `TOTAL A PAGAR:`; débito automático.
+
+**Decisión (reusa el patrón LSP existente, sin schema nuevo):**
+1. `identifyLSPProvider`: detección sindical ANTES del gate `isUtilityBill` (no
+   son servicios públicos). 3 valores nuevos en `LSPProvider`.
+2. `buildSindicalPrompt(tipo)`: prompt único para los 3 (solo varía la entidad):
+   provider y providerTaxId fijos, dueDate de `VENCIMIENTO:`, amount de
+   `TOTAL A PAGAR:`, observation = `PERIODO:`, clientNumber=null (→ NO entra al
+   fast-path LspService), paymentMethod=DEBITO_AUTOMATICO.
+3. **`matchProvider`: desambiguación por nombre ante CUIT compartido** (mejora
+   GENERAL): si varios proveedores tienen el mismo CUIT, se elige el que coincida
+   por nombre/matchNames; sin coincidencia → primero (estable). TDD (5 tests).
+
+**Carga de directorio requerida (owner):** 3 proveedores con el mismo CUIT
+30-54675623-4: SUTERH, FATERYH y SERACARH. Y `matchNames` en consorcios cuya
+dirección sindical no normalice igual (verificado: BROWN/CALLAO/PUEYRREDON
+matchean directo; **BOEDO 414 necesita matchNames `BOEDO 410`** porque la boleta
+dice "AVDA BOEDO 00410 /14").
+
+**Verificación:** 81 tests (8 extracción + 5 desambiguación nuevos); detección
+12/12 en los PDFs reales; typecheck + build:jobs + next build + lint OK.
+
+---
+
 ## 2026-06-12 — Normalización canónica de CUIT en TODO el sistema (lib/cuit.ts)
 
 **Problema:** a raíz del caso Riobamba (ver entrada anterior), el owner pidió una

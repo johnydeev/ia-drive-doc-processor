@@ -227,6 +227,11 @@ model SchedulerState {
   id                String    @id @default(cuid())
   clientId          String
   enabled           Boolean   @default(true)
+  /// Pausa automática por cuota de IA agotada (circuit breaker): mientras
+  /// aiPausedUntil > now el scheduler NO encola boletas para este cliente.
+  /// Independiente del toggle manual `enabled`. La setea el worker al detectar
+  /// 429 en TODOS los proveedores; vence sola en el próximo reset de cuota.
+  aiPausedUntil     DateTime?
   isRunning         Boolean   @default(false)
   intervalMinutes   Int       @default(5)
   lastTrigger       String?

@@ -2,6 +2,25 @@
 
 ## [Unreleased]
 
+### Features
+- **Circuit breaker de cuota IA (2026-06-12)**. Cuando todos los proveedores de
+  IA están en 429 (cuota diaria agotada), el worker pausa automáticamente el
+  encolado del cliente (`SchedulerState.aiPausedUntil`, **migración
+  `20260612000100`**) hasta el próximo reset de cuota (medianoche del Pacífico,
+  DST-safe — nuevo `lib/quotaReset.ts`, 4 tests). El scheduler saltea al cliente
+  sin escanear Drive y **se reanuda solo** al vencer la pausa, sin tocar el
+  toggle manual. Elimina el churn de rebotes contra baldes vacíos.
+- **Boletas sindicales SUTERH / FATERYH / SERACARH (2026-06-12)**. Soporte para
+  los 3 formularios del sindicato de encargados (F0201/F0101/F0106) con el patrón
+  LSP existente: detección en `identifyLSPProvider` (antes del gate de servicios
+  públicos) + `buildSindicalPrompt` (provider y CUIT recaudador fijos, vencimiento,
+  total, período, débito automático). Como los 3 comparten el CUIT 30-54675623-4,
+  `matchProvider` ahora **desambigua por nombre cuando varios proveedores comparten
+  CUIT** (mejora general, 5 tests). Detección verificada 12/12 contra los PDFs
+  reales. Requiere cargar en el directorio: SUTERH, FATERYH y SERACARH (mismo
+  CUIT) + matchNames `BOEDO 410` en BOEDO 414. `diag-boleta.ts` ahora muestra el
+  tipo detectado por el router.
+
 ### Refactor
 - **Normalización canónica de CUIT en todo el sistema (2026-06-12)**. Nueva fuente
   única `src/lib/cuit.ts` (13 tests TDD): comparar siempre por dígitos
