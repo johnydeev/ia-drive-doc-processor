@@ -161,4 +161,38 @@ describe("matchProvider", () => {
       expect(result?.row.id).toBe("p1");
     });
   });
+
+  describe("proveedores sindicales SIN CUIT (matching solo por nombre)", () => {
+    // Modelo: 2 proveedores sin CUIT — SUTERH y FATERYH; SERACARH es anexo de
+    // FATERYH (alias en matchNames). El CUIT del documento es del consorcio
+    // (consortiumCuit), no del proveedor.
+    const sindicales = [
+      provider({ id: "p-suterh", canonicalName: "SUTERH", cuit: null }),
+      provider({ id: "p-fateryh", canonicalName: "FATERYH", cuit: null, matchNames: "SERACARH" }),
+    ];
+    const consortiumCuit = "30546756234"; // CUIT del edificio (BOEDO 414)
+
+    it("boleta SUTERH → proveedor SUTERH por nombre", () => {
+      const r = matchProvider(sindicales, null, "SUTERH", [consortiumCuit], consortiumCuit);
+      expect(r?.row.id).toBe("p-suterh");
+      expect(r?.method).toMatch(/nombre/);
+    });
+
+    it("boleta FATERYH → proveedor FATERYH por nombre", () => {
+      const r = matchProvider(sindicales, null, "FATERYH", [consortiumCuit], consortiumCuit);
+      expect(r?.row.id).toBe("p-fateryh");
+    });
+
+    it("boleta SERACARH → proveedor FATERYH (vía alias matchNames)", () => {
+      const r = matchProvider(sindicales, null, "SERACARH", [consortiumCuit], consortiumCuit);
+      expect(r?.row.id).toBe("p-fateryh");
+    });
+
+    it("el CUIT del consorcio NO matchea a ningún proveedor (queda excluido)", () => {
+      // Aunque allTaxIds traiga el CUIT del edificio, ningún proveedor lo tiene
+      // → no hay falso match por CUIT; el nombre manda.
+      const r = matchProvider(sindicales, null, "SUTERH", [consortiumCuit], consortiumCuit);
+      expect(r?.method).not.toMatch(/CUIT/);
+    });
+  });
 });

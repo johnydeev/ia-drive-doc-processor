@@ -60,20 +60,31 @@ describe("identifyLSPProvider — boletas sindicales (SUTERH/FATERYH/SERACARH)",
 });
 
 describe("buildExtractionPrompt — prompt sindical", () => {
-  it("para SUTERH la instrucción fija provider y CUIT recaudador", () => {
+  // El proveedor sindical se identifica por NOMBRE (del encabezado). El CUIT que
+  // figura en el documento es del CONSORCIO/edificio contribuyente (cada edificio
+  // tiene el suyo), NO del proveedor → providerTaxId debe ser null y el CUIT va a
+  // allTaxIds para matchear el edificio.
+  it("para SUTERH fija provider por nombre y NO le asigna CUIT al proveedor", () => {
     const prompt = buildExtractionPrompt(SUTERH_TEXT);
     expect(prompt).toContain("provider: siempre 'SUTERH'");
-    expect(prompt).toContain("providerTaxId: siempre '30-54675623-4'");
+    expect(prompt).toContain("providerTaxId: null");
+    expect(prompt).not.toContain("providerTaxId: siempre '30-54675623-4'");
   });
 
-  it("para SERACARH la instrucción fija provider SERACARH (no FATERYH)", () => {
+  it("para SERACARH fija provider SERACARH (no FATERYH)", () => {
     const prompt = buildExtractionPrompt(SERACARH_TEXT);
     expect(prompt).toContain("provider: siempre 'SERACARH'");
-    expect(prompt).toContain("providerTaxId: siempre '30-54675623-4'");
+    expect(prompt).toContain("providerTaxId: null");
   });
 
-  it("para FATERYH la instrucción fija provider FATERYH", () => {
+  it("para FATERYH fija provider FATERYH", () => {
     const prompt = buildExtractionPrompt(FATERYH_TEXT);
     expect(prompt).toContain("provider: siempre 'FATERYH'");
+  });
+
+  it("instruye que el CUIT del documento es del consorcio (va a allTaxIds)", () => {
+    const prompt = buildExtractionPrompt(SUTERH_TEXT);
+    expect(prompt).toContain("allTaxIds");
+    expect(prompt.toLowerCase()).toContain("consorcio");
   });
 });

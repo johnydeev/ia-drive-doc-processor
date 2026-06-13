@@ -2,6 +2,27 @@
 
 ## [Unreleased]
 
+### Features
+- **Vista "Boletas entrantes" + borrado masivo (2026-06-13)**. Nueva página
+  `/admin/boletas` en el panel cliente: todas las boletas en orden de entrada
+  (como el Sheet), sin separar por edificio, con selección múltiple y "Borrar
+  seleccionadas". Al borrar, el PDF vuelve a **Pendientes** y se reprocesa (ideal
+  para corregir boletas mal procesadas). Endpoints `GET /api/client/invoices` y
+  `POST /api/client/invoices/bulk-delete`; el flujo de borrado se extrajo a
+  `lib/invoiceDeletion` (destino configurable) y lo comparte el borrado por
+  consorcio. Ítem "Boletas entrantes" en el sidebar.
+
+### Fix
+- **Boletas sindicales: el CUIT del documento es del consorcio, no del sindicato
+  (2026-06-13)**. Corrige el soporte sindical del 12/06, que asumía mal un "CUIT
+  recaudador compartido". Cada boleta trae el CUIT del **edificio contribuyente**
+  (BOEDO 414 ≠ BROWN 706 ≠ …). Ahora: el consorcio matchea por ese CUIT y el
+  **proveedor por NOMBRE** (SUTERH/FATERYH/SERACARH, sin CUIT propio). El prompt
+  ya no hardcodea `providerTaxId`; `extractCuitsFromText` corre también en
+  sindicales; el fast-path LSP las excluye. Verificado 6/6 contra PDFs+DB reales.
+  **Requiere** limpiar el CUIT mal cargado de los 3 proveedores (SQL en
+  `docs/decisiones.md`).
+
 ### Fix
 - **Boletas con cuota agotada caían a "SIN MONTO → Revisión" (2026-06-12)**. El
   RateLimitError del barrido dice "sin cuota" (español) y el clasificador buscaba

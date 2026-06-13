@@ -88,8 +88,11 @@ async function main() {
       : "Consorcio:  sin match por CUIT (el pipeline intentaría por nombre con la extracción IA)"
   );
 
+  // Para tipos detectados por el router (sindicales SUTERH/FATERYH/SERACARH,
+  // LSP), el proveedor se identifica por NOMBRE → se simula con ese nombre.
+  const lsp = identifyLSPProvider(text);
   const consortiumCuitNorm = cuitDigits(consortiumHit?.row.cuit);
-  const providerHit = matchProvider(providers, null, null, cuits, consortiumCuitNorm);
+  const providerHit = matchProvider(providers, null, lsp, cuits, consortiumCuitNorm);
   console.log(
     providerHit
       ? `Proveedor:  MATCH "${providerHit.row.canonicalName}" — ${providerHit.method}`

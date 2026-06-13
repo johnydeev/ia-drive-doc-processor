@@ -258,13 +258,19 @@ async function resolveAssignment(
   const normalizedClientNumber = extracted.clientNumber?.replace(/\s+/g, "").replace(/^0+/, "") || null;
   const allTaxIds = (extracted.allTaxIds ?? []).map((c) => cuitDigits(c)).filter((c) => c.length >= 10);
 
+  // Boletas sindicales: NO son LSP de servicios. Su CUIT es del CONSORCIO, no del
+  // proveedor → se excluyen del fast-path (resolver proveedor por CUIT / por
+  // clientNumber). Van directo al matching normal: consorcio por CUIT, proveedor
+  // por NOMBRE.
+  const isSindicalLsp = lspProvider === "SUTERH" || lspProvider === "FATERYH" || lspProvider === "SERACARH";
+
   // Resolver proveedor LSP por CUIT en tabla Provider
   let lspProviderId: string | null = null;
   let lspProviderCanonical: string | null = null;
   let lspProviderTaxId: string | null = null;
   let lspProviderAlias: string | null = null;
 
-  if (lspProvider && allTaxIds.length > 0) {
+  if (lspProvider && !isSindicalLsp && allTaxIds.length > 0) {
     const allProviders = await providerRepository.findAllForMatching(clientId);
 
     for (const cuit of allTaxIds) {
@@ -736,9 +742,14 @@ async function processDriveFile(
       return;
     }
 
+    // Boletas sindicales (SUTERH/FATERYH/SERACARH): el CUIT del papel es del
+    // CONSORCIO (no del sindicato) → mismo tratamiento determinístico que un
+    // documento no-LSP para el matching del edificio.
+    const isSindical = lspProvider === "SUTERH" || lspProvider === "FATERYH" || lspProvider === "SERACARH";
+
     // ── Saneo de CUIT inventado (solo NO-LSP): si la IA devolvió un CUIT que no
-    // está en el texto del documento, se descarta (era alucinado). LSP se excluye:
-    // su CUIT viene del prompt (no del papel) y resuelve por clientNumber.
+    // está en el texto del documento, se descarta (era alucinado). LSP de
+    // servicios se excluye: su CUIT viene del prompt (no del papel).
     if (lspProvider === null && docText) {
       if (extracted.providerTaxId && !cuitAppearsInText(extracted.providerTaxId, docText)) {
         pipelineLog.stepStart(cid, `⚠️ CUIT descartado: no aparece en el texto del documento (probable invención de la IA)`);
@@ -747,17 +758,16 @@ async function processDriveFile(
       if (Array.isArray(extracted.allTaxIds) && extracted.allTaxIds.length > 0) {
         extracted.allTaxIds = extracted.allTaxIds.filter((c) => cuitAppearsInText(c, docText));
       }
+    }
 
-      // Refuerzo determinístico: CUITs reales del texto por regex + checksum.
-      // La IA puede omitirlos o malformatearlos (visto en prod: listó solo el
-      // CUIT del consorcio con un dígito de más → allTaxIds quedó vacío → un
-      // proveedor correctamente cargado no matcheó y la boleta fue a Sin
-      // Asignar). El matching ya excluye el CUIT del consorcio, así que sumar
-      // todos los CUITs del papel es seguro.
+    // ── CUITs reales del texto por regex + checksum (NO-LSP y sindicales) ──────
+    // Refuerzo determinístico: la IA puede omitir/malformatear el CUIT. En
+    // sindicales es el del CONSORCIO y es crítico para imputar el gasto al
+    // edificio correcto. El matching ya excluye el CUIT del consorcio del
+    // proveedor, así que sumar todos los CUITs del papel es seguro.
+    if ((lspProvider === null || isSindical) && docText) {
       const textCuits = extractCuitsFromText(docText);
       if (textCuits.length > 0) {
-        // Formato canónico XX-XXXXXXXX-X en ambos orígenes → el Set deduplica
-        // bien aunque la IA y el regex hayan visto el mismo CUIT.
         const merged = new Set([
           ...(extracted.allTaxIds ?? []).map((c) => formatCuit(c) ?? c),
           ...textCuits.map((c) => formatCuit(c) ?? c),

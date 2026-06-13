@@ -1156,6 +1156,12 @@ export default function ConsortiumsPage() {
               {!navCollapsed && <span className={styles.navSidebarItemLabel}>{loadingUnassigned ? "Consultando..." : "Sin Asignar"}</span>}
             </button>
           )}
+          {isClient && (
+            <button type="button" className={styles.navSidebarItem} onClick={() => { router.push("/admin/boletas"); setNavMobileOpen(false); }} title="Todas las boletas en orden de entrada (como el Sheet), para revisar y borrar las últimas">
+              <span className={styles.navSidebarItemIcon}>📋</span>
+              {!navCollapsed && <span className={styles.navSidebarItemLabel}>Boletas entrantes</span>}
+            </button>
+          )}
         </nav>
         <div style={{ flex: 1 }} />
 

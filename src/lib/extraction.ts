@@ -279,8 +279,13 @@ const SINDICAL_ENTITY_LABELS: Record<"SUTERH" | "FATERYH" | "SERACARH", string> 
 /**
  * Prompt para boletas sindicales de edificios. Estructura idéntica entre los 3
  * tipos (solo cambia la entidad y los conceptos): encabezado con razón social +
- * código de formulario, CUIT recaudador fijo 30-54675623-4, y campos rotulados
- * (CONSORCIO:, PERIODO:, Nº BOLETA:, VENCIMIENTO:, TOTAL A PAGAR:).
+ * código de formulario, y campos rotulados (CONSORCIO:, PERIODO:, Nº BOLETA:,
+ * VENCIMIENTO:, TOTAL A PAGAR:).
+ *
+ * CLAVE del modelo de negocio: el CUIT que figura en la boleta es del CONSORCIO
+ * contribuyente (cada edificio tiene el suyo: BOEDO 414 = 30-54675623-4,
+ * BROWN 706 = 30-52063978-7, etc.), NO del sindicato. El proveedor sindical se
+ * identifica por NOMBRE; no tiene CUIT propio en el sistema.
  */
 function buildSindicalPrompt(relevantText: string, tipo: "SUTERH" | "FATERYH" | "SERACARH"): string {
   return [
@@ -289,10 +294,11 @@ function buildSindicalPrompt(relevantText: string, tipo: "SUTERH" | "FATERYH" | 
 
     "=== REGLAS ESPECÍFICAS BOLETA SINDICAL ===",
 
-    `- provider: siempre '${tipo}'. No usar la razón social completa.`,
+    `- provider: siempre '${tipo}' (se identifica por NOMBRE, no por CUIT). No usar la razón social completa.`,
 
-    "- providerTaxId: siempre '30-54675623-4' (CUIT recaudador de la Federación,",
-    "  compartido por SUTERH/FATERYH/SERACARH). NO usar ningún otro CUIT.",
+    "- providerTaxId: null. El CUIT que figura en la boleta NO es del sindicato:",
+    "  es el CUIT del CONSORCIO/edificio contribuyente (cada edificio tiene el",
+    "  suyo). No asignarlo al proveedor.",
 
     "- consortium: el texto que sigue a 'CONSORCIO:' (la dirección del edificio).",
     "  Copiarlo tal cual aparece, sin la localidad ('CIUDAD DE BUENOS AIRES',",
@@ -315,7 +321,8 @@ function buildSindicalPrompt(relevantText: string, tipo: "SUTERH" | "FATERYH" | 
     "- paymentMethod: si dice 'SE DEBITARA DIRECTAMENTE EN SU CUENTA BANCARIA'",
     "  → DEBITO_AUTOMATICO. Si no, null.",
 
-    "- allTaxIds: ['30-54675623-4'] (es el único CUIT presente en la boleta).",
+    "- allTaxIds: incluir el CUIT que aparece junto a 'CUIT:' en la boleta",
+    "  (es el del CONSORCIO/edificio — sirve para imputar el gasto al edificio correcto).",
 
     "Texto de la boleta sindical:",
     relevantText,

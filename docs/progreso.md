@@ -1,6 +1,37 @@
 # Progreso del proyecto — drive-doc-processor
 
-Actualizado al 12/06/2026 (sesión 32).
+Actualizado al 13/06/2026 (sesión 33).
+
+---
+
+## Vista "Boletas entrantes" + borrado masivo (13/06/2026)
+
+**Estado: implementado y verificado (92 tests + next build). PENDIENTE: push (CI).**
+
+Nueva página `/admin/boletas` (panel cliente): lista global de boletas en orden de
+entrada, selección múltiple, "Borrar seleccionadas" → el PDF vuelve a Pendientes
+y se reprocesa. Flujo de borrado extraído a `lib/invoiceDeletion` (destino
+configurable), compartido con el borrado por consorcio. Ítem en el sidebar.
+Detalles en decisiones.md.
+
+---
+
+## Corrección modelo sindical: CUIT = consorcio, proveedor por nombre (13/06/2026)
+
+**Estado: implementado y verificado (88 tests, 6/6 matching real). PENDIENTE:
+push (CI) + limpiar CUIT de los 3 proveedores en la DB (SQL abajo).**
+
+Se corrigió el error del 12/06 (asumir CUIT recaudador compartido). El CUIT de la
+boleta es del **edificio contribuyente** (cada uno el suyo). Nuevo modelo:
+consorcio por CUIT del documento, proveedor sindical por **nombre** (sin CUIT).
+Detalles en decisiones.md.
+
+**Limpieza de datos requerida** (los 3 proveedores quedaron con el CUIT de BOEDO):
+```sql
+UPDATE "Provider" SET cuit = NULL
+WHERE "clientId" = 'cmmuvg0hl0000kxl4ks5nrgxn'
+  AND "canonicalName" IN ('SUTERH','FATERYH','SERACARH');
+```
 
 ---
 

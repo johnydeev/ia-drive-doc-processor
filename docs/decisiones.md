@@ -4,6 +4,79 @@ Registro de decisiones tomadas ante problemas reales encontrados en producción.
 
 ---
 
+## 2026-06-13 — Vista global de "Boletas entrantes" + borrado masivo
+
+**Necesidad (owner):** una vista única de todas las boletas del cliente en orden
+de entrada (como el Sheet), sin separar por edificio, para revisar y borrar las
+últimas entradas sin ir consorcio por consorcio (caso inmediato: borrar las
+boletas mal procesadas para reprocesarlas).
+
+**Decisiones (con el owner):**
+- **Selección múltiple** (checkbox por fila + "Borrar seleccionadas").
+- **Al borrar → el PDF vuelve a Pendientes** (no a Revisión como el borrado por
+  consorcio): al borrar la Invoice + la fila del Sheet no queda duplicado, así
+  que el worker la reprocesa limpia. Ideal para corregir boletas mal procesadas.
+- Columnas: Entrada · Consorcio · Proveedor · Monto · Período · Vto · Dup · PDF
+  (sin tokens/IA, que son de monitoreo admin).
+
+**Reutilización:** se extrajo el flujo de borrado a `lib/invoiceDeletion.ts`
+(`resolveDeletionContext` + `deleteOneInvoice`) con **destino configurable**
+(`pending` | `failed`). El endpoint DELETE por-consorcio ahora lo usa (destino
+`failed`, comportamiento idéntico) y el borrado masivo también (destino
+`pending`), resolviendo la config de Google **una sola vez** para todo el lote.
+
+**Nuevo:** `GET /api/client/invoices` (lista global del cliente, orden de
+entrada, paginada — equivalente cliente de `/api/admin/invoices`),
+`POST /api/client/invoices/bulk-delete`, página `/admin/boletas` (reusa el CSS de
+`admin/invoices`) e ítem "Boletas entrantes" en el sidebar del panel cliente.
+
+**Verificación:** 92 tests; typecheck + build:jobs + next build + lint OK. Sin
+migración. Deploy: push (CI).
+
+---
+
+## 2026-06-13 — CORRECCIÓN del modelo sindical: el CUIT del documento es del CONSORCIO, no del sindicato
+
+**Error corregido (de la entrada del 12/06):** se asumió mal que las 3 boletas
+sindicales compartían "el CUIT recaudador 30-54675623-4". **Falso.** Con más
+muestras (BROWN) se ve que el CUIT cambia por edificio:
+BOEDO 414 = 30-54675623-4, ALMIRANTE BROWN 706 = 30-52063978-7, etc. → **el CUIT
+de la boleta es del CONSORCIO contribuyente** (a quien se imputa el gasto), no del
+sindicato. Consecuencias del error: (a) el prompt **hardcodeaba**
+`providerTaxId='30-54675623-4'` → toda boleta no-BOEDO matchearía el consorcio
+equivocado; (b) se cargaron 3 proveedores (SUTERH/FATERYH/SERACARH) con el CUIT
+de BOEDO 414 → 3 proveedores con el mismo CUIT (inválido) y además el CUIT de un
+edificio.
+
+**Modelo correcto (confirmado 6/6 contra PDFs reales + DB):**
+- **Consorcio** → se matchea por el CUIT de la boleta (cada edificio el suyo) o
+  por la dirección del campo `CONSORCIO:`.
+- **Proveedor sindical** → se identifica por **NOMBRE** (SUTERH/FATERYH/SERACARH,
+  del encabezado / formulario); **no tiene CUIT propio**.
+
+**Cambios:**
+1. `buildSindicalPrompt`: `providerTaxId: null` (ya no hardcodea CUIT); el CUIT
+   del papel va a `allTaxIds` etiquetado como del consorcio.
+2. Pipeline: `extractCuitsFromText` corre también para sindicales (CUIT del
+   consorcio determinístico desde el papel).
+3. `resolveAssignment`: sindicales **excluidas del fast-path LSP** (no resolver
+   proveedor por CUIT — su CUIT es del edificio). Van al matching normal:
+   consorcio por CUIT, proveedor por nombre.
+
+**Acción de datos requerida (owner):** limpiar el CUIT mal cargado de los 3
+proveedores (sino la columna providerTaxId del Sheet mostraría el CUIT de BOEDO en
+todas las sindicales):
+```sql
+UPDATE "Provider" SET cuit = NULL
+WHERE "clientId" = 'cmmuvg0hl0000kxl4ks5nrgxn'
+  AND "canonicalName" IN ('SUTERH','FATERYH','SERACARH');
+```
+
+**Verificación:** 88 tests; diag-boleta 6/6 (cada edificio a su consorcio por
+CUIT, cada proveedor por nombre exacto); typecheck + build:jobs + lint OK.
+
+---
+
 ## 2026-06-12 — Regresión: boletas con cuota agotada caían a "SIN MONTO → Revisión" (clasificación de rate-limit por texto)
 
 **Problema (reportado por el owner con el log exacto):** con la cuota agotada,
