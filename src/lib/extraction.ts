@@ -112,6 +112,26 @@ export const LSP_FALLBACK_NAMES: Partial<Record<LSPProvider, string>> = {
  *
  * Retorna null si no es una LSP.
  */
+/**
+ * ¿Es una factura de Personal / Telecom Argentina?
+ *
+ * "PERSONAL" como palabra suelta es ambigua: aparece en frases como
+ * "CÓDIGO DE GESTIÓN PERSONAL" (facturas de IPLAN), "DATOS PERSONALES", etc.
+ * → falso positivo que mandaba esas facturas al camino LSP de Telecom. Se
+ * detecta por MARCADORES POSITIVOS de la empresa (su razón social TELECOM
+ * ARGENTINA o la marca Personal/Flow), no por la palabra suelta.
+ */
+function isPersonalTelecom(upper: string): boolean {
+  return (
+    upper.includes("TELECOM ARGENTINA") ||
+    upper.includes("TELECOM PERSONAL") ||
+    upper.includes("MI PERSONAL") ||
+    upper.includes("PERSONAL FLOW") ||
+    upper.includes("PERSONAL.COM") ||
+    /\bPERSONAL\s+S\.?\s*A\.?/.test(upper) // "Personal S.A."
+  );
+}
+
 export function identifyLSPProvider(text: string): LSPProvider | null {
   const upper = text.slice(0, 4000).toUpperCase();
 
@@ -158,7 +178,7 @@ export function identifyLSPProvider(text: string): LSPProvider | null {
     return "ABSA";
   }
 
-  if (upper.includes("PERSONAL") || upper.includes("TELECOM")) return "PERSONAL";
+  if (isPersonalTelecom(upper)) return "PERSONAL";
 
   return "GENERIC_LSP";
 }
@@ -206,8 +226,7 @@ function isUtilityBill(textOrUpper: string): boolean {
     upper.includes("LITORAL GAS") ||
     upper.includes("ABSA") ||
     (upper.includes("AGUAS") && upper.includes("ARGENTINAS")) ||
-    upper.includes("PERSONAL") ||
-    upper.includes("TELECOM")
+    isPersonalTelecom(upper)
   );
 }
 

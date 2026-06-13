@@ -59,6 +59,36 @@ describe("identifyLSPProvider — boletas sindicales (SUTERH/FATERYH/SERACARH)",
   });
 });
 
+describe("identifyLSPProvider — falso positivo de PERSONAL", () => {
+  // Factura de IPLAN (NSS SA): dice 'CÓDIGO DE GESTIÓN PERSONAL', pero NO es
+  // Telecom/Personal. Antes el router la clasificaba como PERSONAL (por la
+  // palabra suelta) → la trataba como LSP, buscaba nro de cliente y caía en
+  // Sin Asignar. Debe ser factura común (null) → matchea NSS SA por CUIT.
+  const IPLAN = [
+    "FACTURA A CÓDIGO N°: 1",
+    "NSS SA",
+    "Internet Giga+ Abono 107761.69",
+    "CONS DE PROPS DE LA CALLE BME MITRE 1223 Y 1225",
+    "CUIT 30702652975",
+    "CLIENTE N° 664688",
+    "CÓDIGO DE GESTIÓN PERSONAL: 6646881",
+  ].join("\n");
+
+  it("NO detecta PERSONAL en una factura de IPLAN (solo 'GESTIÓN PERSONAL')", () => {
+    expect(identifyLSPProvider(IPLAN)).toBeNull();
+  });
+
+  it("sigue detectando Personal/Telecom real (TELECOM ARGENTINA)", () => {
+    const personal = "TELECOM ARGENTINA S.A.\nFactura Personal\nN° de Referencia de Pago 12345";
+    expect(identifyLSPProvider(personal)).toBe("PERSONAL");
+  });
+
+  it("sigue detectando Personal cuando la marca aparece sola (no 'gestión personal')", () => {
+    const personal = "MI PERSONAL\nFactura de telefonía\nVencimiento para el pago";
+    expect(identifyLSPProvider(personal)).toBe("PERSONAL");
+  });
+});
+
 describe("buildExtractionPrompt — prompt sindical", () => {
   // El proveedor sindical se identifica por NOMBRE (del encabezado). El CUIT que
   // figura en el documento es del CONSORCIO/edificio contribuyente (cada edificio

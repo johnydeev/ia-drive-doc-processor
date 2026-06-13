@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Fix
+- **Router: "PERSONAL" suelto mandaba facturas a Telecom (2026-06-13)**. Una
+  factura de IPLAN caía en Sin Asignar porque `CÓDIGO DE GESTIÓN PERSONAL` activaba
+  la detección de Personal/Telecom (camino LSP por nro de cliente). Ahora
+  `isPersonalTelecom` detecta por marcadores positivos (TELECOM ARGENTINA, Mi
+  Personal, Personal Flow/SA), no por la palabra suelta → esas facturas van al
+  flujo normal y matchean por CUIT. 3 tests nuevos (incl. texto real de IPLAN).
+
 ### Features
 - **Vista "Boletas entrantes" + borrado masivo (2026-06-13)**. Nueva página
   `/admin/boletas` en el panel cliente: todas las boletas en orden de entrada

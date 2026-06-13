@@ -4,6 +4,34 @@ Registro de decisiones tomadas ante problemas reales encontrados en producción.
 
 ---
 
+## 2026-06-13 — Falso positivo del router: "PERSONAL" suelto mandaba facturas a Telecom
+
+**Problema (caso real, factura de IPLAN/NSS SA):** fue a Sin Asignar. El router
+la detectó como **PERSONAL (Telecom)** por la frase `CÓDIGO DE GESTIÓN PERSONAL`
+→ la trató como LSP, buscó el nro de cliente en LspServices, no lo encontró →
+Sin Asignar. El emisor real es NSS SA (CUIT 30-70265297-5); el consorcio (Bme
+Mitre 1225) matcheaba bien por CUIT.
+
+**Causa raíz:** `identifyLSPProvider`/`isUtilityBill` detectaban Personal con
+`includes("PERSONAL")` — palabra demasiado común (gestión personal, datos
+personales, etc.).
+
+**Decisión:** `isPersonalTelecom()` por **marcadores positivos** de la empresa
+(TELECOM ARGENTINA — su razón social, siempre presente —, "Mi Personal",
+"Personal Flow", "Personal.com", "Personal S.A."), no por la palabra suelta. Así
+IPLAN cae como **factura común** → matchea consorcio + proveedor por CUIT.
+
+**Nota:** se descartó la variante "excluir frases" (`/gestión\s+personal/`) porque
+el `\b` de la regex se rompía con la `Ó` acentuada (no es word-char ASCII).
+
+**Verificación:** 95 tests (3 nuevos, incl. el texto real de IPLAN); diag-boleta:
+IPLAN ahora "factura común" + consorcio por CUIT. typecheck + build:jobs + lint OK.
+
+**Acción del owner:** registrar NSS SA (hecho en el ALTA, falta **Sincronizar
+directorio** para que entre a la DB) + push del fix del router.
+
+---
+
 ## 2026-06-13 — Vista global de "Boletas entrantes" + borrado masivo
 
 **Necesidad (owner):** una vista única de todas las boletas del cliente en orden

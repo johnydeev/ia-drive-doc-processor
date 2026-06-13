@@ -4,6 +4,18 @@ Actualizado al 13/06/2026 (sesión 33).
 
 ---
 
+## Fix router: falso positivo de PERSONAL (13/06/2026)
+
+**Estado: implementado y verificado (95 tests). PENDIENTE: push + Sincronizar
+directorio (para que NSS SA entre a la DB).**
+
+Una factura de IPLAN caía en Sin Asignar porque "CÓDIGO DE GESTIÓN PERSONAL"
+disparaba la detección de Personal/Telecom. Ahora se detecta por marcadores
+positivos (TELECOM ARGENTINA, Mi Personal, etc.). IPLAN → factura común → matchea
+por CUIT. Ver decisiones.md.
+
+---
+
 ## Vista "Boletas entrantes" + borrado masivo (13/06/2026)
 
 **Estado: implementado y verificado (92 tests + next build). PENDIENTE: push (CI).**
