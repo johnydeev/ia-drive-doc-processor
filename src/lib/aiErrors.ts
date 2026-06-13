@@ -30,7 +30,12 @@ export function isRateLimitError(error: unknown): boolean {
     /\b429\b/.test(text) ||
     text.includes("too many requests") ||
     text.includes("resource_exhausted") ||
-    text.includes("quota")
+    text.includes("quota") ||
+    // Mensajes propios en español (p. ej. el RateLimitError del barrido de
+    // modelos: "sin cuota en los N modelo(s)"). La cadena de IA propaga el
+    // MENSAJE (string) al pipeline, así que el matcher debe reconocerlos.
+    text.includes("sin cuota") ||
+    text.includes("cuota agotada")
   );
 }
 

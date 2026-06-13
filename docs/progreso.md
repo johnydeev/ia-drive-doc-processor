@@ -4,6 +4,22 @@ Actualizado al 12/06/2026 (sesión 32).
 
 ---
 
+## Hotfix: clasificación de rate-limit + etiquetas de log (12/06/2026, noche)
+
+**Estado: implementado y verificado (87 tests). PENDIENTE: push (CI deploya) +
+recuperar 2 boletas de Revisión → Pendientes (FB-158366.pdf y
+"eva peron manuel depto 32 - SIN MONTO.pdf").**
+
+Reportado por el owner con el log exacto: boleta con cuota agotada terminó en
+Revisión como "SIN MONTO" en vez de volver a Pendientes. Causa: el mensaje del
+barrido en español ("sin cuota") no matcheaba el patrón "quota" del clasificador
+(la cadena pasa el mensaje como string y se pierde el instanceof). También
+anulaba el circuit breaker. Fix de fondo: flag `rateLimited` clasificado en la
+cadena sobre el objeto + defensa en el matcher + etiquetas de log reales
+("Movido a Revisión", "SIN MONTO → Revisión"). Ver decisiones.md.
+
+---
+
 ## Circuit breaker de cuota IA (12/06/2026)
 
 **Estado: implementado y verificado (85 tests). ⚠️ PENDIENTE: MIGRACIÓN

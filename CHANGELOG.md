@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+### Fix
+- **Boletas con cuota agotada caían a "SIN MONTO → Revisión" (2026-06-12)**. El
+  RateLimitError del barrido dice "sin cuota" (español) y el clasificador buscaba
+  "quota" → con todos los proveedores en 429 la boleta degradaba a OCR_ONLY y
+  terminaba en Revisión en vez de volver a Pendientes (también anulaba el circuit
+  breaker). Fix de fondo: la cadena de IA clasifica el error sobre el objeto y
+  pasa un flag `rateLimited` en el callback (el pipeline ya no parsea mensajes);
+  defensa extra en `isRateLimitError` ("sin cuota"/"cuota agotada"). Etiquetas de
+  log corregidas: "Movido a Revisión (carpeta failed)" y resultado real
+  ("SIN MONTO → Revisión" / "SIN PERÍODO ACTIVO → Revisión") en vez del genérico
+  "SIN ASIGNAR". 2 boletas afectadas a recuperar manualmente (Revisión →
+  Pendientes): FB-158366.pdf y "eva peron manuel depto 32 - SIN MONTO.pdf".
+
 ### Features
 - **Circuit breaker de cuota IA (2026-06-12)**. Cuando todos los proveedores de
   IA están en 429 (cuota diaria agotada), el worker pausa automáticamente el

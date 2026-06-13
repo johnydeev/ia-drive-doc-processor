@@ -324,7 +324,8 @@ export const pipelineLog = {
   },
 
   movedToFailed(clientId: string, fileId: string) {
-    log("error", "job", `  📁 Movido a Fallidos`, shortId(clientId));
+    // La carpeta `failed` se llama "Revisión" para el negocio (ver ClientDriveFolders).
+    log("warn", "job", `  📁 Movido a Revisión (carpeta failed)`, shortId(clientId));
   },
 
   sheetsInserted(clientId: string) {
@@ -336,8 +337,17 @@ export const pipelineLog = {
     log("success", "job", `  💾 Invoice guardada en DB${dupLabel}`, shortId(clientId));
   },
 
-  fileCompleted(clientId: string, fileName: string, result: { processed: number; unassigned: number; duplicate: boolean }) {
-    const status = result.unassigned > 0 ? "⚠️  SIN ASIGNAR" : result.duplicate ? "⚠️  DUPLICADO" : "✅ OK";
+  fileCompleted(
+    clientId: string,
+    fileName: string,
+    result: { processed: number; unassigned: number; duplicate: boolean },
+    statusLabel?: string
+  ) {
+    // statusLabel permite mostrar el motivo REAL (ej. "SIN MONTO → Revisión")
+    // en vez del genérico "SIN ASIGNAR" del contador unassigned.
+    const status = statusLabel
+      ? `⚠️  ${statusLabel}`
+      : result.unassigned > 0 ? "⚠️  SIN ASIGNAR" : result.duplicate ? "⚠️  DUPLICADO" : "✅ OK";
     log("info", "job", `  Resultado: ${status} — "${fileName}"`, shortId(clientId));
     console.log(`[${timestamp()}] [JOB] ${"─".repeat(50)}`);
   },

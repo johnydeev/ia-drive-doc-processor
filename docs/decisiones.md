@@ -4,6 +4,45 @@ Registro de decisiones tomadas ante problemas reales encontrados en producción.
 
 ---
 
+## 2026-06-12 — Regresión: boletas con cuota agotada caían a "SIN MONTO → Revisión" (clasificación de rate-limit por texto)
+
+**Problema (reportado por el owner con el log exacto):** con la cuota agotada,
+la boleta "eva peron manuel depto 32.pdf" cayó a OCR_ONLY → gate "SIN MONTO" →
+movida a Revisión, en vez de volver a Pendientes. 2 boletas afectadas
+(FB-158366.pdf y esa). Además el bug **anulaba el circuit breaker** (la señal
+rate_limited nunca se emitía).
+
+**Causa raíz:** al restaurar el barrido de modelos, su RateLimitError dice
+**"sin cuota en los N modelo(s)"** (español). La cadena de IA pasa al pipeline el
+**mensaje** (string) — el `instanceof` se pierde — y `isRateLimitError()` buscaba
+"quota"/"429"/"too many requests": **"cuota" ≠ "quota"** → el `every()` fallaba →
+OCR_ONLY. (El día anterior funcionaba porque el mensaje era el original de Google,
+que contiene "429".)
+
+**Fix (doble, TDD):**
+1. **De fondo:** `AiExtractionChain` ahora clasifica el error **sobre el objeto**
+   (instanceof) y pasa un flag `rateLimited` en el callback. El pipeline usa ese
+   flag y NO re-parsea mensajes. Inmune a cambios de redacción/idioma.
+2. **Defensa:** `isRateLimitError()` también reconoce "sin cuota"/"cuota agotada"
+   (mensajes propios).
+
+**Etiquetas de log corregidas (lo que disparó el reporte):**
+- "📁 Movido a Fallidos" → "📁 Movido a Revisión (carpeta failed)" — la carpeta
+  `failed` se llama Revisión para el negocio.
+- "Resultado: SIN ASIGNAR" genérico → ahora `fileCompleted` acepta etiqueta real:
+  "SIN MONTO → Revisión", "SIN PERÍODO ACTIVO → Revisión". (El contador
+  `unassigned` sigue agrupando todo lo que va a revisión manual — sin cambio
+  contable, solo claridad de logs.)
+
+**Recuperación de las 2 afectadas:** mover en Drive de Revisión a Pendientes
+(no se guardó Invoice → reproceso limpio). Tienen el sufijo " - SIN MONTO" en el
+nombre (cosmético).
+
+**Verificación:** 87 tests (2 nuevos reproduciendo el caso real); typecheck +
+build:jobs + lint OK. Deploy: push (CI).
+
+---
+
 ## 2026-06-12 — Circuit breaker de cuota IA: pausa automática del encolado hasta el reset
 
 **Problema:** cuando se agotan TODOS los baldes diarios de IA (visto el 12/06 a

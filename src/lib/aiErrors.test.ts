@@ -30,6 +30,14 @@ describe("isRateLimitError", () => {
     expect(isRateLimitError("HTTP 429: too many requests")).toBe(true);
   });
 
+  it("reconoce el mensaje del barrido de modelos (en español, visto en prod)", () => {
+    // Regresión real: la cadena de IA pasa el MENSAJE del error (string) al
+    // pipeline; el RateLimitError del barrido dice "sin cuota" (español) y no
+    // matcheaba "quota" → la boleta caía a OCR_ONLY → "SIN MONTO" → Revisión,
+    // en vez de volver a Pendientes.
+    expect(isRateLimitError("Gemini extraction: sin cuota en los 5 modelo(s) del barrido")).toBe(true);
+  });
+
   it("es falso para errores normales", () => {
     expect(isRateLimitError(new Error("Network timeout"))).toBe(false);
     expect(isRateLimitError(new Error("Invalid JSON in model output"))).toBe(false);

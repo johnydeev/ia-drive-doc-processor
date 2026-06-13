@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { AiExtractionChain, type AiExtractor } from "@/services/aiExtraction";
+import { RateLimitError } from "@/lib/aiErrors";
 import { AiProvider, AiUsageMetrics } from "@/types/aiUsage.types";
 import { ExtractedDocumentData } from "@/types/extractedDocument.types";
 
@@ -112,6 +113,30 @@ describe("AiExtractionChain.run", () => {
     const result = await chain.run("texto", () => { called = true; });
     expect(result).toBeNull();
     expect(called).toBe(false);
+  });
+
+  it("reporta rateLimited=true en el callback cuando el extractor tira RateLimitError", async () => {
+    // El flag se computa sobre el OBJETO del error (instanceof), no sobre el
+    // texto del mensaje — inmune a cambios de redacción/idioma del mensaje.
+    class RateLimitedExtractor extends FakeExtractor {
+      async extractStructuredData(): Promise<ExtractedDocumentData> {
+        throw new RateLimitError("sin cuota (mensaje en cualquier idioma)");
+      }
+    }
+    const flags: Array<{ provider: AiProvider; rateLimited: boolean | undefined }> = [];
+    const chain = new AiExtractionChain([
+      new RateLimitedExtractor("gemini", "fail"),
+      new FakeExtractor("openai", "fail"), // Error normal
+    ]);
+
+    await chain.run("texto", (provider, ok, _msg, rateLimited) => {
+      flags.push({ provider, rateLimited });
+    });
+
+    expect(flags).toEqual([
+      { provider: "gemini", rateLimited: true },
+      { provider: "openai", rateLimited: false },
+    ]);
   });
 });
 

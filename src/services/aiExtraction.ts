@@ -1,3 +1,4 @@
+import { isRateLimitError } from "@/lib/aiErrors";
 import { AiProvider, AiUsageMetrics } from "@/types/aiUsage.types";
 import { ExtractedDocumentData } from "@/types/extractedDocument.types";
 
@@ -42,11 +43,18 @@ export interface AiExtractionResult {
  * Callback invocado tras cada intento. Desacopla el logging: el pipeline usa
  * `pipelineLog`, la ruta de scan usa `console.warn`, sin que la cadena tenga
  * que conocer ninguno de los dos.
+ *
+ * `rateLimited` se computa acá, sobre el OBJETO del error (instanceof
+ * RateLimitError + heurística de texto). Los callers NO deben re-clasificar
+ * parseando el mensaje: la redacción/idioma del mensaje puede cambiar (bug
+ * real: "sin cuota" en español no matcheaba el patrón "quota" → boletas con
+ * cuota agotada caían a OCR_ONLY en vez de volver a Pendientes).
  */
 export type AiAttemptCallback = (
   provider: AiProvider,
   ok: boolean,
-  error?: string
+  error?: string,
+  rateLimited?: boolean
 ) => void;
 
 /**
@@ -78,7 +86,8 @@ export class AiExtractionChain {
         onAttempt?.(
           extractor.provider,
           false,
-          error instanceof Error ? error.message : "Unknown error"
+          error instanceof Error ? error.message : "Unknown error",
+          isRateLimitError(error)
         );
       }
     }

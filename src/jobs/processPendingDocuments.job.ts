@@ -642,13 +642,21 @@ async function processDriveFile(
       // Fallback IA Gemini→OpenAI→Claude vía cadena reutilizable. El logging
       // por intento se inyecta vía callback; el timing acumulado ("ai") lo
       // mantiene runStep envolviendo la ejecución completa de la cadena.
-      const aiErrors: string[] = [];
+      // El flag rateLimited viene clasificado por la CADENA sobre el objeto del
+      // error (instanceof) — no re-parsear acá el texto del mensaje (bug real:
+      // el mensaje en español "sin cuota" no matcheaba "quota" y las boletas
+      // caían a OCR_ONLY → "SIN MONTO" → Revisión en vez de Pendientes).
+      let aiFailures = 0;
+      let aiRateLimited = 0;
       const aiResult = await runStep(
         "Extracción IA",
         () =>
-          aiChain.run(text, (provider, ok, errorMsg) => {
+          aiChain.run(text, (provider, ok, errorMsg, rateLimited) => {
             pipelineLog.aiExtraction(cid, provider, ok, errorMsg);
-            if (!ok && errorMsg) aiErrors.push(errorMsg);
+            if (!ok) {
+              aiFailures += 1;
+              if (rateLimited) aiRateLimited += 1;
+            }
           }),
         "ai"
       );
@@ -657,11 +665,11 @@ async function processDriveFile(
         extracted = aiResult.data;
         fileAiUsage = aiResult.usage;
         accumulateTokenUsage(summary.tokenUsage, fileAiUsage);
-      } else if (aiErrors.length > 0 && aiErrors.every((e) => isRateLimitError(e))) {
+      } else if (aiFailures > 0 && aiRateLimited === aiFailures) {
         // Todos los proveedores de IA sin cuota (429): NO degradar a OCR_ONLY
-        // (terminaría en Sin Asignar). Se propaga como RateLimitError para dejar
+        // (terminaría en Revisión). Se propaga como RateLimitError para dejar
         // la boleta en Pendientes y reintentarla en un ciclo posterior.
-        throw new RateLimitError(`IA sin cuota — ${aiErrors.length} proveedor(es) en 429`);
+        throw new RateLimitError(`IA sin cuota — ${aiFailures} proveedor(es) en 429`);
       } else {
         pipelineLog.aiOcrFallback(cid);
         extracted = buildOcrOnlyPayload();
@@ -724,7 +732,7 @@ async function processDriveFile(
         pipelineLog.movedToFailed(cid, file.id);
       }
       summary.unassigned += 1;
-      pipelineLog.fileCompleted(cid, file.name, { processed: 0, unassigned: 1, duplicate: false });
+      pipelineLog.fileCompleted(cid, file.name, { processed: 0, unassigned: 1, duplicate: false }, "SIN MONTO → Revisión");
       return;
     }
 
@@ -913,7 +921,7 @@ async function processDriveFile(
         pipelineLog.movedToFailed(cid, file.id);
       }
       summary.unassigned += 1;
-      pipelineLog.fileCompleted(cid, file.name, { processed: 0, unassigned: 1, duplicate: false });
+      pipelineLog.fileCompleted(cid, file.name, { processed: 0, unassigned: 1, duplicate: false }, "SIN PERÍODO ACTIVO → Revisión");
       return;
     }
 
