@@ -1,6 +1,6 @@
 # Progreso del proyecto — drive-doc-processor
 
-Actualizado al 14/06/2026 (sesión 34).
+Actualizado al 15/06/2026 (sesión 35).
 
 ---
 
@@ -18,14 +18,40 @@ Actualizado al 14/06/2026 (sesión 34).
 3. **Tier pago de Gemini (~USD 1-2/mes)** — decisión de negocio del owner. El free
    tier funciona con el barrido de modelos + circuit breaker, pero tiene techo
    diario. El pago elimina el riesgo de cuota.
-4. **Refactor H2** — descomponer `processDriveFile` (~630 líneas) en pasos
-   (Pipeline). Requiere su propia sesión dedicada. **Spec y plan ya escritos
-   (14/06), listos para ejecutar:**
-   - Spec: `docs/superpowers/specs/2026-06-14-refactor-h2-pipeline-design.md`
-   - Plan: `docs/superpowers/plans/2026-06-14-refactor-h2-pipeline.md`
-   Arranca por los **tests de caracterización** (Task 1, prerrequisito) sobre los 7
-   caminos de salida. Fases 1, 2 y H3 (MatchStrategy) ya hechas; reporte de patrones
-   en `docs/reporte-patrones-diseno.md`.
+4. ~~**Refactor H2** — descomponer `processDriveFile` en pasos (Pipeline)~~ →
+   **HECHO 15/06** (ver sección abajo). El pipeline quedó descompuesto en 14 pasos
+   discretos + runner, con red de tests de caracterización. **PENDIENTE: push (CI) +
+   rebuild del worker.**
+
+---
+
+## Refactor H2 — `processDriveFile` descompuesto en un Pipeline de pasos (15/06/2026)
+
+**Estado: implementado y verificado (121 tests, +8 de caracterización; typecheck + lint
++ build:jobs OK). PENDIENTE: push (CI) + rebuild del worker.**
+
+La "God function" del pipeline (~630 líneas, ~13 deps, 7 caminos de salida con side-effects
+en Drive/Sheets/DB) pasó a patrón **Pipe & Filter** sin cambiar el comportamiento observable:
+
+- **Task 0 — Seams:** los 2 `await import()` dinámicos (`resolveStatementsFolders`,
+  `buildInvoiceFileName`) → deps opcionales del `ProcessingContext` (default al import real
+  en prod; mocks en tests).
+- **Task 1 — Red de seguridad (prerrequisito):** `processPendingDocuments.job.test.ts`, 8
+  tests de caracterización sobre los 7 caminos (`ok`, `duplicate` por hash y business key,
+  `unassigned`, `no_amount`, `no_period`, `rate_limited`, `failed`) + verificación de que
+  `[metrics]` se emite en cada uno. Pasan idénticos antes y después.
+- **Task 2 — Runner + contexto:** `src/jobs/pipeline/context.ts` (tipos + factory) y
+  `runner.ts` (`runPipeline`: itera pasos, corta al primer `halt`, centraliza errores +
+  emisión única de `[metrics]` en el `finally`).
+- **Task 3 — 14 pasos discretos:** download+lock, dedup hash, extracción, gate sin-monto,
+  saneo CUIT, dedup business key, limpieza clientNumber, assignment + fallback visual,
+  canonización, gate unassigned, gate sin-período, Sheets, organización de archivo,
+  persistencia. `processDriveFile` quedó como thin wrapper (~20 líneas).
+- **Task 4 — Limpieza:** monolito eliminado; `[metrics]` solo en el runner.
+
+Beneficio: cada paso es testeable por separado y los cambios futuros de reglas se acotan a
+un paso (antes obligaban a razonar sobre 630 líneas). Sin migración. Detalles en
+decisiones.md. Spec/plan: `docs/superpowers/{specs,plans}/2026-06-14-refactor-h2-pipeline*`.
 
 ---
 

@@ -2,6 +2,24 @@
 
 ## [Unreleased]
 
+### Refactor
+- **H2: `processDriveFile` descompuesto en un Pipeline de pasos (2026-06-15)**. La "God
+  function" del pipeline (~630 líneas, ~13 deps, 7 caminos de salida con side-effects en
+  Drive/Sheets/DB) pasó a patrón **Pipe & Filter**: un `PipelineContext` mutable fluye por
+  14 pasos discretos `(ctx) => StepResult` y un `runner` (`src/jobs/pipeline/runner.ts`)
+  los orquesta, corta al primer `halt` y **centraliza** el manejo de errores
+  (`RateLimitError` → Pendientes / error → Revisión) + la emisión **única** de `[metrics]`
+  en su `finally`. `processDriveFile` quedó como thin wrapper (~20 líneas). Refactor
+  estructural **sin cambio de comportamiento**, blindado por 8 tests de caracterización
+  nuevos (`processPendingDocuments.job.test.ts`) que cubren los 7 caminos (ok /
+  duplicate-hash / duplicate-business-key / unassigned / no_amount / no_period /
+  rate_limited / failed) y verifican `[metrics]` en cada uno. Los 2 `await import()`
+  dinámicos (`resolveStatementsFolders`, `buildInvoiceFileName`) pasaron a seams
+  inyectables del `ProcessingContext`. **121 tests verdes**, typecheck + lint (0 errores) +
+  build:jobs OK. Sin migración. Archivos nuevos: `src/jobs/pipeline/{context,runner}.ts`.
+  Spec/plan en `docs/superpowers/{specs,plans}/2026-06-14-refactor-h2-pipeline*`. Deploy:
+  push + rebuild del worker.
+
 ### Fix
 - **Robustez del worker ante cortes del pooler de Supabase (P1017) (2026-06-14)**. El
   pooler (PgBouncer) cierra conexiones idle y se reinicia → Prisma lanza P1017. El blindaje

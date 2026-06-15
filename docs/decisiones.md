@@ -4,6 +4,58 @@ Registro de decisiones tomadas ante problemas reales encontrados en producción.
 
 ---
 
+## 2026-06-15 — Refactor H2: `processDriveFile` descompuesto en un Pipeline de pasos
+
+**Problema:** `processDriveFile` era la "God function" del proyecto (~630 líneas, ~13
+dependencias, estado mutable compartido, 7 caminos de salida con side-effects en cada paso:
+Drive, Sheets, DB). Es el código más crítico de producción y el más caro de tocar: cada
+cambio futuro de reglas de extracción/matching/organización obligaba a razonar sobre toda
+la función, con alto riesgo de regresión **silenciosa** (no rompe el build, rompe el
+procesamiento de boletas). No existía ningún test del pipeline completo.
+
+**Decisión (TDD + extracción incremental; refactor estructural SIN cambio de
+comportamiento):** patrón **Pipe & Filter**.
+- **Red de seguridad primero (innegociable):** nuevo `processPendingDocuments.job.test.ts`
+  con 8 tests de caracterización que ejercitan `processDriveFile` con todas las deps
+  mockeadas, cubriendo los 7 caminos (`ok`, `duplicate` por hash y por business key,
+  `unassigned`, `no_amount`, `no_period`, `rate_limited`, `failed`) y verificando que la
+  línea `[metrics]` se emite en cada uno. Pasan idénticos antes y después del refactor.
+- **Seams testeables (Task 0):** los 2 `await import()` dinámicos
+  (`resolveStatementsFolders`, `buildInvoiceFileName`) pasaron a deps **opcionales** del
+  `ProcessingContext`, con default al import real → en prod el comportamiento es idéntico
+  (mismo import lazy, mismo timing); en tests se inyectan mocks sin tocar Drive real.
+- **Runner + contexto (Task 2):** nuevos `src/jobs/pipeline/context.ts` (tipos
+  `PipelineContext`/`PipelineStep`/`StepResult` + `createPipelineContext`) y `runner.ts`
+  (`runPipeline`: itera los pasos, corta al primer `halt` y **centraliza** el manejo de
+  errores —`RateLimitError` → Pendientes / error genérico → Revisión— y la emisión **única**
+  de `[metrics]` en su `finally`). Antes esa orquestación vivía dentro de `processDriveFile`.
+- **14 pasos discretos (Task 3):** el cuerpo se partió en funciones
+  `(ctx) => StepResult` (download+lock, dedup hash, extracción, gate sin-monto, saneo CUIT,
+  dedup business key, limpieza clientNumber, assignment + fallback visual, canonización,
+  gate unassigned, gate sin-período, Sheets, organización de archivo, persistencia). El
+  estado que cruza pasos (buffer, extracted, isDuplicate, lspProvider, docText, assignment,
+  fileHash, etc.) vive en el `PipelineContext`. `processDriveFile` quedó como **thin
+  wrapper** que arma el contexto y llama al runner con la lista ordenada de pasos.
+
+**Alternativas descartadas:** pasos como clases con estado propio (más ceremonia; se
+prefirieron funciones, consistente con el estilo de `consortiumNormalizer.ts`); contexto
+inmutable por paso (YAGNI: el pipeline es secuencial y de un solo hilo); refactorizar sin
+tests (inaceptable para el camino crítico). Los pasos viven en el mismo módulo que
+`resolveAssignment` (no en archivos sueltos) para no exportar helpers internos ni arriesgar
+ciclos de import; `context.ts` solo hace `import type` del job (sin ciclo en runtime).
+
+**Impacto / verificación:** `processDriveFile` pasó de ~630 líneas a un wrapper de ~20;
+cada paso es ahora testeable por separado y los cambios futuros de reglas se acotan a un
+paso. Sin cambio de comportamiento observable: **121 tests verdes** (8 de caracterización +
+113 previos), typecheck + lint (0 errores; warnings pre-existentes) + build:jobs OK. Sin
+migración. Archivos nuevos: `src/jobs/pipeline/{context,runner}.ts`,
+`src/jobs/processPendingDocuments.job.test.ts`. Spec/plan:
+`docs/superpowers/{specs,plans}/2026-06-14-refactor-h2-pipeline*`. Deploy: push (CI) +
+rebuild del worker. Validación e2e opcional del owner: `diag-boleta.ts` sobre boletas reales
+(la lógica de matching/`resolveAssignment` no se tocó).
+
+---
+
 ## 2026-06-14 — Robustez del worker ante cortes del pooler de Supabase (P1017): retry acotado
 
 **Problema:** la DB (Supabase) se accede vía el pooler (PgBouncer, :6543), que cierra

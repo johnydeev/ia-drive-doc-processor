@@ -21,6 +21,8 @@ import { AiExtractionChain, createAiExtractionChain } from "@/services/aiExtract
 import { isRateLimitError, RateLimitError } from "@/lib/aiErrors";
 import { PdfTextExtractorService } from "@/services/pdfTextExtractor.service";
 import { isMissingAmount, cuitAppearsInText, appendNoAmountTag } from "@/lib/documentValidation";
+import { runPipeline } from "@/jobs/pipeline/runner";
+import { createPipelineContext, type PipelineContext, type StepResult } from "@/jobs/pipeline/context";
 
 export interface ProcessJobConfig {
   clientId: string;
@@ -55,7 +57,14 @@ export interface ProcessDriveFileInput {
 
 type GeminiModule = typeof import("@/services/geminiExtractor.service");
 
-type ProcessingContext = {
+// Seams inyectables para testing: las deps de organización en Rendiciones que el
+// pipeline carga con import dinámico inline. En producción quedan undefined y se
+// resuelven con el mismo import dinámico (comportamiento idéntico al legacy); en
+// tests se inyectan mocks para ejercitar el paso sin tocar Drive real.
+type ResolveStatementsFolders = typeof import("@/services/statementsFolders.service")["resolveStatementsFolders"];
+type BuildInvoiceFileName = typeof import("@/lib/statementsNaming")["buildInvoiceFileName"];
+
+export type ProcessingContext = {
   resolvedConfig: ProcessJobConfig;
   resolvedMapping: SheetsRowMapping;
   driveService: GoogleDriveService;
@@ -73,9 +82,12 @@ type ProcessingContext = {
   geminiApiKey?: string;
   geminiModel?: string;
   existingDuplicateKeys: Set<string>;
+  // Seams opcionales (ver arriba). Default al import dinámico real en prod.
+  resolveStatementsFolders?: ResolveStatementsFolders;
+  buildInvoiceFileName?: BuildInvoiceFileName;
 };
 
-const DEFAULT_MAPPING: SheetsRowMapping = {
+export const DEFAULT_MAPPING: SheetsRowMapping = {
   boletaNumber: "A",
   provider: "B",
   consortium: "C",
@@ -99,7 +111,7 @@ const DEFAULT_MAPPING: SheetsRowMapping = {
   paidWith: "U",
 };
 
-function createBaseSummary(totalFound: number): ProcessJobSummary {
+export function createBaseSummary(totalFound: number): ProcessJobSummary {
   return {
     clientId: "",
     clientName: "",
@@ -213,7 +225,7 @@ async function createProcessingContext(
   };
 }
 
-interface AssignmentResult {
+export interface AssignmentResult {
   consortiumId: string | undefined;
   providerId: string | undefined;
   periodId: string | undefined;
@@ -470,637 +482,707 @@ async function resolveAssignment(
   };
 }
 
-async function processDriveFile(
-  file: ProcessDriveFileInput,
-  context: ProcessingContext,
-  summary: ProcessJobSummary
-): Promise<void> {
-  const {
-    resolvedConfig, resolvedMapping, driveService, pdfExtractor, sheetsService,
-    invoiceRepository, consortiumRepository, providerRepository, lspServiceRepository,
-    geminiModule, aiChain, geminiApiKey, geminiModel,
-    existingDuplicateKeys,
-  } = context;
+// ════════════════════════════════════════════════════════════════════════════
+// Pasos del pipeline (refactor H2 — Pipe & Filter). Cada paso opera sobre el
+// `PipelineContext`, hace sus side-effects y devuelve `continue`/`halt`. El
+// runner (pipeline/runner.ts) los orquesta, corta al primer `halt` y centraliza
+// el manejo de errores + la emisión de [metrics]. Orden de ejecución en la lista
+// que arma `processDriveFile` (abajo).
+// ════════════════════════════════════════════════════════════════════════════
 
+/** 1. Descarga el PDF de Drive y lo bloquea moviéndolo a Procesando (si aplica). */
+async function downloadAndLockStep(ctx: PipelineContext): Promise<StepResult> {
+  const { file } = ctx;
+  const { resolvedConfig, driveService } = ctx.deps;
   const cid = resolvedConfig.clientId;
 
-  // ── Acumulador de métricas para la línea [metrics] (una por boleta, ver §3 spec) ──
-  const startedAt = Date.now();
-  const m: {
-    ms: Record<string, number>;
-    textSource: string | null;
-    textChars: number | null;
-    emitterBlock: boolean | null;
-    lsp: string | null;
-    ai: Record<string, unknown> | null;
-    match: { consortium: string | null; provider: string | null };
-    result: string;
-    reason: string | null;
-    extracted: Record<string, unknown> | null;
-    canonical: Record<string, unknown> | null;
-    reasonText: string | null;
-  } = {
-    ms: {}, textSource: null, textChars: null, emitterBlock: null, lsp: null,
-    ai: null, match: { consortium: null, provider: null }, result: "failed",
-    reason: "error", extracted: null, canonical: null, reasonText: null,
-  };
+  pipelineLog.fileStart(cid, file.id, file.name);
 
-  // runStep mide el elapsed; si se pasa metricKey, lo acumula en m.ms[metricKey]
-  // (acumula porque la IA puede reintentar con varios proveedores).
-  const runStep = async <T>(label: string, fn: () => Promise<T>, metricKey?: string): Promise<T> => {
-    pipelineLog.stepStart(cid, label);
-    const t0 = Date.now();
+  ctx.sourceFileUrl = buildDriveFileUrl(file.id, file.webViewLink);
+  ctx.buffer = await ctx.runStep("Descarga de Drive", () => driveService.downloadFile(file.id), "download");
+
+  // ── Lock de archivo: mover a carpeta Procesando para evitar que otro ciclo
+  // concurrente lo reprocese mientras estamos trabajando en él.
+  const processingFolderId = resolvedConfig.driveProcessingFolderId ?? null;
+  if (processingFolderId && resolvedConfig.drivePendingFolderId) {
     try {
-      return await fn();
-    } catch (error) {
-      throw new Error(`${label} failed: ${error instanceof Error ? error.message : "Unknown error"}`);
-    } finally {
-      if (metricKey) m.ms[metricKey] = (m.ms[metricKey] ?? 0) + (Date.now() - t0);
+      await driveService.moveFileToFolder(file.id, resolvedConfig.drivePendingFolderId, processingFolderId);
+      pipelineLog.stepStart(cid, `→ Lock: movido a Procesando`);
+    } catch (lockError) {
+      const msg = lockError instanceof Error ? lockError.message : "Unknown error";
+      pipelineLog.stepStart(cid, `⚠️ No se pudo mover a Procesando: ${msg}`);
     }
-  };
+  }
 
-  try {
-    pipelineLog.fileStart(cid, file.id, file.name);
+  // Carpeta origen para los movimientos finales: si hay lock, venimos de Procesando;
+  // si no, seguimos viniendo de Pendientes (comportamiento legacy).
+  ctx.finalSourceFolderId = processingFolderId ?? resolvedConfig.drivePendingFolderId;
+  return { kind: "continue" };
+}
 
-    const sourceFileUrl = buildDriveFileUrl(file.id, file.webViewLink);
-    const buffer = await runStep("Descarga de Drive", () => driveService.downloadFile(file.id), "download");
+/** 2. Deduplicación por hash SHA256 del binario. */
+async function dedupHashStep(ctx: PipelineContext): Promise<StepResult> {
+  const { invoiceRepository } = ctx.deps;
+  const cid = ctx.deps.resolvedConfig.clientId;
 
-    // ── Lock de archivo: mover a carpeta Procesando para evitar que otro ciclo
-    // concurrente lo reprocese mientras estamos trabajando en él.
-    const processingFolderId = resolvedConfig.driveProcessingFolderId ?? null;
-    if (processingFolderId && resolvedConfig.drivePendingFolderId) {
-      try {
-        await driveService.moveFileToFolder(file.id, resolvedConfig.drivePendingFolderId, processingFolderId);
-        pipelineLog.stepStart(cid, `→ Lock: movido a Procesando`);
-      } catch (lockError) {
-        const msg = lockError instanceof Error ? lockError.message : "Unknown error";
-        pipelineLog.stepStart(cid, `⚠️ No se pudo mover a Procesando: ${msg}`);
-      }
-    }
+  ctx.fileHash = invoiceRepository.computeDocumentHash(ctx.buffer!);
+  ctx.existingByHash = await ctx.runStep(
+    "Verificación duplicado por hash",
+    () => invoiceRepository.findDuplicateByHash(cid, ctx.fileHash),
+    "dedupHash"
+  );
+  pipelineLog.hashResult(cid, ctx.fileHash, Boolean(ctx.existingByHash));
+  ctx.isDuplicate = Boolean(ctx.existingByHash);
+  return { kind: "continue" };
+}
 
-    // Carpeta origen para los movimientos finales: si hay lock, venimos de Procesando;
-    // si no, seguimos viniendo de Pendientes (comportamiento legacy).
-    const finalSourceFolderId = processingFolderId ?? resolvedConfig.drivePendingFolderId;
+/** 3. Extracción de datos (imagen Vision / PDF cacheado / PDF normal → cadena IA). */
+async function extractStep(ctx: PipelineContext): Promise<StepResult> {
+  const { file, summary } = ctx;
+  const { resolvedConfig, pdfExtractor, geminiModule, aiChain, geminiApiKey, geminiModel } = ctx.deps;
+  const m = ctx.m;
+  const runStep = ctx.runStep;
+  const cid = resolvedConfig.clientId;
+  const buffer = ctx.buffer!;
+  const existingByHash = ctx.existingByHash;
 
-    const fileHash = invoiceRepository.computeDocumentHash(buffer);
-    const existingByHash = await runStep(
-      "Verificación duplicado por hash",
-      () => invoiceRepository.findDuplicateByHash(cid, fileHash),
-      "dedupHash"
-    );
-    pipelineLog.hashResult(cid, fileHash, Boolean(existingByHash));
+  let extracted: ExtractedDocumentData | null = null;
+  let fileAiUsage: import("@/types/aiUsage.types").AiUsageMetrics | null = null;
+  let extractionWasCached = false;
+  let lspProvider: ReturnType<typeof identifyLSPProvider> = null;
+  let docText = ""; // texto del documento (para verificación CUIT-en-texto); vacío en imágenes
 
-    let extracted: ExtractedDocumentData | null = null;
-    let isDuplicate = Boolean(existingByHash);
-    let fileAiUsage: import("@/types/aiUsage.types").AiUsageMetrics | null = null;
-    let extractionWasCached = false;
+  // Detectar si el archivo es una imagen (JPG/PNG)
+  const isImage = (
+    file.mimeType?.startsWith("image/") ||
+    /\.(jpg|jpeg|png)$/i.test(file.name)
+  );
 
-    let lspProvider: ReturnType<typeof identifyLSPProvider> = null;
-    let docText = ""; // texto del documento (para verificación CUIT-en-texto); vacío en imágenes
+  if (isImage) {
+    // ── Flujo imagen: extracción directa con Gemini Vision ──
+    pipelineLog.stepStart(cid, `→ Archivo de imagen detectado (${file.mimeType ?? file.name}) — usando Gemini Vision`);
+    m.textSource = "image";
+    m.textChars = 0;
+    m.emitterBlock = false;
 
-    // Detectar si el archivo es una imagen (JPG/PNG)
-    const isImage = (
-      file.mimeType?.startsWith("image/") ||
-      /\.(jpg|jpeg|png)$/i.test(file.name)
-    );
-
-    if (isImage) {
-      // ── Flujo imagen: extracción directa con Gemini Vision ──
-      pipelineLog.stepStart(cid, `→ Archivo de imagen detectado (${file.mimeType ?? file.name}) — usando Gemini Vision`);
-      m.textSource = "image";
-      m.textChars = 0;
-      m.emitterBlock = false;
-
-      if (existingByHash?.extraction) {
-        const { sourceFileUrl: _url, isDuplicate: _dup, ...storedFields } =
-          existingByHash.extraction as ExtractedDocumentData;
-        extracted = { ...storedFields };
-        extractionWasCached = true;
-      } else if (geminiModule && geminiApiKey) {
-        const imageMimeType: "image/jpeg" | "image/png" =
-          file.mimeType?.includes("png") ? "image/png" : "image/jpeg";
-        try {
-          const extractor = new geminiModule.GeminiExtractorService({ apiKey: geminiApiKey, model: geminiModel });
-          extracted = await runStep(
-            "Extracción IA (Gemini Vision)",
-            () => extractor.extractStructuredDataFromImage(buffer, imageMimeType),
-            "ai"
-          );
-          fileAiUsage = extractor.getLastUsage?.() ?? null;
-          accumulateTokenUsage(summary.tokenUsage, fileAiUsage);
-          pipelineLog.aiExtraction(cid, "gemini", true);
-        } catch (error) {
-          const msg = error instanceof Error ? error.message : "Gemini Vision error";
-          pipelineLog.aiExtraction(cid, "gemini", false, msg);
-          // Sin cuota (429): dejar la imagen en Pendientes para reintento posterior.
-          if (isRateLimitError(error)) {
-            throw new RateLimitError("IA Vision sin cuota (429)");
-          }
-          extracted = buildOcrOnlyPayload();
-        }
-      } else {
-        pipelineLog.stepStart(cid, "⚠️ Imagen sin Gemini configurado — no se puede procesar");
-        extracted = buildOcrOnlyPayload();
-      }
-
-      if (resolvedConfig.debugMode && extracted) {
-        pipelineLog.stepStart(cid, `[DEBUG-AI] respuesta raw (sanitizada): ${safeDebugLog(JSON.stringify(extracted))}`);
-      }
-    } else if (existingByHash?.extraction) {
-      // ── Flujo PDF: duplicado por hash con extracción previa ──
+    if (existingByHash?.extraction) {
       const { sourceFileUrl: _url, isDuplicate: _dup, ...storedFields } =
         existingByHash.extraction as ExtractedDocumentData;
       extracted = { ...storedFields };
       extractionWasCached = true;
-      const text = await runStep("Extracción de texto (PDF)", () => pdfExtractor.extractTextFromPdf(buffer), "text");
-      m.textSource = pdfExtractor.getLastTextSource();
-      m.textChars = text.length;
-      m.emitterBlock = pdfExtractor.getLastHasEmitterBlock();
-      m.ms.ocr = pdfExtractor.getLastOcrMs();
-      docText = text;
-      lspProvider = identifyLSPProvider(text);
-      extracted = refineExtractionWithRawText(extracted, text);
-    } else {
-      // ── Flujo PDF: extracción normal ──
-      // Primera pasada: texto completo para detección
-      const fullText = await runStep("Extracción de texto (PDF)", () => pdfExtractor.extractTextFromPdf(buffer), "text");
-      m.textSource = pdfExtractor.getLastTextSource();
-      m.textChars = fullText.length;
-      m.emitterBlock = pdfExtractor.getLastHasEmitterBlock();
-      m.ms.ocr = pdfExtractor.getLastOcrMs();
-
-      // Detectar tipo de documento
-      lspProvider = identifyLSPProvider(fullText);
-      if (lspProvider) {
-        pipelineLog.lspDetected(cid, lspProvider);
-      }
-
-      // Para LSP, re-extraer limitando a página 1 para reducir ruido
-      const text = lspProvider
-        ? await runStep("Re-extracción página 1 (LSP)", () => pdfExtractor.extractTextFromPdf(buffer, 1), "textPage1")
-        : fullText;
-      docText = text;
-
-      if (resolvedConfig.debugMode) {
-        pipelineLog.stepStart(cid, `[DEBUG-OCR] texto (${text.length} chars, sanitizado):\n${safeDebugLog(text)}`);
-      }
-
-      // Fallback IA Gemini→OpenAI→Claude vía cadena reutilizable. El logging
-      // por intento se inyecta vía callback; el timing acumulado ("ai") lo
-      // mantiene runStep envolviendo la ejecución completa de la cadena.
-      // El flag rateLimited viene clasificado por la CADENA sobre el objeto del
-      // error (instanceof) — no re-parsear acá el texto del mensaje (bug real:
-      // el mensaje en español "sin cuota" no matcheaba "quota" y las boletas
-      // caían a OCR_ONLY → "SIN MONTO" → Revisión en vez de Pendientes).
-      let aiFailures = 0;
-      let aiRateLimited = 0;
-      const aiResult = await runStep(
-        "Extracción IA",
-        () =>
-          aiChain.run(text, (provider, ok, errorMsg, rateLimited) => {
-            pipelineLog.aiExtraction(cid, provider, ok, errorMsg);
-            if (!ok) {
-              aiFailures += 1;
-              if (rateLimited) aiRateLimited += 1;
-            }
-          }),
-        "ai"
-      );
-
-      if (aiResult) {
-        extracted = aiResult.data;
-        fileAiUsage = aiResult.usage;
+    } else if (geminiModule && geminiApiKey) {
+      const imageMimeType: "image/jpeg" | "image/png" =
+        file.mimeType?.includes("png") ? "image/png" : "image/jpeg";
+      try {
+        const extractor = new geminiModule.GeminiExtractorService({ apiKey: geminiApiKey, model: geminiModel });
+        extracted = await runStep(
+          "Extracción IA (Gemini Vision)",
+          () => extractor.extractStructuredDataFromImage(buffer, imageMimeType),
+          "ai"
+        );
+        fileAiUsage = extractor.getLastUsage?.() ?? null;
         accumulateTokenUsage(summary.tokenUsage, fileAiUsage);
-      } else if (aiFailures > 0 && aiRateLimited === aiFailures) {
-        // Todos los proveedores de IA sin cuota (429): NO degradar a OCR_ONLY
-        // (terminaría en Revisión). Se propaga como RateLimitError para dejar
-        // la boleta en Pendientes y reintentarla en un ciclo posterior.
-        throw new RateLimitError(`IA sin cuota — ${aiFailures} proveedor(es) en 429`);
-      } else {
-        pipelineLog.aiOcrFallback(cid);
+        pipelineLog.aiExtraction(cid, "gemini", true);
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : "Gemini Vision error";
+        pipelineLog.aiExtraction(cid, "gemini", false, msg);
+        // Sin cuota (429): dejar la imagen en Pendientes para reintento posterior.
+        if (isRateLimitError(error)) {
+          throw new RateLimitError("IA Vision sin cuota (429)");
+        }
         extracted = buildOcrOnlyPayload();
       }
-
-      if (resolvedConfig.debugMode && extracted) {
-        pipelineLog.stepStart(cid, `[DEBUG-AI] respuesta raw (sanitizada): ${safeDebugLog(JSON.stringify(extracted))}`);
-      }
+    } else {
+      pipelineLog.stepStart(cid, "⚠️ Imagen sin Gemini configurado — no se puede procesar");
+      extracted = buildOcrOnlyPayload();
     }
 
-    if (extracted === null) throw new Error("extraction produced no result unexpectedly");
+    if (resolvedConfig.debugMode && extracted) {
+      pipelineLog.stepStart(cid, `[DEBUG-AI] respuesta raw (sanitizada): ${safeDebugLog(JSON.stringify(extracted))}`);
+    }
+  } else if (existingByHash?.extraction) {
+    // ── Flujo PDF: duplicado por hash con extracción previa ──
+    const { sourceFileUrl: _url, isDuplicate: _dup, ...storedFields } =
+      existingByHash.extraction as ExtractedDocumentData;
+    extracted = { ...storedFields };
+    extractionWasCached = true;
+    const text = await runStep("Extracción de texto (PDF)", () => pdfExtractor.extractTextFromPdf(buffer), "text");
+    m.textSource = pdfExtractor.getLastTextSource();
+    m.textChars = text.length;
+    m.emitterBlock = pdfExtractor.getLastHasEmitterBlock();
+    m.ms.ocr = pdfExtractor.getLastOcrMs();
+    docText = text;
+    lspProvider = identifyLSPProvider(text);
+    extracted = refineExtractionWithRawText(extracted, text);
+  } else {
+    // ── Flujo PDF: extracción normal ──
+    // Primera pasada: texto completo para detección
+    const fullText = await runStep("Extracción de texto (PDF)", () => pdfExtractor.extractTextFromPdf(buffer), "text");
+    m.textSource = pdfExtractor.getLastTextSource();
+    m.textChars = fullText.length;
+    m.emitterBlock = pdfExtractor.getLastHasEmitterBlock();
+    m.ms.ocr = pdfExtractor.getLastOcrMs();
 
-    pipelineLog.extractionResult(cid, {
-      consortium: extracted.consortium,
-      provider: extracted.provider,
-      providerTaxId: extracted.providerTaxId,
-      amount: extracted.amount,
-      dueDate: extracted.dueDate,
-      allTaxIds: extracted.allTaxIds,
-    });
+    // Detectar tipo de documento
+    lspProvider = identifyLSPProvider(fullText);
+    if (lspProvider) {
+      pipelineLog.lspDetected(cid, lspProvider);
+    }
 
-    // Metadatos de extracción para [metrics]: lsp + tokens/modelo + snapshot crudo
-    // (lo que extrajo la IA, ANTES de canonizar). El snapshot va al bloque `values`
-    // (solo se emite con debugMode).
-    m.lsp = lspProvider ?? null;
-    m.ai = fileAiUsage
-      ? {
-          provider: fileAiUsage.provider ?? null,
-          model: fileAiUsage.model ?? null,
-          ok: true,
-          in: fileAiUsage.inputTokens ?? null,
-          out: fileAiUsage.outputTokens ?? null,
-          total: fileAiUsage.totalTokens ?? null,
+    // Para LSP, re-extraer limitando a página 1 para reducir ruido
+    const text = lspProvider
+      ? await runStep("Re-extracción página 1 (LSP)", () => pdfExtractor.extractTextFromPdf(buffer, 1), "textPage1")
+      : fullText;
+    docText = text;
+
+    if (resolvedConfig.debugMode) {
+      pipelineLog.stepStart(cid, `[DEBUG-OCR] texto (${text.length} chars, sanitizado):\n${safeDebugLog(text)}`);
+    }
+
+    // Fallback IA Gemini→OpenAI→Claude vía cadena reutilizable. El logging
+    // por intento se inyecta vía callback; el timing acumulado ("ai") lo
+    // mantiene runStep envolviendo la ejecución completa de la cadena.
+    // El flag rateLimited viene clasificado por la CADENA sobre el objeto del
+    // error (instanceof) — no re-parsear acá el texto del mensaje (bug real:
+    // el mensaje en español "sin cuota" no matcheaba "quota" y las boletas
+    // caían a OCR_ONLY → "SIN MONTO" → Revisión en vez de Pendientes).
+    let aiFailures = 0;
+    let aiRateLimited = 0;
+    const aiResult = await runStep(
+      "Extracción IA",
+      () =>
+        aiChain.run(text, (provider, ok, errorMsg, rateLimited) => {
+          pipelineLog.aiExtraction(cid, provider, ok, errorMsg);
+          if (!ok) {
+            aiFailures += 1;
+            if (rateLimited) aiRateLimited += 1;
+          }
+        }),
+      "ai"
+    );
+
+    if (aiResult) {
+      extracted = aiResult.data;
+      fileAiUsage = aiResult.usage;
+      accumulateTokenUsage(summary.tokenUsage, fileAiUsage);
+    } else if (aiFailures > 0 && aiRateLimited === aiFailures) {
+      // Todos los proveedores de IA sin cuota (429): NO degradar a OCR_ONLY
+      // (terminaría en Revisión). Se propaga como RateLimitError para dejar
+      // la boleta en Pendientes y reintentarla en un ciclo posterior.
+      throw new RateLimitError(`IA sin cuota — ${aiFailures} proveedor(es) en 429`);
+    } else {
+      pipelineLog.aiOcrFallback(cid);
+      extracted = buildOcrOnlyPayload();
+    }
+
+    if (resolvedConfig.debugMode && extracted) {
+      pipelineLog.stepStart(cid, `[DEBUG-AI] respuesta raw (sanitizada): ${safeDebugLog(JSON.stringify(extracted))}`);
+    }
+  }
+
+  if (extracted === null) throw new Error("extraction produced no result unexpectedly");
+
+  pipelineLog.extractionResult(cid, {
+    consortium: extracted.consortium,
+    provider: extracted.provider,
+    providerTaxId: extracted.providerTaxId,
+    amount: extracted.amount,
+    dueDate: extracted.dueDate,
+    allTaxIds: extracted.allTaxIds,
+  });
+
+  // Metadatos de extracción para [metrics]: lsp + tokens/modelo + snapshot crudo
+  // (lo que extrajo la IA, ANTES de canonizar). El snapshot va al bloque `values`
+  // (solo se emite con debugMode).
+  m.lsp = lspProvider ?? null;
+  m.ai = fileAiUsage
+    ? {
+        provider: fileAiUsage.provider ?? null,
+        model: fileAiUsage.model ?? null,
+        ok: true,
+        in: fileAiUsage.inputTokens ?? null,
+        out: fileAiUsage.outputTokens ?? null,
+        total: fileAiUsage.totalTokens ?? null,
+      }
+    : { provider: extractionWasCached ? "cached" : "ocr_only", model: null, ok: false, in: null, out: null, total: null };
+  m.extracted = {
+    consortium: extracted.consortium,
+    provider: extracted.provider,
+    taxId: extracted.providerTaxId,
+    boleta: extracted.boletaNumber,
+    due: extracted.dueDate,
+    amount: extracted.amount,
+    clientNumber: extracted.clientNumber,
+  };
+
+  ctx.extracted = extracted;
+  ctx.fileAiUsage = fileAiUsage;
+  ctx.extractionWasCached = extractionWasCached;
+  ctx.lspProvider = lspProvider;
+  ctx.docText = docText;
+  ctx.isImage = isImage;
+  return { kind: "continue" };
+}
+
+/** 4. Gate "sin monto": sin importe extraíble → Revisión (SIN MONTO). */
+async function missingAmountGate(ctx: PipelineContext): Promise<StepResult> {
+  const { file } = ctx;
+  const { resolvedConfig, driveService } = ctx.deps;
+  const m = ctx.m;
+  const cid = resolvedConfig.clientId;
+  const extracted = ctx.extracted!;
+  const finalSourceFolderId = ctx.finalSourceFolderId;
+
+  // ── Gate "sin monto": sin importe (certificados, obleas, informes) o monto no
+  // extraíble → Revisión con tag SIN MONTO. `0` es válido (boletas LSP de $0) y NO
+  // cae acá. No se escribe en Sheets ni se guarda Invoice.
+  if (isMissingAmount(extracted.amount)) {
+    m.result = "no_amount";
+    m.reason = "no_amount";
+    pipelineLog.stepStart(cid, `⚠️ Sin monto → Revisión (SIN MONTO): "${file.name}"`);
+    if (resolvedConfig.driveFailedFolderId && finalSourceFolderId) {
+      await ctx.runStep("Renombrar (SIN MONTO)", () => driveService.renameFile(file.id, appendNoAmountTag(file.name)), "move");
+      await ctx.runStep(
+        "Mover a Revisión (sin monto)",
+        () => driveService.moveFileToFolder(file.id, finalSourceFolderId, resolvedConfig.driveFailedFolderId!),
+        "move"
+      );
+      pipelineLog.movedToFailed(cid, file.id);
+    }
+    ctx.summary.unassigned += 1;
+    pipelineLog.fileCompleted(cid, file.name, { processed: 0, unassigned: 1, duplicate: false }, "SIN MONTO → Revisión");
+    return { kind: "halt", result: m.result, reason: m.reason };
+  }
+  return { kind: "continue" };
+}
+
+/** 5. Saneo de CUIT inventado (NO-LSP) + agregado de CUITs reales del texto. */
+async function cuitSanitizeStep(ctx: PipelineContext): Promise<StepResult> {
+  const cid = ctx.deps.resolvedConfig.clientId;
+  const extracted = ctx.extracted!;
+  const lspProvider = ctx.lspProvider;
+  const docText = ctx.docText;
+
+  // Boletas sindicales (SUTERH/FATERYH/SERACARH): el CUIT del papel es del
+  // CONSORCIO (no del sindicato) → mismo tratamiento determinístico que un
+  // documento no-LSP para el matching del edificio.
+  const isSindical = lspProvider === "SUTERH" || lspProvider === "FATERYH" || lspProvider === "SERACARH";
+
+  // ── Saneo de CUIT inventado (solo NO-LSP): si la IA devolvió un CUIT que no
+  // está en el texto del documento, se descarta (era alucinado). LSP de
+  // servicios se excluye: su CUIT viene del prompt (no del papel).
+  if (lspProvider === null && docText) {
+    if (extracted.providerTaxId && !cuitAppearsInText(extracted.providerTaxId, docText)) {
+      pipelineLog.stepStart(cid, `⚠️ CUIT descartado: no aparece en el texto del documento (probable invención de la IA)`);
+      extracted.providerTaxId = null;
+    }
+    if (Array.isArray(extracted.allTaxIds) && extracted.allTaxIds.length > 0) {
+      extracted.allTaxIds = extracted.allTaxIds.filter((c) => cuitAppearsInText(c, docText));
+    }
+  }
+
+  // ── CUITs reales del texto por regex + checksum (NO-LSP y sindicales) ──────
+  // Refuerzo determinístico: la IA puede omitir/malformatear el CUIT. En
+  // sindicales es el del CONSORCIO y es crítico para imputar el gasto al
+  // edificio correcto. El matching ya excluye el CUIT del consorcio del
+  // proveedor, así que sumar todos los CUITs del papel es seguro.
+  if ((lspProvider === null || isSindical) && docText) {
+    const textCuits = extractCuitsFromText(docText);
+    if (textCuits.length > 0) {
+      const merged = new Set([
+        ...(extracted.allTaxIds ?? []).map((c) => formatCuit(c) ?? c),
+        ...textCuits.map((c) => formatCuit(c) ?? c),
+      ]);
+      extracted.allTaxIds = [...merged];
+      pipelineLog.stepStart(cid, `→ CUITs del texto (regex+checksum): ${textCuits.length} — allTaxIds total: ${extracted.allTaxIds.length}`);
+    }
+  }
+  return { kind: "continue" };
+}
+
+/** 6. Deduplicación por clave de negocio (DB + claves ya vistas en esta corrida). */
+async function businessKeyDedupStep(ctx: PipelineContext): Promise<StepResult> {
+  const { invoiceRepository, existingDuplicateKeys } = ctx.deps;
+  const cid = ctx.deps.resolvedConfig.clientId;
+  const extracted = ctx.extracted!;
+
+  if (!ctx.isDuplicate) {
+    const dup = await ctx.runStep(
+      "Verificación duplicado por clave de negocio",
+      () => invoiceRepository.findDuplicateByBusinessKey(cid, extracted),
+      "dedupKey"
+    );
+    if (dup) {
+      ctx.isDuplicate = true;
+      pipelineLog.duplicateByBusinessKey(cid);
+    }
+  }
+
+  const duplicateKey = invoiceRepository.buildBusinessKeyFromData(extracted);
+  ctx.duplicateKey = duplicateKey;
+  if (!ctx.isDuplicate && duplicateKey) {
+    if (existingDuplicateKeys.has(duplicateKey)) {
+      ctx.isDuplicate = true;
+      pipelineLog.duplicateByBusinessKey(cid);
+    }
+  }
+  return { kind: "continue" };
+}
+
+/** 7. Limpieza de clientNumber (exclusivo de LSP) + flags base en `extracted`. */
+async function cleanClientNumberStep(ctx: PipelineContext): Promise<StepResult> {
+  const cid = ctx.deps.resolvedConfig.clientId;
+  const extracted = ctx.extracted!;
+
+  // Guard: clientNumber es exclusivo de boletas LSP.
+  // Si la IA alucinó un valor para una boleta normal, limpiarlo.
+  if (!ctx.lspProvider && extracted.clientNumber) {
+    pipelineLog.stepStart(cid,
+      `⚠️  clientNumber limpiado para boleta no-LSP (era "${extracted.clientNumber}")`
+    );
+    extracted.clientNumber = null;
+  }
+
+  extracted.sourceFileUrl = ctx.sourceFileUrl;
+  extracted.isDuplicate = ctx.isDuplicate ? "YES" : "NO";
+  extracted.paymentStatus = "Sin pagar";
+  return { kind: "continue" };
+}
+
+/** 8. Matching consorcio + proveedor + período (con fallback visual del emisor). */
+async function assignmentStep(ctx: PipelineContext): Promise<StepResult> {
+  const { file } = ctx;
+  const {
+    consortiumRepository, providerRepository, lspServiceRepository,
+    pdfExtractor, geminiModule, geminiApiKey, geminiModel,
+  } = ctx.deps;
+  const m = ctx.m;
+  const cid = ctx.deps.resolvedConfig.clientId;
+  const extracted = ctx.extracted!;
+  const lspProvider = ctx.lspProvider;
+
+  const assignStart = Date.now();
+  let assignment = await resolveAssignment(
+    extracted, cid, file.id, consortiumRepository, providerRepository, lspServiceRepository, lspProvider
+  );
+  m.ms.assign = Date.now() - assignStart;
+
+  // ── Fallback visual: si el proveedor no fue encontrado y el emisor
+  // estaba en imagen, intentar extracción visual con Gemini ──────────────
+  if (
+    assignment.unassigned &&
+    assignment.consortiumId &&
+    !pdfExtractor.getLastHasEmitterBlock() &&
+    geminiModule &&
+    geminiApiKey
+  ) {
+    const pngBuffer = pdfExtractor.getLastOcrPng();
+    if (pngBuffer) {
+      try {
+        pipelineLog.stepStart(cid, "→ Fallback visual: extrayendo emisor con Gemini Vision...");
+        const visualExtractor = new geminiModule.GeminiExtractorService({
+          apiKey: geminiApiKey,
+          model: geminiModel,
+        });
+        const visualResult = await visualExtractor.extractProviderFromImage(
+          pngBuffer,
+          assignment.canonicalConsortium ?? extracted.consortium ?? ""
+        );
+
+        if (visualResult.providerTaxId || visualResult.providerName) {
+          pipelineLog.stepStart(cid,
+            `→ Gemini Vision extrajo: provider="${visualResult.providerName}" ` +
+            `taxId="${visualResult.providerTaxId}"`
+          );
+
+          if (visualResult.providerTaxId) {
+            extracted.providerTaxId = visualResult.providerTaxId;
+          }
+          if (visualResult.providerName) {
+            extracted.provider = visualResult.providerName;
+          }
+
+          const visualAssignment = await resolveAssignment(
+            extracted, cid, file.id, consortiumRepository, providerRepository, lspServiceRepository, lspProvider
+          );
+
+          if (!visualAssignment.unassigned) {
+            pipelineLog.stepStart(cid, "✅ Fallback visual: proveedor encontrado");
+            assignment = visualAssignment;
+          } else {
+            pipelineLog.stepStart(cid,
+              `⚠️ Fallback visual: proveedor no encontrado en DB ` +
+              `(${visualResult.providerName} / ${visualResult.providerTaxId})`
+            );
+          }
+        } else {
+          pipelineLog.stepStart(cid, "⚠️ Fallback visual: Gemini Vision no pudo extraer el emisor");
         }
-      : { provider: extractionWasCached ? "cached" : "ocr_only", model: null, ok: false, in: null, out: null, total: null };
-    m.extracted = {
+      } catch (visualError) {
+        pipelineLog.stepStart(cid,
+          `⚠️ Fallback visual falló silenciosamente: ${visualError instanceof Error ? visualError.message : "error"}`
+        );
+      }
+    }
+  }
+  // ── Fin fallback visual ────────────────────────────────────────────────
+
+  m.match = { consortium: assignment.consortiumMatchMethod, provider: assignment.providerMatchMethod };
+  ctx.assignment = assignment;
+  return { kind: "continue" };
+}
+
+/** 9. Canonización: reemplaza datos OCR por los canónicos de DB en `extracted`. */
+async function canonizeStep(ctx: PipelineContext): Promise<StepResult> {
+  const cid = ctx.deps.resolvedConfig.clientId;
+  const m = ctx.m;
+  const extracted = ctx.extracted!;
+  const assignment = ctx.assignment!;
+
+  if (!assignment.unassigned) {
+    if (assignment.canonicalConsortium)    extracted.consortium    = assignment.canonicalConsortium;
+    if (assignment.canonicalProvider)      extracted.provider      = assignment.canonicalProvider;
+    extracted.alias = assignment.providerPaymentAlias || null;
+    if (assignment.canonicalProviderTaxId) extracted.providerTaxId = assignment.canonicalProviderTaxId;
+    extracted.period = assignment.periodLabel || null;
+    extracted.bank = assignment.consortiumBank;
+    pipelineLog.canonized(cid, extracted.consortium ?? "?", extracted.provider ?? "?", extracted.providerTaxId ?? "?");
+    m.canonical = {
       consortium: extracted.consortium,
       provider: extracted.provider,
       taxId: extracted.providerTaxId,
-      boleta: extracted.boletaNumber,
-      due: extracted.dueDate,
-      amount: extracted.amount,
-      clientNumber: extracted.clientNumber,
+      period: extracted.period,
     };
+  }
+  return { kind: "continue" };
+}
 
-    // ── Gate "sin monto": sin importe (certificados, obleas, informes) o monto no
-    // extraíble → Revisión con tag SIN MONTO. `0` es válido (boletas LSP de $0) y NO
-    // cae acá. No se escribe en Sheets ni se guarda Invoice.
-    if (isMissingAmount(extracted.amount)) {
-      m.result = "no_amount";
-      m.reason = "no_amount";
-      pipelineLog.stepStart(cid, `⚠️ Sin monto → Revisión (SIN MONTO): "${file.name}"`);
-      if (resolvedConfig.driveFailedFolderId && finalSourceFolderId) {
-        await runStep("Renombrar (SIN MONTO)", () => driveService.renameFile(file.id, appendNoAmountTag(file.name)), "move");
-        await runStep(
-          "Mover a Revisión (sin monto)",
-          () => driveService.moveFileToFolder(file.id, finalSourceFolderId, resolvedConfig.driveFailedFolderId!),
-          "move"
-        );
-        pipelineLog.movedToFailed(cid, file.id);
-      }
-      summary.unassigned += 1;
-      pipelineLog.fileCompleted(cid, file.name, { processed: 0, unassigned: 1, duplicate: false }, "SIN MONTO → Revisión");
-      return;
-    }
+/** 10. Gate "sin asignar": no matcheó consorcio/proveedor → Sin Asignar. */
+async function unassignedGate(ctx: PipelineContext): Promise<StepResult> {
+  const { file } = ctx;
+  const { resolvedConfig, driveService } = ctx.deps;
+  const m = ctx.m;
+  const cid = resolvedConfig.clientId;
+  const assignment = ctx.assignment!;
+  const finalSourceFolderId = ctx.finalSourceFolderId;
 
-    // Boletas sindicales (SUTERH/FATERYH/SERACARH): el CUIT del papel es del
-    // CONSORCIO (no del sindicato) → mismo tratamiento determinístico que un
-    // documento no-LSP para el matching del edificio.
-    const isSindical = lspProvider === "SUTERH" || lspProvider === "FATERYH" || lspProvider === "SERACARH";
-
-    // ── Saneo de CUIT inventado (solo NO-LSP): si la IA devolvió un CUIT que no
-    // está en el texto del documento, se descarta (era alucinado). LSP de
-    // servicios se excluye: su CUIT viene del prompt (no del papel).
-    if (lspProvider === null && docText) {
-      if (extracted.providerTaxId && !cuitAppearsInText(extracted.providerTaxId, docText)) {
-        pipelineLog.stepStart(cid, `⚠️ CUIT descartado: no aparece en el texto del documento (probable invención de la IA)`);
-        extracted.providerTaxId = null;
-      }
-      if (Array.isArray(extracted.allTaxIds) && extracted.allTaxIds.length > 0) {
-        extracted.allTaxIds = extracted.allTaxIds.filter((c) => cuitAppearsInText(c, docText));
-      }
-    }
-
-    // ── CUITs reales del texto por regex + checksum (NO-LSP y sindicales) ──────
-    // Refuerzo determinístico: la IA puede omitir/malformatear el CUIT. En
-    // sindicales es el del CONSORCIO y es crítico para imputar el gasto al
-    // edificio correcto. El matching ya excluye el CUIT del consorcio del
-    // proveedor, así que sumar todos los CUITs del papel es seguro.
-    if ((lspProvider === null || isSindical) && docText) {
-      const textCuits = extractCuitsFromText(docText);
-      if (textCuits.length > 0) {
-        const merged = new Set([
-          ...(extracted.allTaxIds ?? []).map((c) => formatCuit(c) ?? c),
-          ...textCuits.map((c) => formatCuit(c) ?? c),
-        ]);
-        extracted.allTaxIds = [...merged];
-        pipelineLog.stepStart(cid, `→ CUITs del texto (regex+checksum): ${textCuits.length} — allTaxIds total: ${extracted.allTaxIds.length}`);
-      }
-    }
-
-    if (!isDuplicate) {
-      const dup = await runStep(
-        "Verificación duplicado por clave de negocio",
-        () => invoiceRepository.findDuplicateByBusinessKey(cid, extracted!),
-        "dedupKey"
+  if (assignment.unassigned) {
+    m.result = "unassigned";
+    m.reason = assignment.reasonCategory ?? null;
+    m.reasonText = assignment.unassignedReason;
+    pipelineLog.movedToUnassigned(cid, file.id, assignment.unassignedReason ?? "razón desconocida");
+    if (resolvedConfig.driveUnassignedFolderId && finalSourceFolderId) {
+      await ctx.runStep(
+        "Mover a Sin Asignar",
+        () => driveService.moveFileToUnassigned(file.id, finalSourceFolderId, resolvedConfig.driveUnassignedFolderId!),
+        "move"
       );
-      if (dup) {
-        isDuplicate = true;
-        pipelineLog.duplicateByBusinessKey(cid);
-      }
     }
+    ctx.summary.unassigned += 1;
+    pipelineLog.fileCompleted(cid, file.name, { processed: 0, unassigned: 1, duplicate: false });
+    return { kind: "halt", result: m.result, reason: m.reason };
+  }
+  return { kind: "continue" };
+}
 
-    const duplicateKey = invoiceRepository.buildBusinessKeyFromData(extracted);
-    if (!isDuplicate && duplicateKey) {
-      if (existingDuplicateKeys.has(duplicateKey)) {
-        isDuplicate = true;
-        pipelineLog.duplicateByBusinessKey(cid);
-      }
-    }
+/** 11. Gate "sin período activo": consorcio OK pero sin período + statements → Revisión. */
+async function noPeriodGate(ctx: PipelineContext): Promise<StepResult> {
+  const { file } = ctx;
+  const { resolvedConfig, driveService } = ctx.deps;
+  const m = ctx.m;
+  const cid = resolvedConfig.clientId;
+  const assignment = ctx.assignment!;
+  const finalSourceFolderId = ctx.finalSourceFolderId;
 
-    // Guard: clientNumber es exclusivo de boletas LSP.
-    // Si la IA alucinó un valor para una boleta normal, limpiarlo.
-    if (!lspProvider && extracted.clientNumber) {
-      pipelineLog.stepStart(cid,
-        `⚠️  clientNumber limpiado para boleta no-LSP (era "${extracted.clientNumber}")`
+  // Red de seguridad (caso puntual): el consorcio matcheó pero no tiene período
+  // activo. El peor caso —cliente sin ningún período— ya lo cortó la llave del
+  // scheduler (0 tokens). Esta boleta puntual va a Revisión (failed) + aviso: no
+  // se organiza en Rendiciones, no se escribe en Sheets ni en DB. Solo aplica si
+  // la organización por Rendiciones está activa (statements configurada).
+  if (!ctx.isDuplicate && resolvedConfig.driveStatementsFolderId && !assignment.periodId) {
+    m.result = "no_period";
+    m.reason = "no_active_period";
+    pipelineLog.stepStart(cid, `⚠️ Consorcio "${assignment.canonicalConsortium ?? "?"}" sin período activo → Revisión`);
+    if (resolvedConfig.driveFailedFolderId && finalSourceFolderId) {
+      await ctx.runStep(
+        "Mover a Revisión (sin período activo)",
+        () => driveService.moveFileToFolder(file.id, finalSourceFolderId, resolvedConfig.driveFailedFolderId!),
+        "move"
       );
-      extracted.clientNumber = null;
+      pipelineLog.movedToFailed(cid, file.id);
     }
+    ctx.summary.unassigned += 1;
+    pipelineLog.fileCompleted(cid, file.name, { processed: 0, unassigned: 1, duplicate: false }, "SIN PERÍODO ACTIVO → Revisión");
+    return { kind: "halt", result: m.result, reason: m.reason };
+  }
+  return { kind: "continue" };
+}
 
-    extracted.sourceFileUrl = sourceFileUrl;
-    extracted.isDuplicate = isDuplicate ? "YES" : "NO";
-    extracted.paymentStatus = "Sin pagar";
+/** 12. Inserción en Google Sheets (solo si NO es duplicado). */
+async function sheetsStep(ctx: PipelineContext): Promise<StepResult> {
+  const { resolvedConfig, sheetsService, resolvedMapping } = ctx.deps;
+  const cid = resolvedConfig.clientId;
+  const extracted = ctx.extracted!;
 
-    const assignStart = Date.now();
-    let assignment = await resolveAssignment(
-      extracted, cid, file.id, consortiumRepository, providerRepository, lspServiceRepository, lspProvider
+  // Duplicados: NO se escriben en Sheets ni en DB — así la planilla y la DB
+  // se mantienen 1:1. El PDF se mueve a la carpeta "Duplicados" si está
+  // configurada; si no, a Escaneados (no se pierde, queda para revisión).
+  if (!ctx.isDuplicate) {
+    await ctx.runStep(
+      "Insertar en Google Sheets",
+      () => sheetsService.insertRow(resolvedConfig.sheetName, extracted, resolvedMapping),
+      "sheets"
     );
-    m.ms.assign = Date.now() - assignStart;
+    pipelineLog.sheetsInserted(cid);
+  } else {
+    pipelineLog.stepStart(cid, "📋 Duplicado — no se escribe en Sheets (consistencia DB↔Sheets)");
+  }
+  return { kind: "continue" };
+}
 
-    // ── Fallback visual: si el proveedor no fue encontrado y el emisor
-    // estaba en imagen, intentar extracción visual con Gemini ──────────────
-    if (
-      assignment.unassigned &&
-      assignment.consortiumId &&
-      !pdfExtractor.getLastHasEmitterBlock() &&
-      geminiModule &&
-      geminiApiKey
-    ) {
-      const pngBuffer = pdfExtractor.getLastOcrPng();
-      if (pngBuffer) {
-        try {
-          pipelineLog.stepStart(cid, "→ Fallback visual: extrayendo emisor con Gemini Vision...");
-          const visualExtractor = new geminiModule.GeminiExtractorService({
-            apiKey: geminiApiKey,
-            model: geminiModel,
-          });
-          const visualResult = await visualExtractor.extractProviderFromImage(
-            pngBuffer,
-            assignment.canonicalConsortium ?? extracted.consortium ?? ""
-          );
+/** 13. Organización del archivo en Drive (Duplicados / Rendiciones / Escaneados). */
+async function fileOrganizationStep(ctx: PipelineContext): Promise<StepResult> {
+  const { file } = ctx;
+  const { resolvedConfig, driveService } = ctx.deps;
+  const cid = resolvedConfig.clientId;
+  const extracted = ctx.extracted!;
+  const assignment = ctx.assignment!;
+  const finalSourceFolderId = ctx.finalSourceFolderId;
+  const fileHash = ctx.fileHash;
 
-          if (visualResult.providerTaxId || visualResult.providerName) {
-            pipelineLog.stepStart(cid,
-              `→ Gemini Vision extrajo: provider="${visualResult.providerName}" ` +
-              `taxId="${visualResult.providerTaxId}"`
-            );
-
-            if (visualResult.providerTaxId) {
-              extracted.providerTaxId = visualResult.providerTaxId;
-            }
-            if (visualResult.providerName) {
-              extracted.provider = visualResult.providerName;
-            }
-
-            const visualAssignment = await resolveAssignment(
-              extracted, cid, file.id, consortiumRepository, providerRepository, lspServiceRepository, lspProvider
-            );
-
-            if (!visualAssignment.unassigned) {
-              pipelineLog.stepStart(cid, "✅ Fallback visual: proveedor encontrado");
-              assignment = visualAssignment;
-            } else {
-              pipelineLog.stepStart(cid,
-                `⚠️ Fallback visual: proveedor no encontrado en DB ` +
-                `(${visualResult.providerName} / ${visualResult.providerTaxId})`
-              );
-            }
-          } else {
-            pipelineLog.stepStart(cid, "⚠️ Fallback visual: Gemini Vision no pudo extraer el emisor");
-          }
-        } catch (visualError) {
-          pipelineLog.stepStart(cid,
-            `⚠️ Fallback visual falló silenciosamente: ${visualError instanceof Error ? visualError.message : "error"}`
-          );
-        }
-      }
-    }
-    // ── Fin fallback visual ────────────────────────────────────────────────
-
-    m.match = { consortium: assignment.consortiumMatchMethod, provider: assignment.providerMatchMethod };
-
-    if (!assignment.unassigned) {
-      if (assignment.canonicalConsortium)    extracted.consortium    = assignment.canonicalConsortium;
-      if (assignment.canonicalProvider)      extracted.provider      = assignment.canonicalProvider;
-      extracted.alias = assignment.providerPaymentAlias || null;
-      if (assignment.canonicalProviderTaxId) extracted.providerTaxId = assignment.canonicalProviderTaxId;
-      extracted.period = assignment.periodLabel || null;
-      extracted.bank = assignment.consortiumBank;
-      pipelineLog.canonized(cid, extracted.consortium ?? "?", extracted.provider ?? "?", extracted.providerTaxId ?? "?");
-      m.canonical = {
-        consortium: extracted.consortium,
-        provider: extracted.provider,
-        taxId: extracted.providerTaxId,
-        period: extracted.period,
-      };
-    }
-
-    const { sourceFileUrl: _url, isDuplicate: _dup, ...extractionFields } = extracted;
-
-    if (assignment.unassigned) {
-      m.result = "unassigned";
-      m.reason = assignment.reasonCategory ?? null;
-      m.reasonText = assignment.unassignedReason;
-      pipelineLog.movedToUnassigned(cid, file.id, assignment.unassignedReason ?? "razón desconocida");
-      if (resolvedConfig.driveUnassignedFolderId && finalSourceFolderId) {
-        await runStep(
-          "Mover a Sin Asignar",
-          () => driveService.moveFileToUnassigned(file.id, finalSourceFolderId, resolvedConfig.driveUnassignedFolderId!),
-          "move"
-        );
-      }
-      summary.unassigned += 1;
-      pipelineLog.fileCompleted(cid, file.name, { processed: 0, unassigned: 1, duplicate: false });
-      return;
-    }
-
-    // Red de seguridad (caso puntual): el consorcio matcheó pero no tiene período
-    // activo. El peor caso —cliente sin ningún período— ya lo cortó la llave del
-    // scheduler (0 tokens). Esta boleta puntual va a Revisión (failed) + aviso: no
-    // se organiza en Rendiciones, no se escribe en Sheets ni en DB. Solo aplica si
-    // la organización por Rendiciones está activa (statements configurada).
-    if (!isDuplicate && resolvedConfig.driveStatementsFolderId && !assignment.periodId) {
-      m.result = "no_period";
-      m.reason = "no_active_period";
-      pipelineLog.stepStart(cid, `⚠️ Consorcio "${assignment.canonicalConsortium ?? "?"}" sin período activo → Revisión`);
-      if (resolvedConfig.driveFailedFolderId && finalSourceFolderId) {
-        await runStep(
-          "Mover a Revisión (sin período activo)",
-          () => driveService.moveFileToFolder(file.id, finalSourceFolderId, resolvedConfig.driveFailedFolderId!),
-          "move"
-        );
-        pipelineLog.movedToFailed(cid, file.id);
-      }
-      summary.unassigned += 1;
-      pipelineLog.fileCompleted(cid, file.name, { processed: 0, unassigned: 1, duplicate: false }, "SIN PERÍODO ACTIVO → Revisión");
-      return;
-    }
-
-    // Duplicados: NO se escriben en Sheets ni en DB — así la planilla y la DB
-    // se mantienen 1:1. El PDF se mueve a la carpeta "Duplicados" si está
-    // configurada; si no, a Escaneados (no se pierde, queda para revisión).
-    if (!isDuplicate) {
-      await runStep(
-        "Insertar en Google Sheets",
-        () => sheetsService.insertRow(resolvedConfig.sheetName, extracted!, resolvedMapping),
-        "sheets"
-      );
-      pipelineLog.sheetsInserted(cid);
-    } else {
-      pipelineLog.stepStart(cid, "📋 Duplicado — no se escribe en Sheets (consistencia DB↔Sheets)");
-    }
-
-    if (isDuplicate && resolvedConfig.driveDuplicatesFolderId && finalSourceFolderId) {
-      const fromFolder = finalSourceFolderId;
-      const dupFolder = resolvedConfig.driveDuplicatesFolderId;
-      await runStep(
-        "Mover a Duplicados",
-        () => driveService.moveFileToFolder(file.id, fromFolder, dupFolder),
-        "move"
-      );
-      pipelineLog.stepStart(cid, "→ Duplicado movido a carpeta Duplicados");
-    } else if (!isDuplicate && resolvedConfig.driveStatementsFolderId && finalSourceFolderId) {
-      // Boleta OK → organizar en Rendiciones/[Edificio]/[Período] (reemplaza
-      // Escaneados). La carpeta del edificio se crea/comparte la primera vez.
-      const { resolveStatementsFolders } = await import("@/services/statementsFolders.service");
-      const { buildInvoiceFileName } = await import("@/lib/statementsNaming");
-      const sf = await runStep(
-        "Resolver carpetas Rendiciones",
-        () => resolveStatementsFolders({
-          drive: driveService,
-          statementsRootId: resolvedConfig.driveStatementsFolderId!,
-          consortium: {
-            id: assignment.consortiumId!,
-            rawName: assignment.canonicalConsortium ?? assignment.consortiumId!,
-            statementsFolderId: assignment.statementsFolderId,
-          },
-          month: assignment.periodMonth!,
-          year: assignment.periodYear!,
-        }),
-        "move"
-      );
-      const newName = buildInvoiceFileName({
-        provider: extracted!.provider,
-        consortium: assignment.canonicalConsortium,
+  if (ctx.isDuplicate && resolvedConfig.driveDuplicatesFolderId && finalSourceFolderId) {
+    const fromFolder = finalSourceFolderId;
+    const dupFolder = resolvedConfig.driveDuplicatesFolderId;
+    await ctx.runStep(
+      "Mover a Duplicados",
+      () => driveService.moveFileToFolder(file.id, fromFolder, dupFolder),
+      "move"
+    );
+    pipelineLog.stepStart(cid, "→ Duplicado movido a carpeta Duplicados");
+  } else if (!ctx.isDuplicate && resolvedConfig.driveStatementsFolderId && finalSourceFolderId) {
+    // Boleta OK → organizar en Rendiciones/[Edificio]/[Período] (reemplaza
+    // Escaneados). La carpeta del edificio se crea/comparte la primera vez.
+    const resolveStatementsFolders =
+      ctx.deps.resolveStatementsFolders ??
+      (await import("@/services/statementsFolders.service")).resolveStatementsFolders;
+    const buildInvoiceFileName =
+      ctx.deps.buildInvoiceFileName ??
+      (await import("@/lib/statementsNaming")).buildInvoiceFileName;
+    const sf = await ctx.runStep(
+      "Resolver carpetas Rendiciones",
+      () => resolveStatementsFolders({
+        drive: driveService,
+        statementsRootId: resolvedConfig.driveStatementsFolderId!,
+        consortium: {
+          id: assignment.consortiumId!,
+          rawName: assignment.canonicalConsortium ?? assignment.consortiumId!,
+          statementsFolderId: assignment.statementsFolderId,
+        },
         month: assignment.periodMonth!,
         year: assignment.periodYear!,
-        boletaNumber: extracted!.boletaNumber,
-        documentHash: fileHash,
-      });
-      await runStep("Renombrar boleta", () => driveService.renameFile(file.id, newName), "move");
-      await runStep(
-        "Mover a Rendiciones",
-        () => driveService.moveFileToFolder(file.id, finalSourceFolderId, sf.periodFolderId),
-        "move"
-      );
-      pipelineLog.stepStart(cid, `📁 Organizada en Rendiciones — "${assignment.canonicalConsortium ?? "?"}"`);
-    } else {
-      // Fallback legacy (no debería ocurrir: el scheduler valida statements).
-      await runStep(
-        "Mover a Escaneados",
-        () => driveService.moveFileToScanned(file.id, finalSourceFolderId, resolvedConfig.driveScannedFolderId),
-        "move"
-      );
-      pipelineLog.movedToScanned(cid, file.id);
-    }
-
-    if (!isDuplicate) {
-      await runStep(
-        "Guardar invoice",
-        () => invoiceRepository.saveProcessedInvoice({
-          clientId: cid, documentHash: fileHash, fileId: file.id,
-          sourceFileUrl, extraction: extractionFields, isDuplicate,
-          consortiumId: assignment.consortiumId, providerId: assignment.providerId, periodId: assignment.periodId,
-          lspServiceId: assignment.lspServiceId, paymentMethod: extracted!.paymentMethod,
-          tokensInput: fileAiUsage?.inputTokens ?? null,
-          tokensOutput: fileAiUsage?.outputTokens ?? null,
-          tokensTotal: fileAiUsage?.totalTokens ?? null,
-          aiProvider: fileAiUsage?.provider ?? null,
-          aiModel: fileAiUsage?.model ?? null,
-        }),
-        "save"
-      );
-      pipelineLog.invoiceSaved(cid, isDuplicate);
-    } else {
-      pipelineLog.stepStart(cid, "📋 Duplicado — no se guarda en DB");
-    }
-
-    if (duplicateKey) existingDuplicateKeys.add(duplicateKey);
-    if (isDuplicate)  summary.duplicatesDetected += 1;
-    summary.processed += 1;
-    m.result = isDuplicate ? "duplicate" : "ok";
-    m.reason = null;
-    pipelineLog.fileCompleted(cid, file.name, { processed: 1, unassigned: 0, duplicate: isDuplicate });
-
-  } catch (error) {
-    // ── Rate-limit de IA (429): caso aparte ────────────────────────────────
-    // NO se pierde la boleta ni se marca como fallida. Se devuelve a Pendientes
-    // (si hubo lock en Procesando) y el job se completa OK; el scheduler la
-    // re-encola en un ciclo posterior, cuando la cuota se haya recuperado. Así
-    // se evita el loop de reintentos inmediatos que quemaba cuota.
-    if (error instanceof RateLimitError) {
-      m.result = "rate_limited";
-      m.reason = "rate_limit";
-      m.reasonText = error.message;
-      summary.skipped += 1;
-      summary.rateLimited = (summary.rateLimited ?? 0) + 1;
-      pipelineLog.stepStart(cid, `⏸️  Rate-limit IA → boleta devuelta a Pendientes para reintento posterior`);
-      if (resolvedConfig.driveProcessingFolderId && resolvedConfig.drivePendingFolderId) {
-        try {
-          await driveService.moveFileToFolder(
-            file.id,
-            resolvedConfig.driveProcessingFolderId,
-            resolvedConfig.drivePendingFolderId
-          );
-        } catch {
-          // best-effort: si no se puede devolver, el scheduler igual la reintentará
-        }
-      }
-      return;
-    }
-
-    summary.failed += 1;
-    const errorMessage = error instanceof Error ? error.message : "Unknown error";
-    summary.errors.push({ fileId: file.id, fileName: file.name, error: errorMessage });
-    m.result = "failed";
-    m.reason = "error";
-    m.reasonText = errorMessage;
-    pipelineLog.fileFailed(cid, file.name, errorMessage);
-    // Para el catch, intentamos usar Procesando primero (si existe) y caer a Pendientes.
-    const failSourceFolderId =
-      resolvedConfig.driveProcessingFolderId ?? resolvedConfig.drivePendingFolderId;
-    if (resolvedConfig.driveFailedFolderId && failSourceFolderId) {
-      try {
-        await driveService.moveFileToFailed(file.id, failSourceFolderId, resolvedConfig.driveFailedFolderId);
-        pipelineLog.movedToFailed(cid, file.id);
-      } catch {
-        // Silent — ya logueamos el error principal
-      }
-    }
-  } finally {
-    // Una sola línea [metrics] por boleta, en TODOS los caminos de salida
-    // (ok / unassigned / duplicate / no_period / failed). `values` solo con debug.
-    m.ms.total = Date.now() - startedAt;
-    pipelineLog.metrics(
-      {
-        ts: new Date().toISOString(),
-        client: cid,
-        file: file.name,
-        fileId: file.id,
-        mime: file.mimeType ?? null,
-        textSource: m.textSource,
-        textChars: m.textChars,
-        emitterBlock: m.emitterBlock,
-        lsp: m.lsp,
-        ai: m.ai,
-        ms: m.ms,
-        match: m.match,
-        result: m.result,
-        reason: m.reason,
-      },
-      { extracted: m.extracted, canonical: m.canonical, reasonText: m.reasonText },
-      !!resolvedConfig.debugMode
+      }),
+      "move"
     );
+    const newName = buildInvoiceFileName({
+      provider: extracted.provider,
+      consortium: assignment.canonicalConsortium,
+      month: assignment.periodMonth!,
+      year: assignment.periodYear!,
+      boletaNumber: extracted.boletaNumber,
+      documentHash: fileHash,
+    });
+    await ctx.runStep("Renombrar boleta", () => driveService.renameFile(file.id, newName), "move");
+    await ctx.runStep(
+      "Mover a Rendiciones",
+      () => driveService.moveFileToFolder(file.id, finalSourceFolderId, sf.periodFolderId),
+      "move"
+    );
+    pipelineLog.stepStart(cid, `📁 Organizada en Rendiciones — "${assignment.canonicalConsortium ?? "?"}"`);
+  } else {
+    // Fallback legacy (no debería ocurrir: el scheduler valida statements).
+    await ctx.runStep(
+      "Mover a Escaneados",
+      () => driveService.moveFileToScanned(file.id, finalSourceFolderId, resolvedConfig.driveScannedFolderId),
+      "move"
+    );
+    pipelineLog.movedToScanned(cid, file.id);
   }
+  return { kind: "continue" };
+}
+
+/** 14. Persistencia: guarda Invoice (solo si NO es dup) + actualiza summary y `m.result`. */
+async function persistStep(ctx: PipelineContext): Promise<StepResult> {
+  const { file } = ctx;
+  const { invoiceRepository, existingDuplicateKeys } = ctx.deps;
+  const m = ctx.m;
+  const cid = ctx.deps.resolvedConfig.clientId;
+  const extracted = ctx.extracted!;
+  const assignment = ctx.assignment!;
+  const fileHash = ctx.fileHash;
+  const fileAiUsage = ctx.fileAiUsage;
+  const isDuplicate = ctx.isDuplicate;
+  const duplicateKey = ctx.duplicateKey;
+  const sourceFileUrl = ctx.sourceFileUrl;
+
+  const { sourceFileUrl: _url, isDuplicate: _dup, ...extractionFields } = extracted;
+
+  if (!isDuplicate) {
+    await ctx.runStep(
+      "Guardar invoice",
+      () => invoiceRepository.saveProcessedInvoice({
+        clientId: cid, documentHash: fileHash, fileId: file.id,
+        sourceFileUrl, extraction: extractionFields, isDuplicate,
+        consortiumId: assignment.consortiumId, providerId: assignment.providerId, periodId: assignment.periodId,
+        lspServiceId: assignment.lspServiceId, paymentMethod: extracted.paymentMethod,
+        tokensInput: fileAiUsage?.inputTokens ?? null,
+        tokensOutput: fileAiUsage?.outputTokens ?? null,
+        tokensTotal: fileAiUsage?.totalTokens ?? null,
+        aiProvider: fileAiUsage?.provider ?? null,
+        aiModel: fileAiUsage?.model ?? null,
+      }),
+      "save"
+    );
+    pipelineLog.invoiceSaved(cid, isDuplicate);
+  } else {
+    pipelineLog.stepStart(cid, "📋 Duplicado — no se guarda en DB");
+  }
+
+  if (duplicateKey) existingDuplicateKeys.add(duplicateKey);
+  if (isDuplicate)  ctx.summary.duplicatesDetected += 1;
+  ctx.summary.processed += 1;
+  m.result = isDuplicate ? "duplicate" : "ok";
+  m.reason = null;
+  pipelineLog.fileCompleted(cid, file.name, { processed: 1, unassigned: 0, duplicate: isDuplicate });
+  return { kind: "halt", result: m.result, reason: m.reason };
+}
+
+export async function processDriveFile(
+  file: ProcessDriveFileInput,
+  context: ProcessingContext,
+  summary: ProcessJobSummary
+): Promise<void> {
+  // Thin wrapper: arma el PipelineContext y delega en el runner, que orquesta
+  // los pasos, corta al primer `halt` y centraliza errores + emisión de [metrics].
+  const ctx = createPipelineContext(file, context, summary);
+  await runPipeline(
+    [
+      downloadAndLockStep,
+      dedupHashStep,
+      extractStep,
+      missingAmountGate,
+      cuitSanitizeStep,
+      businessKeyDedupStep,
+      cleanClientNumberStep,
+      assignmentStep,
+      canonizeStep,
+      unassignedGate,
+      noPeriodGate,
+      sheetsStep,
+      fileOrganizationStep,
+      persistStep,
+    ],
+    ctx
+  );
 }
 
 function buildLegacyConfig(sheetName: string, mapping?: SheetsRowMapping): ProcessJobConfig {
