@@ -65,11 +65,13 @@ src/
 │       │   └── [id]/          # UI edición de configuración de cliente
 │       └── page.tsx           # Panel admin principal
 ├── jobs/
-│   ├── processPendingDocuments.job.ts  # ← PIPELINE PRINCIPAL
+│   ├── processPendingDocuments.job.ts  # ← PIPELINE PRINCIPAL (thin wrapper + pasos)
+│   ├── pipeline/               # Pipe & Filter: context.ts (tipos+factory) + runner.ts
 │   ├── scheduler.ts
 │   └── jobWorkerMain.ts
 ├── lib/
 │   ├── extraction.ts           # Router LSP + prompts por empresa + prompt facturas
+│   ├── documentClassifier.ts   # Triage heurístico boleta vs no-boleta (capa 1)
 │   ├── consortiumNormalizer.ts # Normalización + fuzzy + alias match + limpieza LSP
 │   ├── businessKey.ts          # Normalización de montos para deduplicación
 │   └── clientProcessingConfig.ts
@@ -176,10 +178,13 @@ Siempre usar `resolveGoogleConfig(client)` para construir el `GoogleSheetsServic
 **Nunca** pasar `client.googleConfigJson.privateKey` directo — está encriptada → error `error:1E08010C:DECODER routines::unsupported`.
 ---
 ## Pipeline de procesamiento (processPendingDocuments.job.ts)
+
+**Arquitectura (Pipe & Filter, refactor H2 2026-06-15):** `processDriveFile` es un thin wrapper que arma un `PipelineContext` (estado mutable) y llama a `runPipeline` (`jobs/pipeline/runner.ts`), que itera **pasos discretos** `(ctx) => StepResult`, corta al primer `halt` y **centraliza** el manejo de errores (RateLimitError → Pendientes / error → Revisión) + la emisión **única** de `[metrics]` en su `finally`. Cada paso es una función en `processPendingDocuments.job.ts`, testeable por separado (red de caracterización en `processPendingDocuments.job.test.ts`, 1 test por camino de salida). Flujo lógico:
+
 1. **Download** PDF desde Drive
 2. **Dedup hash** → SHA256 del binario
-3. **Extracción texto** → pdf-parse → fallback OCR (tesseract)
-4. **Extracción IA** → Gemini → fallback OpenAI → fallback OCR_ONLY
+3. **Extracción texto** (`textExtractStep`, sin tokens) → pdf-parse → fallback OCR (tesseract). Luego **triage capa 1** (`documentTriageGate`): heurística `classifyDocumentType` sobre el texto ANTES de la IA → si es claramente no-boleta (oblea, certificado de fumigación, plano…) se renombra `[NO BOLETA]` y va a Revisión **sin gastar tokens** (sesgo conservador: ante la duda, es boleta).
+4. **Extracción IA** (`aiExtractStep`) → Gemini → fallback OpenAI → fallback OCR_ONLY. Luego **triage capa 2** (`isBoletaGate`): si la IA devolvió `isBoleta=false` → `[NO BOLETA]` + Revisión.
 5. **Dedup business key** → boletaNumber + providerTaxId + dueDate + amount
 6. **Resolve assignment** → match consorcio + proveedor + período activo del consorcio
 7. **Canonización** → reemplazar datos OCR por datos canónicos de DB
@@ -188,6 +193,7 @@ Siempre usar `resolveGoogleConfig(client)` para construir el `GoogleSheetsServic
 10. **Organizar / Mover archivo** (desde 2026-06-07):
     - **Boleta OK** → se **renombra** y se mueve a **`Rendiciones/[Edificio]/[Período]`** (`driveFoldersJson.statements`). La carpeta del edificio se crea y comparte pública la 1ª vez (link en `Consortium.statementsFolderUrl`). Reemplaza el viejo destino "Escaneados".
     - **Sin Asignar** → carpeta Sin Asignar (no matcheó).
+    - **No es boleta** → **Revisión** (`failed`) renombrado `[NO BOLETA]` (triage capa 1/2). NO Sheets ni DB. Contador `summary.notBoleta`, `m.result="not_boleta"`.
     - **Duplicado** → carpeta **Duplicados** (si `driveFoldersJson.duplicates`; sino Escaneados). NO va a Rendiciones.
     - **Consorcio sin período activo** → **Revisión** (`failed`) + aviso (caso puntual; el peor caso —cliente sin ningún período— lo corta la llave del scheduler).
 11. **Guardar Invoice** + métricas (con lspServiceId y paymentMethod si aplica). **Solo si NO es duplicado** (los duplicados no se persisten en DB — lo impide el unique `uq_invoice_business_key`).
@@ -379,6 +385,7 @@ Customizable por cliente en `extractionConfigJson.columnMapping`.
 - **PowerShell:** No usar `&&`. Siempre comandos por separado.
 - **Migraciones:** `npx prisma migrate deploy` → `npx prisma generate`. Nunca modificar tablas en Supabase Studio directamente.
 - **Prisma generate:** Parar todos los procesos antes (el `.dll` queda bloqueado en Windows).
+- **Tests:** Vitest (`npm test` / `npx vitest run`); archivos `src/**/*.test.ts`. El pipeline tiene tests de caracterización (`processPendingDocuments.job.test.ts`): correrlos verdes ANTES y DESPUÉS de tocar el pipeline. Verificación completa: `npm run typecheck` + `npm run lint` + `npm run build:jobs`.
 - **Edge Runtime (`middleware.ts`):** Usar Web Crypto API, no `import { createHmac } from "crypto"`.
 - **Tokens de IA:** `extractRelevantLines(text, 80)` — primeras 80 líneas no vacías.
 - **Formato de monto:** siempre `es-AR` con `Intl.NumberFormat`.
