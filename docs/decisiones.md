@@ -4,6 +4,92 @@ Registro de decisiones tomadas ante problemas reales encontrados en producción.
 
 ---
 
+## 2026-06-14 — Robustez del worker ante cortes del pooler de Supabase (P1017): retry acotado
+
+**Problema:** la DB (Supabase) se accede vía el pooler (PgBouncer, :6543), que cierra
+conexiones idle y se reinicia → Prisma lanza `P1017 "Server has closed the connection"`. El
+blindaje del 11/06 cubría solo `claimNextJob`; las queries dentro de `handleJob` —sobre todo
+`finalizeJob`— no tenían retry. Un P1017 ahí dejaba el job en `PROCESSING` (zombie) hasta el
+reaper (>30 min); si pegaba **tras** procesar OK, el reaper lo re-encolaba → **reproceso que
+gasta cuota IA**.
+
+**Decisión (TDD, 13 tests):** nuevo `src/lib/dbRetry.ts` que espeja el patrón
+`callWithRetry` de `aiErrors.ts`:
+- `isTransientDbError()`: matcher **acotado** a conexión transitoria (P1017/P1001/"server
+  has closed the connection"/ECONNRESET/pool-timeout). **NO** reusa `isPrismaConnectionError`
+  (demasiado amplio: matchea "database"/schema → reintentaría errores no transitorios e
+  inútiles).
+- `withDbRetry(fn, {retries:3, backoffMs:500, onRetry, sleep})`: reintenta solo ante
+  transitorio; propaga los demás de inmediato; al agotar relanza el **error original**.
+
+Aplicado en el worker (`jobWorkerMain.ts`) a `claimNextJob`, `client.findUnique` y
+**`finalizeJob`** (el punto crítico: cierra la ventana de zombie). El scheduler NO se tocó
+(ya es resiliente: try/catch por cliente + idempotente + intervalos). Nuevo log
+`workerLog.dbRetry`.
+
+**Alternativas descartadas:** keep-alive proactivo (YAGNI; el retry reactivo basta) y
+`DIRECT_URL` para el worker (límite de conexiones directas de Supabase + no cubre eventos del
+pooler). Reconsiderar keep-alive si el P1017 sigue frecuente post-deploy.
+
+**Verificación:** 113 tests (13 nuevos); typecheck + build:jobs + lint OK. No se puede forzar
+un P1017 real local → los unit tests del helper cubren la lógica y typecheck/build confirman
+la integración. Sin migración. Spec:
+`docs/superpowers/specs/2026-06-14-robustez-pooler-p1017-design.md`. Deploy: push (CI) +
+rebuild del worker.
+
+---
+
+## 2026-06-14 — Factura común: el consorcio receptor se ancla en "CONSORCIO DE PROPIETARIOS", no en "Razón Social:"
+
+**Problema (caso real "MAYO 2026.pdf", fue a Sin Asignar):** factura C de un
+proveedor de desinsectación (SEBASTIAN ISMAEL CABRERA, CUIT 20-31791625-7) para el
+CONSORCIO DE PROPIETARIOS de CORONEL DIAZ 1714. El proveedor matcheaba bien por
+CUIT, pero el consorcio caía en `consortium_not_found`: la IA tomó la razón social
+del EMISOR ("SEBASTIAN ISMAEL CABRERA") como consorcio. En facturas tipo C a
+consumidor final el receptor no tiene CUIT real (figura `00-00000000-0`) → el match
+SOLO puede ser por nombre, y el nombre extraído estaba mal.
+
+**Causa raíz (doble):**
+1. El prompt de facturas comunes (`buildInvoicePrompt`) le decía a la IA buscar el
+   consorcio en etiquetas "Cliente:"/"Señores:"/"A nombre de:", pero NO mencionaba
+   el marcador real de estas facturas: **"CONSORCIO DE PROPIETARIOS" + dirección**,
+   que aparece SIN etiqueta. La única "Razón Social:" rotulada es la del emisor → la
+   IA la tomaba como consorcio.
+2. El refinamiento determinístico (`inferConsortiumFromText`) anclaba justamente en
+   la primera línea "...social...:" del texto, que en una factura AFIP es SIEMPRE el
+   **EMISOR**. Lejos de corregir, reforzaba el error. **Bug latente confirmado con
+   test:** como `shouldReplace` reemplaza cuando el inferido es más largo que el
+   actual, el refinamiento podía **DEGRADAR un consorcio bien extraído por la IA al
+   nombre del emisor** (mandando otras facturas a Sin Asignar de forma silenciosa).
+
+**Decisión (TDD, 5 tests nuevos con el texto real):**
+- **Refinamiento:** `inferConsortiumFromText` ahora ancla en el marcador
+  `CONSORCIO DE PROPIETARIOS` (y variantes "CONS. PROP.", "CONS DE PROP") en vez de
+  "Razón Social:". Extrae la dirección que sigue (misma línea o las siguientes),
+  limpiando el ruido del bloque receptor (condición IVA / "Consumidor Final", CUIT
+  placeholder, localidad "C.A.B.A."). Si NO hay marcador de consorcio → devuelve
+  `null` y **NO toca** lo que extrajo la IA (cierra el bug latente: nunca más
+  devuelve el emisor). Se elimina el helper `normalizeConsortiumValue` (huérfano).
+- **Prompt (`buildInvoicePrompt`):** se le enseña a la IA que el receptor suele
+  figurar como "CONSORCIO DE PROPIETARIOS" + dirección (muchas veces sin etiqueta
+  "Cliente:" y con `00-00000000-0` / "Consumidor Final"), y que esa dirección es el
+  nombre del consorcio — nunca la "Razón Social:" del emisor.
+
+**Alternativa descartada:** resolver solo vía prompt (depende de que la IA acierte,
+sin red de seguridad). Se optó por la doble capa: prompt + refinamiento
+determinístico, que resuelve el caso **aun si la IA se equivoca**.
+
+**Verificación end-to-end:** se extendió `scripts/diag-boleta.ts` para inferir el
+consorcio con el mismo refinamiento (sin IA) y correr el matching real contra la DB.
+Con el PDF real: consorcio inferido `"CONSORCIO DE PROPIETARIOS CORONEL DIAZ 1714"`
+→ MATCH **exacto** `"CORONEL DIAZ 1714"`; proveedor → MATCH por CUIT. 100 tests,
+typecheck, build:jobs y lint OK. Sin migración.
+
+**Acción del owner:** push (CI deploya) + recuperar "MAYO 2026.pdf" de Sin Asignar →
+Pendientes para reproceso.
+
+---
+
 ## 2026-06-13 — Falso positivo del router: "PERSONAL" suelto mandaba facturas a Telecom
 
 **Problema (caso real, factura de IPLAN/NSS SA):** fue a Sin Asignar. El router

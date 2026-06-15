@@ -1,6 +1,72 @@
 # Progreso del proyecto — drive-doc-processor
 
-Actualizado al 13/06/2026 (sesión 33).
+Actualizado al 14/06/2026 (sesión 34).
+
+---
+
+## ⏭️ PENDIENTES PARA LA PRÓXIMA SESIÓN (cierre sesión 34)
+
+1. ~~**Boleta `MAYO 2026.pdf` en Sin Asignar**~~ → **RESUELTO 14/06** (ver sección
+   abajo). Era un bug real: la IA + el refinamiento tomaban la "Razón Social:" del
+   emisor como consorcio. Fix de doble capa (prompt + refinamiento determinístico).
+   **PENDIENTE: push (CI) + recuperar "MAYO 2026.pdf" de Sin Asignar → Pendientes.**
+2. ~~**Cortes del pooler de Supabase (P1017)**~~ → **MITIGADO 14/06** (ver sección
+   abajo). Retry acotado (`withDbRetry`) en las operaciones de DB del worker
+   (claim/finalize/client lookup) → un P1017 ya no deja jobs zombie ni dispara
+   reprocesos. **PENDIENTE: push (CI) + rebuild del worker.** Keep-alive proactivo
+   queda como opción si el P1017 sigue frecuente post-deploy.
+3. **Tier pago de Gemini (~USD 1-2/mes)** — decisión de negocio del owner. El free
+   tier funciona con el barrido de modelos + circuit breaker, pero tiene techo
+   diario. El pago elimina el riesgo de cuota.
+4. **Refactor H2** — descomponer `processDriveFile` (~630 líneas) en pasos
+   (Pipeline). Requiere su propia sesión dedicada. **Spec y plan ya escritos
+   (14/06), listos para ejecutar:**
+   - Spec: `docs/superpowers/specs/2026-06-14-refactor-h2-pipeline-design.md`
+   - Plan: `docs/superpowers/plans/2026-06-14-refactor-h2-pipeline.md`
+   Arranca por los **tests de caracterización** (Task 1, prerrequisito) sobre los 7
+   caminos de salida. Fases 1, 2 y H3 (MatchStrategy) ya hechas; reporte de patrones
+   en `docs/reporte-patrones-diseno.md`.
+
+---
+
+## Robustez del worker ante cortes del pooler de Supabase (P1017) (14/06/2026)
+
+**Estado: implementado y verificado (113 tests, +13 nuevos; typecheck + build:jobs +
+lint OK). PENDIENTE: push (CI) + rebuild del worker.**
+
+El blindaje del 11/06 cubría solo `claimNextJob`; un P1017 dentro de `handleJob` (sobre
+todo en `finalizeJob`) dejaba el job en PROCESSING (zombie) hasta el reaper (>30 min) y,
+si pegaba tras procesar OK, disparaba reproceso que gasta cuota IA. Fix: nuevo
+`src/lib/dbRetry.ts` (`isTransientDbError` acotado + `withDbRetry`, espeja `callWithRetry`)
+aplicado a claim/finalize/client lookup del worker. Scheduler intacto (ya resiliente).
+Spec: `docs/superpowers/specs/2026-06-14-robustez-pooler-p1017-design.md`. Detalles en
+decisiones.md.
+
+---
+
+## Fix: consorcio receptor en facturas comunes ("CONSORCIO DE PROPIETARIOS") (14/06/2026)
+
+**Estado: implementado y verificado (100 tests, +5 nuevos; diag-boleta end-to-end
+contra DB real: MATCH exacto). PENDIENTE: push (CI) + recuperar "MAYO 2026.pdf" de
+Sin Asignar → Pendientes.**
+
+Caso real "MAYO 2026.pdf" (factura C de desinsectación a CORONEL DIAZ 1714): iba a
+Sin Asignar porque la IA tomaba la "Razón Social:" del EMISOR como consorcio, y el
+refinamiento determinístico **reforzaba** el error (anclaba en la misma "Razón
+Social:"). En facturas tipo C el receptor no tiene CUIT real (`00-00000000-0`) → el
+match solo puede ser por nombre. Fix de doble capa: el prompt ahora reconoce
+"CONSORCIO DE PROPIETARIOS" + dirección como receptor, y `inferConsortiumFromText`
+ancla en ese marcador (no en "Razón Social:") limpiando el ruido del receptor. Se
+cerró además un **bug latente** (el refinamiento podía degradar un consorcio bien
+extraído al nombre del emisor). Detalles en decisiones.md.
+
+---
+
+## ⏮️ Pendientes heredados de la sesión 33 (ya deployados)
+
+Todo lo de la sesión 33 quedó **deployado y verificado en prod** (corrida del
+13/06: 21 OK · 1 Sin Asignar · 0 fallidas). Los "PENDIENTE: push/deploy" de las
+entradas de abajo **ya están resueltos**.
 
 ---
 

@@ -21,7 +21,17 @@ import { getPrismaClient, isDatabaseConfigured } from "@/lib/prisma";
 import { PdfTextExtractorService } from "@/services/pdfTextExtractor.service";
 import { extractCuitsFromText, cuitDigits, formatCuit } from "@/lib/cuit";
 import { matchConsortium, matchProvider } from "@/lib/assignmentMatching";
-import { identifyLSPProvider } from "@/lib/extraction";
+import { identifyLSPProvider, refineExtractionWithRawText } from "@/lib/extraction";
+import type { ExtractedDocumentData } from "@/types/extractedDocument.types";
+
+/** Extracted vacío para correr solo el refinamiento determinístico del consorcio. */
+function emptyExtracted(): ExtractedDocumentData {
+  return {
+    boletaNumber: null, provider: null, consortium: null, providerTaxId: null,
+    detail: null, observation: null, dueDate: null, amount: null, alias: null,
+    clientNumber: null, paymentMethod: null, allTaxIds: null,
+  };
+}
 
 loadEnv();
 
@@ -79,13 +89,18 @@ async function main() {
     }),
   ]);
 
-  // Consorcio por CUIT (el matching por nombre depende de la extracción IA,
-  // que esta herramienta no ejecuta — se diagnostica el camino determinístico).
-  const consortiumHit = matchConsortium(consortiums, null, cuits);
+  // Consorcio: el nombre se infiere determinísticamente del texto con el MISMO
+  // refinamiento del pipeline (marcador "CONSORCIO DE PROPIETARIOS" + dirección),
+  // sin IA, y se pasa al matching real junto con los CUITs.
+  const inferredConsortium = refineExtractionWithRawText(emptyExtracted(), text).consortium;
+  if (inferredConsortium) {
+    console.log(`Consorcio inferido del texto (sin IA): "${inferredConsortium}"`);
+  }
+  const consortiumHit = matchConsortium(consortiums, inferredConsortium, cuits);
   console.log(
     consortiumHit
       ? `Consorcio:  MATCH "${consortiumHit.row.canonicalName}" — ${consortiumHit.method}`
-      : "Consorcio:  sin match por CUIT (el pipeline intentaría por nombre con la extracción IA)"
+      : "Consorcio:  SIN MATCH (ni por CUIT ni por el nombre inferido del texto)"
   );
 
   // Para tipos detectados por el router (sindicales SUTERH/FATERYH/SERACARH,

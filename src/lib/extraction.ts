@@ -499,6 +499,13 @@ function buildInvoicePrompt(relevantText: string): string {
     "  CUIT e inicio de actividades. El consorcio es quien figura como CLIENTE.",
     "  Si el campo 'Cliente:' contiene solo una dirección (ej: 'BELGRANO 1431'),",
     "  ese valor ES el nombre del consorcio — usarlo tal cual.",
+    "  MUY IMPORTANTE: el receptor suele figurar como 'CONSORCIO DE PROPIETARIOS'",
+    "  seguido de la dirección del edificio (ej: 'CONSORCIO DE PROPIETARIOS",
+    "  CORONEL DIAZ 1714'), MUCHAS VECES SIN etiqueta 'Cliente:' y con CUIT",
+    "  00-00000000-0 o 'CONSUMIDOR FINAL'. Esa DIRECCIÓN es el nombre del consorcio:",
+    "  extraerla ignorando el prefijo 'CONSORCIO DE PROPIETARIOS', la condición",
+    "  frente al IVA ('Consumidor Final', etc.) y la localidad ('C.A.B.A.').",
+    "  Jamás tomar la 'Razón Social:' del bloque emisor como consorcio.",
 
     "- amount: monto TOTAL a pagar ('Importe Total', 'Total a pagar'). Nunca un subtotal.",
     "  Formato numérico sin símbolos (ej: 34400.01).",
@@ -894,11 +901,6 @@ function isMetadataLine(value: string): boolean {
   );
 }
 
-function normalizeConsortiumValue(value: string): string {
-  const noPrefix = value.replace(/^raz.{0,2}n\s*social\s*:\s*/i, "");
-  return normalizeLine(noPrefix);
-}
-
 function needsConsortiumEnrichment(consortium: string | null | undefined): boolean {
   if (!consortium) {
     return true;
@@ -913,45 +915,78 @@ function needsConsortiumEnrichment(consortium: string | null | undefined): boole
   return /^(cons|consorcio)(\s+de)?\s+prop(ietarios)?$/.test(normalized);
 }
 
+// Marcador canónico del CONSORCIO receptor en facturas argentinas de
+// administración: "CONSORCIO DE PROPIETARIOS" y variantes ("CONS. PROP.",
+// "CONSORCIO PROPIETARIOS", "CONS DE PROP"). Requiere "prop" para no confundirse
+// con "CONSUMIDOR FINAL" ni con la palabra "consorcio" suelta de un detalle.
+const CONSORTIUM_MARKER = /\bcons(?:orcio)?\.?\s*(?:de\s+)?prop(?:ietarios)?\b/i;
+
+// Ruido del bloque RECEPTOR que suele preceder a la dirección del edificio:
+// condición frente al IVA, CUIT placeholder, etiqueta CUIT/DNI.
+const RECEPTOR_NOISE_PREFIX =
+  /^(?:consumidor\s+final|responsable\s+(?:inscripto|monotributo)|monotributo|iva\s+\w+|cuit\s*:?|c\.?u\.?i\.?t\.?\s*:?|dni\s*:?|\d[\d\-./]{6,}\d)\s*/i;
+
+function stripReceptorNoise(value: string): string {
+  let v = normalizeLine(value);
+  let prev = "";
+  while (v !== prev) {
+    prev = v;
+    v = v.replace(RECEPTOR_NOISE_PREFIX, "").trim();
+  }
+  return v;
+}
+
+function isLocalityLine(value: string): boolean {
+  return /^(?:c\.?a\.?b\.?a\.?|capital\s+federal|ciudad\s+de\s+buenos\s+aires|buenos\s+aires|prov(?:incia)?\b)/i.test(
+    value.trim()
+  );
+}
+
+/**
+ * Infiere el nombre del consorcio RECEPTOR desde el texto crudo, anclando en el
+ * marcador "CONSORCIO DE PROPIETARIOS" — NO en "Razón Social:", que en una
+ * factura AFIP corresponde al EMISOR (tomarlo confundía al proveedor con el
+ * consorcio). Extrae la dirección que sigue al marcador (misma línea o las
+ * siguientes), limpiando el ruido del bloque receptor (condición IVA, CUIT
+ * placeholder, localidad). Devuelve null si no hay marcador de consorcio, para
+ * no pisar lo que extrajo la IA cuando no hay una señal confiable.
+ */
 function inferConsortiumFromText(text: string): string | null {
   const lines = splitNonEmptyLines(text);
-
-  for (let i = 0; i < lines.length; i += 1) {
-    const line = lines[i];
-    const lower = line.toLowerCase();
-    const socialIndex = lower.indexOf("social");
-    const colonIndex = line.indexOf(":");
-
-    if (socialIndex < 0 || colonIndex < 0 || colonIndex >= line.length - 1) {
-      continue;
-    }
-
-    const base = normalizeConsortiumValue(line.slice(colonIndex + 1));
-    if (!base) {
-      continue;
-    }
-
-    if (!needsConsortiumEnrichment(base)) {
-      return base;
-    }
-
-    for (let j = i + 1; j < Math.min(i + 8, lines.length); j += 1) {
-      const candidate = normalizeLine(lines[j]);
-      if (!candidate) {
-        continue;
-      }
-
-      if (isMetadataLine(candidate) || isNumericLikeLine(candidate) || !hasLetters(candidate)) {
-        continue;
-      }
-
-      return `${base} ${candidate}`.trim();
-    }
-
-    return base;
+  const markerIdx = lines.findIndex((line) => CONSORTIUM_MARKER.test(line));
+  if (markerIdx < 0) {
+    return null;
   }
 
-  return null;
+  const prefix = "CONSORCIO DE PROPIETARIOS";
+
+  // 1) Dirección en la misma línea del marcador, después de él.
+  const markerLine = lines[markerIdx];
+  const match = markerLine.match(CONSORTIUM_MARKER);
+  const afterMarker = match
+    ? stripReceptorNoise(markerLine.slice((match.index ?? 0) + match[0].length))
+    : "";
+  if (hasLetters(afterMarker)) {
+    return `${prefix} ${afterMarker}`.trim();
+  }
+
+  // 2) Dirección en las líneas siguientes (limpiando el ruido del receptor).
+  for (let j = markerIdx + 1; j < Math.min(markerIdx + 7, lines.length); j += 1) {
+    const candidate = stripReceptorNoise(lines[j]);
+    if (
+      !candidate ||
+      isLocalityLine(candidate) ||
+      isMetadataLine(candidate) ||
+      isNumericLikeLine(candidate) ||
+      !hasLetters(candidate)
+    ) {
+      continue;
+    }
+    return `${prefix} ${candidate}`.trim();
+  }
+
+  // 3) Marcador presente pero sin dirección detectable.
+  return prefix;
 }
 
 export function refineExtractionWithRawText(

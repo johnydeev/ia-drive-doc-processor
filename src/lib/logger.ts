@@ -205,6 +205,11 @@ export const workerLog = {
     log("error", "worker", `Error no manejado en job ${shortId(jobId)}: ${error}`);
   },
 
+  /** Reintento de una operación de DB ante un corte transitorio del pooler (P1017). */
+  dbRetry(op: string, attempt: number, error: string) {
+    log("warn", "worker", `Reintento DB (${op}, intento ${attempt}): ${error}`);
+  },
+
   cycleSummary(summary: {
     processed: number;
     failed: number;

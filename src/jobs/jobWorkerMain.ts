@@ -3,6 +3,7 @@ import { nextQuotaResetUtc } from "@/lib/quotaReset";
 import { parseProcessIntervalMinutes } from "@/jobs/runProcessingCycle";
 import { processSingleDriveFileJob } from "@/jobs/processPendingDocuments.job";
 import { getPrismaClient } from "@/lib/prisma";
+import { withDbRetry } from "@/lib/dbRetry";
 import { workerLog } from "@/lib/logger";
 import {
   resolveAiConfig,
@@ -22,6 +23,10 @@ const persistence = new ProcessingPersistenceService();
 
 async function sleep(ms: number): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function errMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function mapClient(row: {
@@ -48,23 +53,28 @@ function mapClient(row: {
 }
 
 async function claimNextJob() {
-  const prisma = getPrismaClient();
-  const job = await prisma.processingJob.findFirst({
-    where: { status: "PENDING" },
-    orderBy: { createdAt: "asc" },
-  });
+  return withDbRetry(
+    async () => {
+      const prisma = getPrismaClient();
+      const job = await prisma.processingJob.findFirst({
+        where: { status: "PENDING" },
+        orderBy: { createdAt: "asc" },
+      });
 
-  if (!job) return null;
+      if (!job) return null;
 
-  const now = new Date();
-  const updated = await prisma.processingJob.updateMany({
-    where: { id: job.id, status: "PENDING" },
-    data: { status: "PROCESSING", startedAt: now },
-  });
+      const now = new Date();
+      const updated = await prisma.processingJob.updateMany({
+        where: { id: job.id, status: "PENDING" },
+        data: { status: "PROCESSING", startedAt: now },
+      });
 
-  if (updated.count === 0) return null;
+      if (updated.count === 0) return null;
 
-  return { ...job, status: "PROCESSING", startedAt: now };
+      return { ...job, status: "PROCESSING", startedAt: now };
+    },
+    { onRetry: (attempt, error) => workerLog.dbRetry("claim", attempt, errMessage(error)) }
+  );
 }
 
 async function finalizeJob(
@@ -81,10 +91,14 @@ async function finalizeJob(
   const durationMs = startedAt ? now.getTime() - startedAt.getTime() : 0;
 
   if (success) {
-    await prisma.processingJob.update({
-      where: { id: jobId },
-      data: { status: "COMPLETED", finishedAt: now, errorMessage: null },
-    });
+    await withDbRetry(
+      () =>
+        prisma.processingJob.update({
+          where: { id: jobId },
+          data: { status: "COMPLETED", finishedAt: now, errorMessage: null },
+        }),
+      { onRetry: (attempt, error) => workerLog.dbRetry("finalize", attempt, errMessage(error)) }
+    );
     workerLog.jobCompleted(jobId, fileName, durationMs);
     return;
   }
@@ -92,16 +106,20 @@ async function finalizeJob(
   const nextAttempts = attempts + 1;
   const shouldFail = nextAttempts >= maxAttempts;
 
-  await prisma.processingJob.update({
-    where: { id: jobId },
-    data: {
-      status: shouldFail ? "FAILED" : "PENDING",
-      attempts: nextAttempts,
-      errorMessage: errorMessage ?? "Unknown error",
-      finishedAt: shouldFail ? now : null,
-      startedAt: shouldFail ? startedAt : null,
-    },
-  });
+  await withDbRetry(
+    () =>
+      prisma.processingJob.update({
+        where: { id: jobId },
+        data: {
+          status: shouldFail ? "FAILED" : "PENDING",
+          attempts: nextAttempts,
+          errorMessage: errorMessage ?? "Unknown error",
+          finishedAt: shouldFail ? now : null,
+          startedAt: shouldFail ? startedAt : null,
+        },
+      }),
+    { onRetry: (attempt, error) => workerLog.dbRetry("finalize", attempt, errMessage(error)) }
+  );
 
   workerLog.jobFailed(jobId, fileName, errorMessage ?? "Unknown error", nextAttempts, maxAttempts);
 
@@ -123,19 +141,23 @@ async function handleJob(job: {
 }): Promise<ProcessJobSummary | null> {
   const prisma = getPrismaClient();
 
-  const clientRow = await prisma.client.findUnique({
-    where: { id: job.clientId },
-    select: {
-      id: true,
-      name: true,
-      isActive: true,
-      batchSize: true,
-      intervalMinutes: true,
-      driveFoldersJson: true,
-      googleConfigJson: true,
-      extractionConfigJson: true,
-    },
-  });
+  const clientRow = await withDbRetry(
+    () =>
+      prisma.client.findUnique({
+        where: { id: job.clientId },
+        select: {
+          id: true,
+          name: true,
+          isActive: true,
+          batchSize: true,
+          intervalMinutes: true,
+          driveFoldersJson: true,
+          googleConfigJson: true,
+          extractionConfigJson: true,
+        },
+      }),
+    { onRetry: (attempt, error) => workerLog.dbRetry("client", attempt, errMessage(error)) }
+  );
 
   if (!clientRow) {
     workerLog.clientNotFound(job.id, job.clientId);

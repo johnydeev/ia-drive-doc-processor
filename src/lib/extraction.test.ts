@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { identifyLSPProvider, buildExtractionPrompt } from "@/lib/extraction";
+import {
+  identifyLSPProvider,
+  buildExtractionPrompt,
+  refineExtractionWithRawText,
+} from "@/lib/extraction";
+import type { ExtractedDocumentData } from "@/types/extractedDocument.types";
 
 // Encabezados REALES extraídos de los PDFs de muestra (pdf-parse, texto plano).
 const SUTERH_TEXT = [
@@ -116,5 +121,98 @@ describe("buildExtractionPrompt — prompt sindical", () => {
     const prompt = buildExtractionPrompt(SUTERH_TEXT);
     expect(prompt).toContain("allTaxIds");
     expect(prompt.toLowerCase()).toContain("consorcio");
+  });
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+// Refinamiento del consorcio receptor en facturas comunes
+// ───────────────────────────────────────────────────────────────────────────
+
+function makeExtracted(partial: Partial<ExtractedDocumentData>): ExtractedDocumentData {
+  return {
+    boletaNumber: null,
+    provider: null,
+    consortium: null,
+    providerTaxId: null,
+    detail: null,
+    observation: null,
+    dueDate: null,
+    amount: null,
+    alias: null,
+    clientNumber: null,
+    paymentMethod: null,
+    allTaxIds: null,
+    ...partial,
+  };
+}
+
+// Texto REAL extraído de "MAYO 2026.pdf" (pdf-parse): factura C de un proveedor
+// de desinsectación. El receptor es el CONSORCIO DE PROPIETARIOS de CORONEL DIAZ
+// 1714, SIN etiqueta "Cliente:" y con CUIT placeholder 00-00000000-0 (consumidor
+// final) → el match solo puede ser por nombre. La única "Razón Social:" rotulada
+// es la del EMISOR (el proveedor), lo que confunde a la IA y al refinamiento.
+const FACTURA_C_DESINSECTACION = [
+  "CORRESPONDIENTE AL MES DE: MAYO",
+  "Punto de Venta: 0003 Comp.Nro: 00001508",
+  "Fecha de Emisión: 02/06/2026",
+  "Razón Social: SEBASTIAN ISMAEL CABRERA",
+  "Domicilio Comercial: SAN NICOLAS 1234 CUIT: 20-31791625-7",
+  "1407 CAPITAL FEDERAL Ingresos Brutos: 20-31791625-7",
+  "Fecha Inicio de Actividades: 01/02/2014",
+  "01/06/2026 30/06/2026 30/06/2026",
+  "00-00000000-0 CONSORCIO DE PROPIETARIOS",
+  "CONSUMIDOR FINAL CORONEL DIAZ 1714",
+  "C.A.B.A.",
+  "SERVICIO DE DESINSECTACION DEL EDIFICIO. 70000,00",
+].join("\n");
+
+describe("refineExtractionWithRawText — consorcio receptor en facturas comunes", () => {
+  it("corrige el consorcio al receptor real cuando la IA tomó el emisor", () => {
+    const refined = refineExtractionWithRawText(
+      makeExtracted({ provider: "SEBASTIAN ISMAEL CABRERA", consortium: "SEBASTIAN ISMAEL CABRERA" }),
+      FACTURA_C_DESINSECTACION
+    );
+    expect(refined.consortium).toMatch(/CORONEL DIAZ 1714/i);
+    expect(refined.consortium ?? "").not.toMatch(/CABRERA/i);
+  });
+
+  it("no degrada un consorcio bien extraído al nombre del emisor", () => {
+    const refined = refineExtractionWithRawText(
+      makeExtracted({ provider: "SEBASTIAN ISMAEL CABRERA", consortium: "CORONEL DIAZ 1714" }),
+      FACTURA_C_DESINSECTACION
+    );
+    expect(refined.consortium).toMatch(/CORONEL DIAZ 1714/i);
+    expect(refined.consortium ?? "").not.toMatch(/CABRERA/i);
+  });
+
+  it("enriquece 'CONSORCIO DE PROPIETARIOS' pelado con la dirección del receptor", () => {
+    const refined = refineExtractionWithRawText(
+      makeExtracted({ consortium: "CONSORCIO DE PROPIETARIOS" }),
+      FACTURA_C_DESINSECTACION
+    );
+    expect(refined.consortium).toMatch(/CORONEL DIAZ 1714/i);
+  });
+
+  it("no infiere consorcio si el texto no tiene marcador de consorcio (respeta a la IA)", () => {
+    const sinMarcador = [
+      "Razón Social: FERRETERIA SAN JUAN SRL",
+      "CUIT: 30-11111111-2",
+      "Cliente: JUAN PEREZ",
+      "Total: 5000",
+    ].join("\n");
+    const refined = refineExtractionWithRawText(
+      makeExtracted({ provider: "FERRETERIA SAN JUAN SRL", consortium: "JUAN PEREZ" }),
+      sinMarcador
+    );
+    expect(refined.consortium).toBe("JUAN PEREZ");
+  });
+});
+
+describe("buildInvoicePrompt — identificación del consorcio receptor", () => {
+  it("instruye reconocer 'CONSORCIO DE PROPIETARIOS' + dirección como el receptor", () => {
+    // Input neutro que NO contiene la frase, para que el assert valide la
+    // INSTRUCCIÓN del prompt y no el eco del texto de entrada.
+    const prompt = buildExtractionPrompt("Factura B\nProveedor XYZ SA\nCUIT: 30-11111111-2\nTotal: 100");
+    expect(prompt).toContain("CONSORCIO DE PROPIETARIOS");
   });
 });

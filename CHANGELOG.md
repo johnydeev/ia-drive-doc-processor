@@ -3,6 +3,31 @@
 ## [Unreleased]
 
 ### Fix
+- **Robustez del worker ante cortes del pooler de Supabase (P1017) (2026-06-14)**. El
+  pooler (PgBouncer) cierra conexiones idle y se reinicia → Prisma lanza P1017. El blindaje
+  del 11/06 cubría solo `claimNextJob`; un P1017 dentro de `handleJob` —sobre todo en
+  `finalizeJob`— dejaba el job en PROCESSING (zombie) hasta el reaper (>30 min) y, si pegaba
+  tras procesar OK, disparaba reproceso que gasta cuota IA. Nuevo `src/lib/dbRetry.ts`
+  (`isTransientDbError` acotado a conexión transitoria + `withDbRetry`, espejando
+  `callWithRetry` de aiErrors.ts) aplicado a claim/finalize/client lookup del worker (no se
+  reusa `isPrismaConnectionError`, demasiado amplio). Scheduler intacto (ya resiliente).
+  Nuevo log `workerLog.dbRetry`. 13 tests. Sin migración. Spec en
+  `docs/superpowers/specs/2026-06-14-robustez-pooler-p1017-design.md`. Deploy: push +
+  rebuild del worker.
+- **Factura común: el consorcio receptor se ancla en "CONSORCIO DE PROPIETARIOS"
+  (2026-06-14)**. "MAYO 2026.pdf" (factura C de desinsectación a CORONEL DIAZ 1714)
+  iba a Sin Asignar: la IA tomaba la "Razón Social:" del EMISOR como consorcio y el
+  refinamiento determinístico lo reforzaba (anclaba en esa misma "Razón Social:").
+  En facturas tipo C el receptor no tiene CUIT real (`00-00000000-0`) → el match solo
+  puede ser por nombre. Fix de doble capa: `buildInvoicePrompt` ahora le enseña a la
+  IA que el receptor figura como "CONSORCIO DE PROPIETARIOS" + dirección (muchas
+  veces sin etiqueta "Cliente:"), e `inferConsortiumFromText` ancla en ese marcador
+  (no en "Razón Social:") limpiando el ruido del bloque receptor (condición IVA,
+  CUIT placeholder, localidad). Cierra además un **bug latente**: el refinamiento
+  podía DEGRADAR un consorcio bien extraído al nombre del emisor. 5 tests nuevos (con
+  el texto real); `diag-boleta.ts` ahora infiere el consorcio del texto y prueba el
+  match real → MATCH exacto "CORONEL DIAZ 1714". Sin migración. Recuperar
+  "MAYO 2026.pdf" de Sin Asignar → Pendientes tras el deploy.
 - **Router: "PERSONAL" suelto mandaba facturas a Telecom (2026-06-13)**. Una
   factura de IPLAN caía en Sin Asignar porque `CÓDIGO DE GESTIÓN PERSONAL` activaba
   la detección de Personal/Telecom (camino LSP por nro de cliente). Ahora
