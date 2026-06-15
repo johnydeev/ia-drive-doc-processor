@@ -324,4 +324,41 @@ describe("processDriveFile — caracterización de los 7 caminos de salida", () 
     expect(summary.processed).toBe(0);
     expect(metricsCore().result).toBe("failed");
   });
+
+  it("not_boleta (heurística): no llama a la IA, renombra [NO BOLETA] y va a Revisión", async () => {
+    const ctx = makeContext();
+    // Texto que la heurística clasifica como no-boleta (certificado sin monto).
+    ctx.pdfExtractor.extractTextFromPdf.mockResolvedValue(
+      "CERTIFICADO DE FUMIGACION Y CONTROL DE PLAGAS - Edificio Thames 647"
+    );
+    const summary = createBaseSummary(1);
+
+    await processDriveFile(makeFile(), asContext(ctx), summary);
+
+    expect(ctx.aiChain.run).not.toHaveBeenCalled();
+    expect(ctx.driveService.renameFile.mock.calls[0][1]).toMatch(/\[NO BOLETA\]/);
+    expect(ctx.driveService.moveFileToFolder).toHaveBeenCalledWith("file-1", "pending", "failed");
+    expect(ctx.sheetsService.insertRow).not.toHaveBeenCalled();
+    expect(ctx.invoiceRepository.saveProcessedInvoice).not.toHaveBeenCalled();
+    expect(summary.notBoleta).toBe(1);
+    expect(metricsCore().result).toBe("not_boleta");
+  });
+
+  it("not_boleta (IA): aiChain devuelve isBoleta:false → [NO BOLETA] a Revisión", async () => {
+    const ctx = makeContext();
+    ctx.aiChain.run.mockImplementation(async (_t, cb) => {
+      cb?.("gemini", true);
+      return { data: okExtraction({ isBoleta: false }), usage: null, provider: "gemini" };
+    });
+    const summary = createBaseSummary(1);
+
+    await processDriveFile(makeFile(), asContext(ctx), summary);
+
+    expect(ctx.driveService.renameFile.mock.calls[0][1]).toMatch(/\[NO BOLETA\]/);
+    expect(ctx.driveService.moveFileToFolder).toHaveBeenCalledWith("file-1", "pending", "failed");
+    expect(ctx.sheetsService.insertRow).not.toHaveBeenCalled();
+    expect(ctx.invoiceRepository.saveProcessedInvoice).not.toHaveBeenCalled();
+    expect(summary.notBoleta).toBe(1);
+    expect(metricsCore().result).toBe("not_boleta");
+  });
 });

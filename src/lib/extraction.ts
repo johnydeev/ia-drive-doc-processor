@@ -53,6 +53,9 @@ export const EXTRACTED_DOCUMENT_SCHEMA = z
       .nullable()
       .default(null)
       .transform((arr) => (arr === null ? null : arr.map((v) => normalizeCuit(v) ?? v))),
+    // Triage capa 2: la IA marca si el documento es una boleta. Default conservador
+    // `true` (si la IA lo omite, se trata como boleta y sigue el flujo normal).
+    isBoleta: z.boolean().nullable().default(true),
   })
   .passthrough();
 
@@ -69,6 +72,7 @@ const OUTPUT_JSON_TEMPLATE = {
   clientNumber: "string | null",
   paymentMethod: "DEBITO_AUTOMATICO | TRANSFERENCIA | EFECTIVO | null",
   allTaxIds: "string[] (todos los CUITs encontrados) | []",
+  isBoleta: "boolean — true si es factura/recibo/comprobante; false SOLO si NO es boleta (certificado, oblea, plano, disposición)",
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -518,6 +522,11 @@ function buildInvoicePrompt(relevantText: string): string {
     "- paymentMethod: null (no aplica a facturas normales).",
 
     ALL_TAX_IDS_RULES,
+
+    "- isBoleta: true si el documento es una FACTURA, RECIBO o COMPROBANTE de un gasto/pago",
+    "  (tiene importe a pagar, emisor, etc.). Devolvé false SOLO si el documento claramente NO",
+    "  es una boleta (por ejemplo: un certificado de desinfección/fumigación, una oblea de",
+    "  rúbrica de libros, un plano, una disposición o un informe). Ante la duda, devolvé true.",
 
     "- Usa null si un dato falta o es incierto. No inventes datos.",
 

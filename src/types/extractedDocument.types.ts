@@ -11,6 +11,8 @@
   clientNumber: string | null;
   paymentMethod: string | null;
   allTaxIds?: string[] | null;
+  /** La IA juzga si el documento es una boleta/factura/recibo (capa 2 del triage). */
+  isBoleta?: boolean | null;
   period?: string | null;
   sourceFileUrl?: string | null;
   isDuplicate?: "YES" | "NO" | null;

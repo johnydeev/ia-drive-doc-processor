@@ -4,6 +4,29 @@ Actualizado al 15/06/2026 (sesión 35).
 
 ---
 
+## Triage de documentos (boleta vs no-boleta) (15/06/2026)
+
+**Estado: implementado y verificado (133 tests; typecheck + lint + build:jobs OK).
+PENDIENTE: push (CI) + rebuild del worker.**
+
+Capa de triage híbrida sobre el pipeline (H2) que clasifica cada documento como boleta /
+no-boleta y deriva los no-boleta a Revisión con prefijo `[NO BOLETA]` (sin Sheets/DB), con
+sesgo conservador (ante la duda → es boleta):
+- **Capa 1 (heurística, 0 tokens):** `src/lib/documentClassifier.ts` en `documentTriageGate`,
+  ANTES de la IA. Desvía solo ante señal negativa fuerte (oblea, certificado de
+  fumigación/desinfección, plano, disposición…) Y ausencia de señales de boleta.
+- **Capa 2 (IA):** campo `isBoleta` (default `true`) en el schema + `buildInvoicePrompt`;
+  `isBoletaGate` desvía solo ante `false` explícito.
+- Se separó `extractStep` en `textExtractStep` + `aiExtractStep` para insertar el gate de
+  heurística sin gastar tokens. Nuevo `summary.notBoleta` + `result="not_boleta"` en métricas.
+
+Resuelve el caso clave (certificado de fumigación SIN monto → no-boleta; factura de fumigación
+CON monto → boleta) y reduce ruido/tokens. Imágenes sin texto: sólo capa 2. Sin migración.
+Detalles en decisiones.md. Spec/plan:
+`docs/superpowers/{specs,plans}/2026-06-15-triage-clasificacion-documentos*`.
+
+---
+
 ## ⏭️ PENDIENTES PARA LA PRÓXIMA SESIÓN (cierre sesión 34)
 
 1. ~~**Boleta `MAYO 2026.pdf` en Sin Asignar**~~ → **RESUELTO 14/06** (ver sección

@@ -20,7 +20,8 @@ import { GoogleSheetsService, SheetsRowMapping } from "@/services/googleSheets.s
 import { AiExtractionChain, createAiExtractionChain } from "@/services/aiExtraction";
 import { isRateLimitError, RateLimitError } from "@/lib/aiErrors";
 import { PdfTextExtractorService } from "@/services/pdfTextExtractor.service";
-import { isMissingAmount, cuitAppearsInText, appendNoAmountTag } from "@/lib/documentValidation";
+import { isMissingAmount, cuitAppearsInText, appendNoAmountTag, markNotBoleta } from "@/lib/documentValidation";
+import { classifyDocumentType } from "@/lib/documentClassifier";
 import { runPipeline } from "@/jobs/pipeline/runner";
 import { createPipelineContext, type PipelineContext, type StepResult } from "@/jobs/pipeline/context";
 
@@ -536,35 +537,123 @@ async function dedupHashStep(ctx: PipelineContext): Promise<StepResult> {
   return { kind: "continue" };
 }
 
-/** 3. Extracción de datos (imagen Vision / PDF cacheado / PDF normal → cadena IA). */
-async function extractStep(ctx: PipelineContext): Promise<StepResult> {
-  const { file, summary } = ctx;
-  const { resolvedConfig, pdfExtractor, geminiModule, aiChain, geminiApiKey, geminiModel } = ctx.deps;
+/** Deriva un documento no-boleta a Revisión con prefijo [NO BOLETA] (sin Sheets/DB). */
+async function divertNotBoleta(ctx: PipelineContext, layer: "heuristic" | "ai"): Promise<StepResult> {
+  const { file } = ctx;
+  const { resolvedConfig, driveService } = ctx.deps;
+  const m = ctx.m;
+  const cid = resolvedConfig.clientId;
+  const finalSourceFolderId = ctx.finalSourceFolderId;
+
+  m.result = "not_boleta";
+  m.reason = layer;
+  pipelineLog.stepStart(cid, `🚫 No es boleta (${layer}) → Revisión [NO BOLETA]: "${file.name}"`);
+  if (resolvedConfig.driveFailedFolderId && finalSourceFolderId) {
+    await ctx.runStep("Renombrar [NO BOLETA]", () => driveService.renameFile(file.id, markNotBoleta(file.name)), "move");
+    await ctx.runStep(
+      "Mover a Revisión (no boleta)",
+      () => driveService.moveFileToFolder(file.id, finalSourceFolderId, resolvedConfig.driveFailedFolderId!),
+      "move"
+    );
+    pipelineLog.movedToFailed(cid, file.id);
+  }
+  ctx.summary.notBoleta = (ctx.summary.notBoleta ?? 0) + 1;
+  pipelineLog.fileCompleted(cid, file.name, { processed: 0, unassigned: 0, duplicate: false }, "NO BOLETA → Revisión");
+  return { kind: "halt", result: m.result, reason: m.reason };
+}
+
+/** 3.5 (capa 1) Triage por heurística sobre el texto, ANTES de la IA (ahorra tokens). */
+async function documentTriageGate(ctx: PipelineContext): Promise<StepResult> {
+  // Sin texto (imágenes) la heurística no aplica → decide la capa 2 (isBoletaGate).
+  if (!ctx.docText) return { kind: "continue" };
+  if (classifyDocumentType(ctx.docText) === "not_boleta") {
+    return divertNotBoleta(ctx, "heuristic");
+  }
+  return { kind: "continue" };
+}
+
+/** 3a. Extracción de TEXTO (pdf-parse + detección LSP). Sin tokens de IA. */
+async function textExtractStep(ctx: PipelineContext): Promise<StepResult> {
+  const { file } = ctx;
+  const { resolvedConfig, pdfExtractor } = ctx.deps;
   const m = ctx.m;
   const runStep = ctx.runStep;
   const cid = resolvedConfig.clientId;
   const buffer = ctx.buffer!;
-  const existingByHash = ctx.existingByHash;
-
-  let extracted: ExtractedDocumentData | null = null;
-  let fileAiUsage: import("@/types/aiUsage.types").AiUsageMetrics | null = null;
-  let extractionWasCached = false;
-  let lspProvider: ReturnType<typeof identifyLSPProvider> = null;
-  let docText = ""; // texto del documento (para verificación CUIT-en-texto); vacío en imágenes
 
   // Detectar si el archivo es una imagen (JPG/PNG)
   const isImage = (
     file.mimeType?.startsWith("image/") ||
     /\.(jpg|jpeg|png)$/i.test(file.name)
   );
+  ctx.isImage = isImage;
 
   if (isImage) {
-    // ── Flujo imagen: extracción directa con Gemini Vision ──
+    // Las imágenes no tienen texto extraíble → la extracción es vía Vision (aiExtractStep).
     pipelineLog.stepStart(cid, `→ Archivo de imagen detectado (${file.mimeType ?? file.name}) — usando Gemini Vision`);
     m.textSource = "image";
     m.textChars = 0;
     m.emitterBlock = false;
+    ctx.docText = "";
+    ctx.lspProvider = null;
+    return { kind: "continue" };
+  }
 
+  if (ctx.existingByHash?.extraction) {
+    // Duplicado por hash con extracción previa: solo extraemos texto (para refine + detección).
+    const text = await runStep("Extracción de texto (PDF)", () => pdfExtractor.extractTextFromPdf(buffer), "text");
+    m.textSource = pdfExtractor.getLastTextSource();
+    m.textChars = text.length;
+    m.emitterBlock = pdfExtractor.getLastHasEmitterBlock();
+    m.ms.ocr = pdfExtractor.getLastOcrMs();
+    ctx.docText = text;
+    ctx.lspProvider = identifyLSPProvider(text);
+    return { kind: "continue" };
+  }
+
+  // Flujo normal: texto completo para detección.
+  const fullText = await runStep("Extracción de texto (PDF)", () => pdfExtractor.extractTextFromPdf(buffer), "text");
+  m.textSource = pdfExtractor.getLastTextSource();
+  m.textChars = fullText.length;
+  m.emitterBlock = pdfExtractor.getLastHasEmitterBlock();
+  m.ms.ocr = pdfExtractor.getLastOcrMs();
+
+  const lspProvider = identifyLSPProvider(fullText);
+  if (lspProvider) {
+    pipelineLog.lspDetected(cid, lspProvider);
+  }
+
+  // Para LSP, re-extraer limitando a página 1 para reducir ruido.
+  const text = lspProvider
+    ? await runStep("Re-extracción página 1 (LSP)", () => pdfExtractor.extractTextFromPdf(buffer, 1), "textPage1")
+    : fullText;
+  ctx.docText = text;
+  ctx.lspProvider = lspProvider;
+
+  if (resolvedConfig.debugMode) {
+    pipelineLog.stepStart(cid, `[DEBUG-OCR] texto (${text.length} chars, sanitizado):\n${safeDebugLog(text)}`);
+  }
+  return { kind: "continue" };
+}
+
+/** 3b. Extracción de DATOS por IA (Vision / cacheado / cadena IA sobre el texto). */
+async function aiExtractStep(ctx: PipelineContext): Promise<StepResult> {
+  const { file, summary } = ctx;
+  const { resolvedConfig, geminiModule, aiChain, geminiApiKey, geminiModel } = ctx.deps;
+  const m = ctx.m;
+  const runStep = ctx.runStep;
+  const cid = resolvedConfig.clientId;
+  const buffer = ctx.buffer!;
+  const existingByHash = ctx.existingByHash;
+  const docText = ctx.docText;
+  const lspProvider = ctx.lspProvider;
+
+  let extracted: ExtractedDocumentData | null = null;
+  let fileAiUsage: import("@/types/aiUsage.types").AiUsageMetrics | null = null;
+  let extractionWasCached = false;
+
+  if (ctx.isImage) {
+    // ── Flujo imagen: extracción directa con Gemini Vision ──
     if (existingByHash?.extraction) {
       const { sourceFileUrl: _url, isDuplicate: _dup, ...storedFields } =
         existingByHash.extraction as ExtractedDocumentData;
@@ -606,39 +695,9 @@ async function extractStep(ctx: PipelineContext): Promise<StepResult> {
       existingByHash.extraction as ExtractedDocumentData;
     extracted = { ...storedFields };
     extractionWasCached = true;
-    const text = await runStep("Extracción de texto (PDF)", () => pdfExtractor.extractTextFromPdf(buffer), "text");
-    m.textSource = pdfExtractor.getLastTextSource();
-    m.textChars = text.length;
-    m.emitterBlock = pdfExtractor.getLastHasEmitterBlock();
-    m.ms.ocr = pdfExtractor.getLastOcrMs();
-    docText = text;
-    lspProvider = identifyLSPProvider(text);
-    extracted = refineExtractionWithRawText(extracted, text);
+    extracted = refineExtractionWithRawText(extracted, docText);
   } else {
-    // ── Flujo PDF: extracción normal ──
-    // Primera pasada: texto completo para detección
-    const fullText = await runStep("Extracción de texto (PDF)", () => pdfExtractor.extractTextFromPdf(buffer), "text");
-    m.textSource = pdfExtractor.getLastTextSource();
-    m.textChars = fullText.length;
-    m.emitterBlock = pdfExtractor.getLastHasEmitterBlock();
-    m.ms.ocr = pdfExtractor.getLastOcrMs();
-
-    // Detectar tipo de documento
-    lspProvider = identifyLSPProvider(fullText);
-    if (lspProvider) {
-      pipelineLog.lspDetected(cid, lspProvider);
-    }
-
-    // Para LSP, re-extraer limitando a página 1 para reducir ruido
-    const text = lspProvider
-      ? await runStep("Re-extracción página 1 (LSP)", () => pdfExtractor.extractTextFromPdf(buffer, 1), "textPage1")
-      : fullText;
-    docText = text;
-
-    if (resolvedConfig.debugMode) {
-      pipelineLog.stepStart(cid, `[DEBUG-OCR] texto (${text.length} chars, sanitizado):\n${safeDebugLog(text)}`);
-    }
-
+    // ── Flujo PDF: extracción normal vía cadena IA sobre el texto ya extraído ──
     // Fallback IA Gemini→OpenAI→Claude vía cadena reutilizable. El logging
     // por intento se inyecta vía callback; el timing acumulado ("ai") lo
     // mantiene runStep envolviendo la ejecución completa de la cadena.
@@ -651,7 +710,7 @@ async function extractStep(ctx: PipelineContext): Promise<StepResult> {
     const aiResult = await runStep(
       "Extracción IA",
       () =>
-        aiChain.run(text, (provider, ok, errorMsg, rateLimited) => {
+        aiChain.run(docText, (provider, ok, errorMsg, rateLimited) => {
           pipelineLog.aiExtraction(cid, provider, ok, errorMsg);
           if (!ok) {
             aiFailures += 1;
@@ -718,9 +777,14 @@ async function extractStep(ctx: PipelineContext): Promise<StepResult> {
   ctx.extracted = extracted;
   ctx.fileAiUsage = fileAiUsage;
   ctx.extractionWasCached = extractionWasCached;
-  ctx.lspProvider = lspProvider;
-  ctx.docText = docText;
-  ctx.isImage = isImage;
+  return { kind: "continue" };
+}
+
+/** 3.6 (capa 2) Triage por IA: si la extracción marcó isBoleta=false, deriva a [NO BOLETA]. */
+async function isBoletaGate(ctx: PipelineContext): Promise<StepResult> {
+  if (ctx.extracted?.isBoleta === false) {
+    return divertNotBoleta(ctx, "ai");
+  }
   return { kind: "continue" };
 }
 
@@ -1168,7 +1232,10 @@ export async function processDriveFile(
     [
       downloadAndLockStep,
       dedupHashStep,
-      extractStep,
+      textExtractStep,
+      documentTriageGate,
+      aiExtractStep,
+      isBoletaGate,
       missingAmountGate,
       cuitSanitizeStep,
       businessKeyDedupStep,
@@ -1245,6 +1312,7 @@ export async function processPendingDocumentsJob(
     unassigned: summary.unassigned,
     failed: summary.failed,
     duplicatesDetected: summary.duplicatesDetected,
+    notBoleta: summary.notBoleta,
   });
 
   return summary;

@@ -21,6 +21,8 @@ export interface ProcessJobSummary {
    * (SchedulerState.aiPausedUntil) hasta el próximo reset de cuota.
    */
   rateLimited?: number;
+  /** Documentos clasificados como no-boleta (triage) y derivados a Revisión. */
+  notBoleta?: number;
   errors: ProcessJobErrorEntry[];
   tokenUsage: TokenUsageSummary;
   clientSummaries?: ProcessJobSummary[];

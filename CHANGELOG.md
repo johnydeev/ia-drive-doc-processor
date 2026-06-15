@@ -2,6 +2,22 @@
 
 ## [Unreleased]
 
+### Feature
+- **Triage de documentos: boleta vs no-boleta (2026-06-15)**. La carpeta Pendientes recibía
+  no-boletas (planos, certificados de fumigación, obleas de rúbrica, disposiciones) que igual
+  pasaban por la IA y caían en "sin monto"/Sin Asignar. Nueva capa de triage **híbrida** sobre
+  el pipeline: **capa 1** heurística (`src/lib/documentClassifier.ts`, 0 tokens) en
+  `documentTriageGate` **antes** de la IA, y **capa 2** vía campo `isBoleta` de la IA en
+  `isBoletaGate`. **Sesgo conservador**: solo desvía ante señal negativa fuerte + ausencia de
+  señales de boleta (capa 1) o `isBoleta=false` explícito (capa 2); ante la duda sigue como
+  boleta (una factura de fumigación con monto NO se desvía). El no-boleta se renombra
+  `[NO BOLETA]` y va a Revisión, sin Sheets/DB; nuevo contador `summary.notBoleta` y
+  `result="not_boleta"` en `[metrics]`. Se separó `extractStep` en `textExtractStep` +
+  `aiExtractStep` para insertar el gate de heurística sin gastar tokens. 133 tests (incl. 2 de
+  caracterización: heurística e IA). Sin migración. Spec/plan en
+  `docs/superpowers/{specs,plans}/2026-06-15-triage-clasificacion-documentos*`. Deploy: push +
+  rebuild del worker.
+
 ### Refactor
 - **H2: `processDriveFile` descompuesto en un Pipeline de pasos (2026-06-15)**. La "God
   function" del pipeline (~630 líneas, ~13 deps, 7 caminos de salida con side-effects en

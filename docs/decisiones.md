@@ -4,6 +4,46 @@ Registro de decisiones tomadas ante problemas reales encontrados en producción.
 
 ---
 
+## 2026-06-15 — Triage de documentos: clasificar boleta vs no-boleta
+
+**Problema:** la carpeta Pendientes recibe documentos que NO son boletas (planos de edificio,
+certificados de desinfección/fumigación, obleas de rúbrica de libros, disposiciones). Hoy
+todos pasaban por la IA y terminaban en "sin monto" → Revisión o en Sin Asignar, gastando
+tokens y ensuciando esas carpetas. Además hay boletas genuinas pero atípicas ("particulares"
+tipo MAYO) que no deben rechazarse por error.
+
+**Decisión:** capa de triage **híbrida en dos capas** sobre el pipeline (refactor H2), con
+**sesgo conservador** (ante la duda → es boleta; perder una boleta genuina es peor que mover
+un no-boleta a Revisión):
+- **Capa 1 — heurística (0 tokens):** `src/lib/documentClassifier.ts` (`classifyDocumentType`,
+  función pura). Devuelve `"not_boleta"` SOLO si hay señal negativa fuerte (oblea, rúbrica,
+  certificado de fumigación/desinfección/etc., plano, disposición…) **Y** ninguna señal de
+  boleta (`$`, total a pagar, importe, vencimiento, factura/recibo/comprobante, CAE, o un CUIT
+  válido). Corre en `documentTriageGate`, **antes** de la IA → corta lo evidente sin gastar
+  tokens. Resuelve el caso clave: certificado de fumigación SIN monto → no-boleta; pero
+  factura de la empresa de fumigación (con monto/CUIT) → boleta.
+- **Capa 2 — IA:** campo `isBoleta` en `EXTRACTED_DOCUMENT_SCHEMA` (default conservador `true`)
+  + instrucción en `buildInvoicePrompt`; `isBoletaGate` desvía solo ante un `false` explícito.
+- **Destino del no-boleta:** renombrar `[NO BOLETA] <nombre>` + mover a Revisión
+  (`driveFailedFolderId`), sin Sheets ni DB. Nuevo contador `summary.notBoleta` y
+  `m.result = "not_boleta"` (`reason`: `heuristic`/`ai`).
+
+Para esto se separó `extractStep` en `textExtractStep` (pdf-parse, sin tokens) + `aiExtractStep`
+(la IA), e insertaron los dos gates en el medio/después — habilitado por el pipeline Pipe &
+Filter del H2.
+
+**Alternativas descartadas:** triage solo post-IA (no ahorra tokens), solo heurístico (frágil),
+clasificar en el scheduler (lee el PDF dos veces), tipo específico del no-boleta y carpeta/archivo
+por edificio (YAGNI).
+
+**Impacto / verificación:** 133 tests (clasificador + helper + 2 de caracterización nuevos:
+not_boleta heurística e IA); typecheck + lint (0 errores) + build:jobs OK. Imágenes (sin texto)
+sólo pasan por capa 2. Sin migración (isBoleta vive en el JSON de extracción). Spec/plan:
+`docs/superpowers/{specs,plans}/2026-06-15-triage-clasificacion-documentos*`. Deploy: push (CI)
++ rebuild del worker.
+
+---
+
 ## 2026-06-15 — Refactor H2: `processDriveFile` descompuesto en un Pipeline de pasos
 
 **Problema:** `processDriveFile` era la "God function" del proyecto (~630 líneas, ~13

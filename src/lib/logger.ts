@@ -367,12 +367,13 @@ export const pipelineLog = {
     log("debug", "job", `  Carpeta pendientes: ${pendingFolder}`, shortId(clientId));
   },
 
-  batchSummary(clientId: string, summary: { totalFound: number; processed: number; unassigned: number; failed: number; duplicatesDetected: number }) {
+  batchSummary(clientId: string, summary: { totalFound: number; processed: number; unassigned: number; failed: number; duplicatesDetected: number; notBoleta?: number }) {
     miniDivider("job");
     log("info", "job", `📊 RESUMEN DEL LOTE:`, shortId(clientId));
     log("info", "job", `  Encontrados:  ${summary.totalFound}`, shortId(clientId));
     log("info", "job", `  Procesados:   ${summary.processed}`, shortId(clientId));
     log("info", "job", `  Sin asignar:  ${summary.unassigned}`, shortId(clientId));
+    log("info", "job", `  No boleta:    ${summary.notBoleta ?? 0}`, shortId(clientId));
     log("info", "job", `  Duplicados:   ${summary.duplicatesDetected}`, shortId(clientId));
     log("info", "job", `  Fallidos:     ${summary.failed}`, shortId(clientId));
     miniDivider("job");

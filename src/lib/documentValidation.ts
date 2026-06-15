@@ -31,3 +31,8 @@ export function appendNoAmountTag(fileName: string): string {
   return `${fileName.slice(0, dot)} - SIN MONTO${fileName.slice(dot)}`;
 }
 
+/** Antepone el prefijo "[NO BOLETA] " al nombre del archivo (triage de no-boletas). */
+export function markNotBoleta(fileName: string): string {
+  return `[NO BOLETA] ${fileName}`;
+}
+
