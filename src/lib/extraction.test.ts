@@ -3,8 +3,33 @@ import {
   identifyLSPProvider,
   buildExtractionPrompt,
   refineExtractionWithRawText,
+  annotateSindicalProvider,
 } from "@/lib/extraction";
 import type { ExtractedDocumentData } from "@/types/extractedDocument.types";
+
+describe("annotateSindicalProvider", () => {
+  it("anexa (SERACARH) cuando lspProvider es SERACARH (anexo de FATERYH)", () => {
+    expect(annotateSindicalProvider("FATERYH", "SERACARH")).toBe("FATERYH (SERACARH)");
+  });
+
+  it("no toca el nombre para la boleta FATERYH normal", () => {
+    expect(annotateSindicalProvider("FATERYH", "FATERYH")).toBe("FATERYH");
+  });
+
+  it("no toca otros proveedores (LSP o no-LSP)", () => {
+    expect(annotateSindicalProvider("EDESUR S.A.", "EDESUR")).toBe("EDESUR S.A.");
+    expect(annotateSindicalProvider("TIGRE ASCENSORES S.A.", null)).toBe("TIGRE ASCENSORES S.A.");
+  });
+
+  it("es idempotente: no duplica el sufijo si el nombre ya tiene SERACARH", () => {
+    expect(annotateSindicalProvider("SERACARH", "SERACARH")).toBe("SERACARH");
+    expect(annotateSindicalProvider("FATERYH (SERACARH)", "SERACARH")).toBe("FATERYH (SERACARH)");
+  });
+
+  it("provider null → null", () => {
+    expect(annotateSindicalProvider(null, "SERACARH")).toBeNull();
+  });
+});
 
 // Encabezados REALES extraídos de los PDFs de muestra (pdf-parse, texto plano).
 const SUTERH_TEXT = [

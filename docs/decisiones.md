@@ -4,6 +4,32 @@ Registro de decisiones tomadas ante problemas reales encontrados en producción.
 
 ---
 
+## 2026-06-15 — Distinción SERACARH vs FATERYH en el nombre del proveedor
+
+**Problema:** un consorcio con empleados recibe **2 boletas FATERYH** por período (verificado
+con PDFs reales de RIVADAVIA 4243): F0101 (FMVDD aporte/contribución, OS CCT, ART 27 bis) y
+F0106 (SERACARH Contribución), mismo emisor y CUIT. El router (`identifyLSPProvider`) ya las
+distingue (`lspProvider` = `"SERACARH"` vs `"FATERYH"`), pero el matching las resuelve al
+**mismo proveedor canónico "FATERYH"** (SERACARH es anexo, alias en `matchNames`), así que
+ambas quedaban con nombre/proveedor idéntico → mala UX para el administrador.
+
+**Decisión:** anotar `"(SERACARH)"` en el **texto** del proveedor cuando la boleta es SERACARH,
+sin tocar el `providerId` (FK). Nuevo helper puro `annotateSindicalProvider(provider, lspProvider)`
+en `lib/extraction.ts` (idempotente: no duplica el sufijo). Se aplica **una sola vez** en
+`canonizeStep`, justo después de asignar el proveedor canónico → como Sheets, el nombre del
+archivo en Drive y la DB se arman todos desde `extracted.provider`, la distinción aparece en
+los tres lados de forma consistente. No afecta dedup (la business key usa taxId/boleta/fecha/monto,
+no el nombre) ni el matching (re-extrae en cada corrida).
+
+**Alternativas descartadas:** anotar solo en el nombre del archivo (no cubría Sheets, pedido del
+owner); mantener Sheets distinto de la DB (requeriría dos versiones de `extracted`, más complejo
+e inconsistente).
+
+**Impacto:** 5 tests nuevos (`extraction.test.ts`); typecheck + lint + build:jobs OK; 138 tests
+totales. Sin migración. Deploy: push (CI) + rebuild del worker.
+
+---
+
 ## 2026-06-15 — Triage de documentos: clasificar boleta vs no-boleta
 
 **Problema:** la carpeta Pendientes recibe documentos que NO son boletas (planos de edificio,

@@ -3,6 +3,14 @@
 ## [Unreleased]
 
 ### Feature
+- **Distinción SERACARH en el nombre del proveedor (2026-06-15)**. Los consorcios con
+  empleados reciben 2 boletas FATERYH (F0101 = aportes FMVDD/OS/ART 27 bis, y F0106 =
+  SERACARH), que en el matching resuelven al mismo proveedor canónico "FATERYH" (SERACARH es
+  anexo vía `matchNames`) → quedaban con nombre idéntico. Nuevo helper puro
+  `annotateSindicalProvider` (`lib/extraction.ts`): cuando `lspProvider === "SERACARH"` anota
+  `"FATERYH (SERACARH)"`. Se aplica una vez en `canonizeStep` → la distinción aparece en
+  **Google Sheets, el nombre del archivo en Drive y el texto del proveedor en la DB**; el
+  `providerId` (FK) no cambia. Idempotente. 5 tests nuevos. Sin migración.
 - **Triage de documentos: boleta vs no-boleta (2026-06-15)**. La carpeta Pendientes recibía
   no-boletas (planos, certificados de fumigación, obleas de rúbrica, disposiciones) que igual
   pasaban por la IA y caían en "sin monto"/Sin Asignar. Nueva capa de triage **híbrida** sobre

@@ -4,6 +4,19 @@ Actualizado al 15/06/2026 (sesión 35).
 
 ---
 
+## Distinción SERACARH en el nombre del proveedor (15/06/2026)
+
+**Estado: implementado y verificado (138 tests, +5; typecheck + lint + build:jobs OK).
+PENDIENTE: push (CI) + rebuild del worker.**
+
+Los consorcios con empleados reciben 2 boletas FATERYH (F0101 normal y F0106 = SERACARH) que
+resolvían al mismo proveedor "FATERYH" → nombre idéntico. Nuevo helper puro
+`annotateSindicalProvider` (`lib/extraction.ts`): cuando `lspProvider === "SERACARH"` anota
+`"FATERYH (SERACARH)"`. Se aplica una vez en `canonizeStep` → la distinción aparece en Sheets,
+el nombre del archivo en Drive y la DB; el `providerId` (FK) no cambia. Detalles en decisiones.md.
+
+---
+
 ## Triage de documentos (boleta vs no-boleta) (15/06/2026)
 
 **Estado: implementado y verificado (133 tests; typecheck + lint + build:jobs OK).

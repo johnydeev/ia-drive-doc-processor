@@ -2,7 +2,7 @@ import { env } from "@/config/env";
 import { normalizeConsortiumName } from "@/lib/consortiumNormalizer";
 import { matchConsortium, matchProvider, normName } from "@/lib/assignmentMatching";
 import { cuitDigits, formatCuit, extractCuitsFromText } from "@/lib/cuit";
-import { identifyLSPProvider, LSPProvider, LSP_FALLBACK_NAMES } from "@/lib/extraction";
+import { identifyLSPProvider, LSPProvider, LSP_FALLBACK_NAMES, annotateSindicalProvider } from "@/lib/extraction";
 import { refineExtractionWithRawText } from "@/lib/extraction";
 import { createEmptyTokenUsageSummary } from "@/lib/createEmptyTokenUsageSummary";
 import { pipelineLog } from "@/lib/logger";
@@ -1006,6 +1006,10 @@ async function canonizeStep(ctx: PipelineContext): Promise<StepResult> {
   if (!assignment.unassigned) {
     if (assignment.canonicalConsortium)    extracted.consortium    = assignment.canonicalConsortium;
     if (assignment.canonicalProvider)      extracted.provider      = assignment.canonicalProvider;
+    // SERACARH (anexo de FATERYH) → mismo providerId, pero se anota "(SERACARH)" en el
+    // texto para distinguir las 2 boletas FATERYH del consorcio en Sheets, el nombre
+    // del archivo en Drive y la DB.
+    extracted.provider = annotateSindicalProvider(extracted.provider, ctx.lspProvider);
     extracted.alias = assignment.providerPaymentAlias || null;
     if (assignment.canonicalProviderTaxId) extracted.providerTaxId = assignment.canonicalProviderTaxId;
     extracted.period = assignment.periodLabel || null;

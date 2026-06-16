@@ -187,6 +187,24 @@ export function identifyLSPProvider(text: string): LSPProvider | null {
   return "GENERIC_LSP";
 }
 
+/**
+ * Anota "(SERACARH)" en el nombre del proveedor cuando la boleta es del tipo
+ * SERACARH. SERACARH se rinde bajo el MISMO proveedor que FATERYH (es un anexo,
+ * registrado como alias en `matchNames`), así que sin esto las 2 boletas FATERYH
+ * de un consorcio con empleados (FATERYH y SERACARH) quedarían con idéntico
+ * nombre/proveedor. Pura e idempotente (no duplica el sufijo). El `providerId`
+ * (FK) no cambia: esto solo afecta el texto que se muestra/guarda.
+ */
+export function annotateSindicalProvider(
+  provider: string | null,
+  lspProvider: LSPProvider | null | undefined
+): string | null {
+  if (lspProvider === "SERACARH" && provider && !/SERACARH/i.test(provider)) {
+    return `${provider} (SERACARH)`;
+  }
+  return provider;
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // Text utilities
 // ═══════════════════════════════════════════════════════════════════════════
