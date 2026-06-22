@@ -4,6 +4,40 @@ Registro de decisiones tomadas ante problemas reales encontrados en producción.
 
 ---
 
+## 2026-06-15 — Soporte ARCA F931 (SUSS): impuestos de seguridad social del consorcio
+
+**Problema:** casi todo consorcio con empleados paga mensualmente el F931 de ARCA/AFIP (aportes
+y contribuciones de seguridad social). Es recurrente y muy sistemático, pero el sistema no lo
+reconocía: el documento NO tiene un emisor con CUIT (el único CUIT es el del CONSORCIO
+contribuyente) y el total a pagar no está en la DJ (página 1) sino en el VEP (página 2). Con el
+prompt de facturas normales caería en Sin Asignar (busca un emisor con CUIT).
+
+**Decisión:** tratar ARCA como un tipo del router con el **mismo modelo que los sindicales**
+(CUIT del papel = consorcio, proveedor por nombre, sin CUIT propio):
+- `identifyLSPProvider` detecta ARCA por el formulario `931` + `S.U.S.S.`/`Organismo Recaudador`
+  (robusto al rebrand AFIP→ARCA), antes del gate `isUtilityBill`.
+- Nuevo helper `usesConsortiumCuit(lspProvider)` que agrupa SUTERH/FATERYH/SERACARH **+ ARCA**
+  y reemplaza los `=== "SUTERH" || …` hardcodeados (los excluye del fast-path LSP que resuelve
+  proveedor por CUIT). Deja el intent explícito.
+- `buildArcaPrompt`: total del **VEP** (`Importe total a pagar`, no los subtotales de la DJ),
+  `dueDate` = `Día de Expiración`, `boletaNumber` = `Nro. VEP`, consorcio por Razón Social,
+  CUIT del consorcio → `allTaxIds`, `provider = "ARCA"`.
+- El total está en la página 2 (VEP) → ARCA re-extrae 2 páginas en vez de la 1 del flujo LSP.
+
+**El "ARCA no tiene CUIT" no requirió cambios de schema:** el sistema ya soporta proveedores
+sin CUIT (matchProvider por nombre, igual que los sindicales). ARCA se registra como una fila
+en `_Proveedores` (ALTA) con CUIT vacío y matchNames `ORGANISMO RECAUDADOR ARCA|AFIP|F931`.
+
+**Alternativas descartadas:** tratarlo como factura común (no hay emisor con CUIT → Sin
+Asignar); como LSP de servicio público (ahí el CUIT sería del proveedor, lo opuesto a ARCA).
+
+**Impacto:** 6 tests nuevos (`extraction.test.ts`: router + `usesConsortiumCuit` + ruteo del
+prompt); 144 tests totales; typecheck + lint + build:jobs OK. Sin migración. Analizado contra
+un F931 real (BELGRANO 2458, período 05/2026). PENDIENTE: commit + push + cargar ARCA en
+`_Proveedores`.
+
+---
+
 ## 2026-06-15 — Distinción SERACARH vs FATERYH en el nombre del proveedor
 
 **Problema:** un consorcio con empleados recibe **2 boletas FATERYH** por período (verificado

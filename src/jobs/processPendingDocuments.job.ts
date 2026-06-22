@@ -2,7 +2,7 @@ import { env } from "@/config/env";
 import { normalizeConsortiumName } from "@/lib/consortiumNormalizer";
 import { matchConsortium, matchProvider, normName } from "@/lib/assignmentMatching";
 import { cuitDigits, formatCuit, extractCuitsFromText } from "@/lib/cuit";
-import { identifyLSPProvider, LSPProvider, LSP_FALLBACK_NAMES, annotateSindicalProvider } from "@/lib/extraction";
+import { identifyLSPProvider, LSPProvider, LSP_FALLBACK_NAMES, annotateSindicalProvider, usesConsortiumCuit } from "@/lib/extraction";
 import { refineExtractionWithRawText } from "@/lib/extraction";
 import { createEmptyTokenUsageSummary } from "@/lib/createEmptyTokenUsageSummary";
 import { pipelineLog } from "@/lib/logger";
@@ -275,7 +275,7 @@ async function resolveAssignment(
   // proveedor → se excluyen del fast-path (resolver proveedor por CUIT / por
   // clientNumber). Van directo al matching normal: consorcio por CUIT, proveedor
   // por NOMBRE.
-  const isSindicalLsp = lspProvider === "SUTERH" || lspProvider === "FATERYH" || lspProvider === "SERACARH";
+  const isSindicalLsp = usesConsortiumCuit(lspProvider);
 
   // Resolver proveedor LSP por CUIT en tabla Provider
   let lspProviderId: string | null = null;
@@ -624,8 +624,10 @@ async function textExtractStep(ctx: PipelineContext): Promise<StepResult> {
   }
 
   // Para LSP, re-extraer limitando a página 1 para reducir ruido.
+  // ARCA F931: el total a pagar está en el VEP (página 2) → re-extraer 2 páginas, no 1.
+  const lspMaxPages = lspProvider === "ARCA" ? 2 : 1;
   const text = lspProvider
-    ? await runStep("Re-extracción página 1 (LSP)", () => pdfExtractor.extractTextFromPdf(buffer, 1), "textPage1")
+    ? await runStep("Re-extracción LSP (página 1+)", () => pdfExtractor.extractTextFromPdf(buffer, lspMaxPages), "textPage1")
     : fullText;
   ctx.docText = text;
   ctx.lspProvider = lspProvider;
@@ -830,7 +832,7 @@ async function cuitSanitizeStep(ctx: PipelineContext): Promise<StepResult> {
   // Boletas sindicales (SUTERH/FATERYH/SERACARH): el CUIT del papel es del
   // CONSORCIO (no del sindicato) → mismo tratamiento determinístico que un
   // documento no-LSP para el matching del edificio.
-  const isSindical = lspProvider === "SUTERH" || lspProvider === "FATERYH" || lspProvider === "SERACARH";
+  const isSindical = usesConsortiumCuit(lspProvider);
 
   // ── Saneo de CUIT inventado (solo NO-LSP): si la IA devolvió un CUIT que no
   // está en el texto del documento, se descarta (era alucinado). LSP de

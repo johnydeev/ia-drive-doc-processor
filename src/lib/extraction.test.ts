@@ -4,6 +4,7 @@ import {
   buildExtractionPrompt,
   refineExtractionWithRawText,
   annotateSindicalProvider,
+  usesConsortiumCuit,
 } from "@/lib/extraction";
 import type { ExtractedDocumentData } from "@/types/extractedDocument.types";
 
@@ -66,6 +67,28 @@ const SERACARH_TEXT = [
   "TOTAL A PAGAR: 10309.53",
 ].join("\n");
 
+// ARCA F931 (SUSS) REAL: la DJ (pág.1) trae el CUIT del CONSORCIO y los montos
+// desglosados; el VEP (pág.2) trae el "Importe total a pagar".
+const ARCA_TEXT = [
+  "931",
+  "Declaración Jurada en Pesos con centavos",
+  "S.U.S.S.",
+  "C.U.I.T. 30-68835011-1",
+  "Mes - Año 05/2026",
+  "Apellido y Nombre o Razón Social:",
+  "CONSORCIO DE PROPIETARIOS AV BELGRANO 2458 AL 2462",
+  "VIII - MONTOS QUE SE INGRESAN",
+  "-- 1 of 3 --",
+  "VEP",
+  "Volante Electrónico de Pago",
+  "Nro. VEP: 1641803730",
+  "Organismo Recaudador: ARCA",
+  "CUIT: 30-68835011-1",
+  "Período: 2026-05",
+  "Importe total a pagar $453.493,06",
+  "Día de Expiración: 2026-07-18",
+].join("\n");
+
 describe("identifyLSPProvider — boletas sindicales (SUTERH/FATERYH/SERACARH)", () => {
   it("detecta SUTERH (F0201 / Sindicato Único)", () => {
     expect(identifyLSPProvider(SUTERH_TEXT)).toBe("SUTERH");
@@ -86,6 +109,45 @@ describe("identifyLSPProvider — boletas sindicales (SUTERH/FATERYH/SERACARH)",
 
   it("regresión: Edesur sigue detectándose", () => {
     expect(identifyLSPProvider("EDESUR S.A. Liquidación de Servicios Públicos")).toBe("EDESUR");
+  });
+});
+
+describe("identifyLSPProvider — ARCA (F931 / SUSS)", () => {
+  it("detecta ARCA por formulario 931 + S.U.S.S.", () => {
+    expect(identifyLSPProvider(ARCA_TEXT)).toBe("ARCA");
+  });
+
+  it("no confunde una boleta sindical (FATERYH) con ARCA", () => {
+    expect(identifyLSPProvider(FATERYH_TEXT)).toBe("FATERYH");
+  });
+
+  it("regresión: una factura común con un '931' suelto NO es ARCA", () => {
+    // Sin S.U.S.S. ni 'Organismo Recaudador' no debe matchear ARCA.
+    expect(identifyLSPProvider("FACTURA B N° 0931-00000001\nImporte Total: 5000")).toBeNull();
+  });
+});
+
+describe("usesConsortiumCuit (el CUIT del papel es del consorcio, proveedor por nombre)", () => {
+  it("true para sindicales y ARCA", () => {
+    expect(usesConsortiumCuit("SUTERH")).toBe(true);
+    expect(usesConsortiumCuit("FATERYH")).toBe(true);
+    expect(usesConsortiumCuit("SERACARH")).toBe(true);
+    expect(usesConsortiumCuit("ARCA")).toBe(true);
+  });
+
+  it("false para servicios públicos y null", () => {
+    expect(usesConsortiumCuit("EDESUR")).toBe(false);
+    expect(usesConsortiumCuit("AYSA")).toBe(false);
+    expect(usesConsortiumCuit(null)).toBe(false);
+  });
+});
+
+describe("buildExtractionPrompt — ARCA", () => {
+  it("rutea ARCA a su prompt específico (total del VEP, provider ARCA)", () => {
+    const prompt = buildExtractionPrompt(ARCA_TEXT);
+    expect(prompt).toMatch(/ARCA/);
+    expect(prompt).toMatch(/Importe total a pagar/i);
+    expect(prompt).toMatch(/VEP/);
   });
 });
 

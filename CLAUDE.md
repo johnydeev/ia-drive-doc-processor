@@ -211,6 +211,7 @@ El sistema detecta automáticamente el tipo de documento con `identifyLSPProvide
 ### Router LSP: `identifyLSPProvider(text)`
 Analiza los primeros 4000 caracteres y retorna:
 - `"EDESUR"` / `"EDENOR"` / `"AYSA"` / `"METROGAS"` / `"NATURGY"` / `"CAMUZZI"` / `"LITORAL_GAS"` / `"ABSA"` / `"PERSONAL"` → prompt específico
+- `"SUTERH"` / `"FATERYH"` / `"SERACARH"` / `"ARCA"` → prompt específico del grupo "CUIT del papel = consorcio" (proveedor por NOMBRE, sin CUIT propio; ver helper `usesConsortiumCuit`)
 - `"GENERIC_LSP"` → prompt genérico LSP (fallback)
 - `null` → no es LSP → usa `buildInvoicePrompt` (facturas normales)
 ### Prompts por empresa implementados
@@ -224,6 +225,8 @@ Analiza los primeros 4000 caracteres y retorna:
 | Camuzzi | `buildGasPrompt()` | 30-65786613-3 |
 | Litoral Gas | `buildGasPrompt()` | 30-66176173-2 |
 | Personal | `buildPersonalPrompt()` | 30-63945373-8 |
+| Sindicales (SUTERH/FATERYH/SERACARH) | `buildSindicalPrompt()` | — (CUIT del papel = consorcio) |
+| ARCA F931 (SUSS) | `buildArcaPrompt()` | — (CUIT del papel = consorcio; total en el VEP/pág. 2) |
 | Genérico LSP | `buildGenericUtilityBillPrompt()` | — |
 | Facturas normales | `buildInvoicePrompt()` | — |
 ### Reglas compartidas entre prompts LSP
@@ -233,7 +236,7 @@ Analiza los primeros 4000 caracteres y retorna:
 - **clientNumber**: cada prompt LSP indica dónde buscar el número de cliente específico de esa empresa.
 - **paymentMethod**: reglas compartidas en `PAYMENT_METHOD_RULES` (DEBITO_AUTOMATICO, TRANSFERENCIA, EFECTIVO, null).
 ### Extracción limitada a página 1 para LSP
-Cuando `identifyLSPProvider()` detecta un LSP, el pipeline re-extrae el texto limitando a la primera página (`{ max: 1 }` en pdf-parse). Esto reduce ruido y mejora la precisión de la extracción IA.
+Cuando `identifyLSPProvider()` detecta un LSP, el pipeline re-extrae el texto limitando a la primera página (`{ max: 1 }` en pdf-parse). Esto reduce ruido y mejora la precisión de la extracción IA. **Excepción ARCA F931:** re-extrae 2 páginas porque el "Importe total a pagar" está en el VEP (página 2), no en la DJ (página 1).
 ### Facturas normales (`buildInvoicePrompt`)
 - `providerTaxId` = CUIT del **emisor** (NO el del consorcio receptor)
 - `dueDate` = fecha de **pago** (NO fecha CAE, NO inicio de actividades)

@@ -92,6 +92,7 @@ export type LSPProvider =
   | "SUTERH"
   | "FATERYH"
   | "SERACARH"
+  | "ARCA"
   | "GENERIC_LSP";
 
 /** Nombres de fallback para proveedores LSP cuando no se encuentran en la DB */
@@ -157,6 +158,15 @@ export function identifyLSPProvider(text: string): LSPProvider | null {
     return "FATERYH";
   }
 
+  // ── ARCA / AFIP — Formulario 931 (SUSS): aportes/contribuciones de seguridad
+  // social que paga el consorcio empleador. El CUIT del papel es del CONSORCIO
+  // (contribuyente), no de ARCA → se trata como los sindicales (proveedor por
+  // nombre). Detección por el formulario 931 + S.U.S.S. (en la DJ, pág. 1) o el
+  // "Organismo Recaudador" del VEP. Robusto al rebrand AFIP→ARCA.
+  if (/\b931\b/.test(upper) && (upper.includes("S.U.S.S") || upper.includes("ORGANISMO RECAUDADOR"))) {
+    return "ARCA";
+  }
+
   // Primero verificar si es una LSP
   if (!isUtilityBill(upper)) {
     return null;
@@ -203,6 +213,21 @@ export function annotateSindicalProvider(
     return `${provider} (SERACARH)`;
   }
   return provider;
+}
+
+/**
+ * ¿El CUIT que figura en el papel es el del CONSORCIO (no del proveedor)? Aplica
+ * a las boletas sindicales (SUTERH/FATERYH/SERACARH) y a ARCA/AFIP F931: en todas
+ * el contribuyente es el consorcio empleador y el proveedor se matchea por NOMBRE,
+ * sin CUIT propio. Se excluyen del fast-path LSP (que resuelve proveedor por CUIT).
+ */
+export function usesConsortiumCuit(lspProvider: LSPProvider | null | undefined): boolean {
+  return (
+    lspProvider === "SUTERH" ||
+    lspProvider === "FATERYH" ||
+    lspProvider === "SERACARH" ||
+    lspProvider === "ARCA"
+  );
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -302,6 +327,8 @@ export function buildExtractionPrompt(text: string): string {
     case "FATERYH":
     case "SERACARH":
       return buildSindicalPrompt(relevantText, lspProvider);
+    case "ARCA":
+      return buildArcaPrompt(relevantText);
     default:
       return buildGenericUtilityBillPrompt(relevantText);
   }
@@ -366,6 +393,57 @@ function buildSindicalPrompt(relevantText: string, tipo: "SUTERH" | "FATERYH" | 
     "  (es el del CONSORCIO/edificio — sirve para imputar el gasto al edificio correcto).",
 
     "Texto de la boleta sindical:",
+    relevantText,
+  ].join("\n\n");
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ARCA / AFIP — Formulario 931 (SUSS)
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * Prompt para el F931 (SUSS) de ARCA/AFIP: impuestos de seguridad social que paga
+ * el consorcio empleador. Estructura sistemática: la DJ (pág. 1) trae el CUIT del
+ * CONSORCIO y los montos desglosados; el VEP (pág. 2) trae el "Importe total a
+ * pagar". Modelo: el CUIT del papel es del CONSORCIO (no de ARCA); el proveedor es
+ * "ARCA", identificado por NOMBRE, sin CUIT propio.
+ */
+function buildArcaPrompt(relevantText: string): string {
+  return [
+    "Extrae datos de una boleta de ARCA/AFIP — Formulario 931 (SUSS), impuestos de seguridad social de un consorcio empleador.",
+    JSON_RESPONSE_INSTRUCTION,
+
+    "=== REGLAS ESPECÍFICAS ARCA F931 ===",
+
+    "- provider: siempre 'ARCA' (se identifica por NOMBRE, no por CUIT). Es el 'Organismo Recaudador'.",
+
+    "- providerTaxId: null. El CUIT que figura en el documento (junto a 'C.U.I.T.'/'CUIT:') NO es de ARCA:",
+    "  es el CUIT del CONSORCIO empleador (el contribuyente). No asignarlo al proveedor.",
+
+    "- consortium: el valor de 'Apellido y Nombre o Razón Social' del contribuyente (ej:",
+    "  'CONSORCIO DE PROPIETARIOS AV BELGRANO 2458 AL 2462'). Es la dirección del edificio.",
+
+    "- amount: el 'Importe total a pagar' que figura en el VEP (Volante Electrónico de Pago).",
+    "  CRÍTICO: usar SOLO ese total del VEP, NO los subtotales desglosados de la DJ",
+    "  (aportes, contribuciones, ART, etc.) ni la suma de remuneraciones.",
+
+    "- dueDate: el 'Día de Expiración' del VEP, en formato YYYY-MM-DD (fecha límite de pago).",
+    "  No usar la fecha de generación ni de presentación. Si no está, null.",
+
+    "- boletaNumber: el 'Nro. VEP' (ej: '1641803730'). Si no está, null.",
+
+    "- observation: el período en formato MM/YYYY ('Mes - Año' o 'Período' — ej: '05/2026').",
+
+    "- detail: 'F931 SUSS — Seguridad social y obra social' más el período.",
+
+    "- clientNumber: siempre null.",
+
+    "- paymentMethod: null (el VEP se paga online en entidades habilitadas).",
+
+    "- allTaxIds: incluir el CUIT que aparece junto a 'C.U.I.T.'/'CUIT:' (es el del CONSORCIO,",
+    "  sirve para imputar el gasto al edificio correcto).",
+
+    "Texto de la boleta ARCA F931 (DJ + VEP):",
     relevantText,
   ].join("\n\n");
 }

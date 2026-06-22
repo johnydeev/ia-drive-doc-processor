@@ -2,10 +2,36 @@
 
 Actualizado al 15/06/2026 (sesión 35).
 
-> **Estado de deploy:** todo lo de la sesión 35 (refactor H2, triage, SERACARH) está
-> **commiteado y deployado** en `efe83b8` (CI #79/#82/#83). Working tree limpio — la imagen en
-> prod = HEAD. Verificado en logs de prod: sistema sano (0 jobs fallidos / 0 boletas perdidas;
-> único evento recurrente = corte idle del pooler Supabase P1017, mitigado por `withDbRetry`).
+> **Estado de deploy:** el refactor H2, el triage y SERACARH están **deployados** en `efe83b8`
+> (CI #79/#82/#83). **El soporte ARCA F931 (abajo) es nuevo: implementado y verificado, pero
+> PENDIENTE de commit + push (CI) + registrar la fila ARCA en `_Proveedores`.** Logs de prod
+> sanos (0 jobs fallidos / 0 boletas perdidas; único evento = corte idle del pooler P1017,
+> mitigado por `withDbRetry`).
+
+---
+
+## Soporte ARCA F931 / SUSS (impuestos de seguridad social del consorcio) (15/06/2026)
+
+**Estado: implementado y verificado (144 tests, +6; typecheck + lint + build:jobs OK).
+PENDIENTE: commit + push (CI) + registrar ARCA en `_Proveedores` (ALTA).**
+
+El F931 de ARCA/AFIP (aportes/contribuciones de seguridad social) lo paga casi todo consorcio
+con empleados. Mismo modelo que los sindicales: el CUIT del papel es del **consorcio**
+(contribuyente), ARCA es el proveedor **por nombre, sin CUIT propio**. Cambios:
+- **Router** (`identifyLSPProvider`): detecta ARCA por `931` + `S.U.S.S.`/`Organismo Recaudador`
+  → nuevo tipo `"ARCA"`. Robusto al rebrand AFIP→ARCA.
+- **`usesConsortiumCuit(lspProvider)`** (nuevo helper en `lib/extraction.ts`): agrupa los
+  sindicales **+ ARCA** (CUIT = consorcio, proveedor por nombre, excluidos del fast-path LSP).
+  Reemplaza los `=== "SUTERH" || …` hardcodeados en el pipeline.
+- **`buildArcaPrompt`**: extrae el total del **VEP** (`Importe total a pagar`, página 2, NO los
+  subtotales de la DJ), `dueDate` = `Día de Expiración`, `boletaNumber` = `Nro. VEP`, consorcio
+  por Razón Social, CUIT del consorcio → `allTaxIds`, `provider = "ARCA"`.
+- **Rango de páginas**: ARCA re-extrae 2 páginas (el total está en el VEP/pág. 2), no 1.
+
+**Registro del proveedor (paso de datos, lo hace el owner):** una fila en `_Proveedores` (ALTA)
+con NOMBRE `ARCA`, CUIT **vacío**, NOMBRES ALTERNATIVOS `ORGANISMO RECAUDADOR ARCA|AFIP|F931`,
+ALIAS `ARCA`. El sistema ya soporta proveedores sin CUIT (matchea por nombre, igual que los
+sindicales) → no requiere cambios de schema. Detalles en decisiones.md.
 
 ---
 

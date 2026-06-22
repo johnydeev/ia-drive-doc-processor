@@ -3,6 +3,15 @@
 ## [Unreleased]
 
 ### Feature
+- **Soporte ARCA F931 / SUSS (2026-06-15)**. El F931 de ARCA/AFIP (seguridad social del
+  consorcio empleador) es recurrente y no se reconocía: el único CUIT del papel es el del
+  CONSORCIO (no hay emisor con CUIT) y el total está en el VEP (página 2), no en la DJ. Nuevo
+  tipo `"ARCA"` en `identifyLSPProvider` (detección por `931` + `S.U.S.S.`/`Organismo
+  Recaudador`), helper `usesConsortiumCuit` que agrupa sindicales + ARCA (CUIT = consorcio,
+  proveedor por nombre, fuera del fast-path LSP) y `buildArcaPrompt` (total del VEP, dueDate =
+  Día de Expiración, boletaNumber = Nro. VEP, provider = "ARCA"). ARCA re-extrae 2 páginas. Sin
+  cambios de schema: ARCA se registra en `_Proveedores` con CUIT vacío (ya soportado, como los
+  sindicales). 6 tests nuevos (144 totales). PENDIENTE: commit + push + cargar ARCA en ALTA.
 - **Distinción SERACARH en el nombre del proveedor (2026-06-15)**. Los consorcios con
   empleados reciben 2 boletas FATERYH (F0101 = aportes FMVDD/OS/ART 27 bis, y F0106 =
   SERACARH), que en el matching resuelven al mismo proveedor canónico "FATERYH" (SERACARH es
