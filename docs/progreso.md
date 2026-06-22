@@ -12,8 +12,15 @@ Actualizado al 15/06/2026 (sesión 35).
 
 ## Soporte ARCA F931 / SUSS (impuestos de seguridad social del consorcio) (15/06/2026)
 
-**Estado: implementado y verificado (144 tests, +6; typecheck + lint + build:jobs OK).
-PENDIENTE: commit + push (CI) + registrar ARCA en `_Proveedores` (ALTA).**
+**Estado: implementado y verificado (146 tests; typecheck + lint + build:jobs OK). El proveedor
+ARCA ya está cargado/sincronizado en la DB. PENDIENTE: commit + push (CI).**
+
+> **Fix tras prueba en prod (22/06):** la 1ª corrida real dio un monto **inventado**
+> (294.499,11 = suma de aportes de la DJ, cifra que NO está impresa) en vez del total del VEP
+> (453.493,06). Causa: el "Importe total a pagar" del VEP cae ~línea 88 y el prompt se cortaba a
+> 80 líneas → la IA no lo veía y lo fabricaba. Fix: para ARCA se manda el texto completo (sin
+> cortar) + el prompt exige copiar literal el total del VEP y prohíbe sumar/inventar (null si no
+> está). Reprocesar la boleta de ARCA tras el deploy para confirmar que sale 453.493,06.
 
 El F931 de ARCA/AFIP (aportes/contribuciones de seguridad social) lo paga casi todo consorcio
 con empleados. Mismo modelo que los sindicales: el CUIT del papel es del **consorcio**

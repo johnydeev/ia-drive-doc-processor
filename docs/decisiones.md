@@ -32,10 +32,17 @@ en `_Proveedores` (ALTA) con CUIT vacío y **sin matchNames** (no hace falta: el
 **Alternativas descartadas:** tratarlo como factura común (no hay emisor con CUIT → Sin
 Asignar); como LSP de servicio público (ahí el CUIT sería del proveedor, lo opuesto a ARCA).
 
-**Impacto:** 6 tests nuevos (`extraction.test.ts`: router + `usesConsortiumCuit` + ruteo del
-prompt); 144 tests totales; typecheck + lint + build:jobs OK. Sin migración. Analizado contra
-un F931 real (BELGRANO 2458, período 05/2026). PENDIENTE: commit + push + cargar ARCA en
-`_Proveedores`.
+**Fix (prueba en prod, 22/06):** la 1ª corrida real dio un monto **inventado** (294.499,11 =
+suma de aportes de la DJ, cifra que NO está impresa) en vez del total del VEP (453.493,06).
+Causa raíz: la DJ es larga y el "Importe total a pagar" del VEP cae ~línea 88, pero el prompt se
+cortaba a 80 líneas (`extractRelevantLines`) → la IA no veía el total y lo fabricaba sumando la
+DJ. Fix: para ARCA se pasa el texto completo (2 páginas, sin truncar) y `buildArcaPrompt` exige
+copiar literal el "Importe total a pagar", prohíbe sumar/calcular y devuelve null si no aparece.
+
+**Impacto:** 8 tests de ARCA (`extraction.test.ts`: router + `usesConsortiumCuit` + ruteo +
+total más allá de la línea 80 + anti-suma); 146 tests totales; typecheck + lint + build:jobs OK.
+Sin migración. Analizado contra un F931 real (BELGRANO 2458, período 05/2026). PENDIENTE: commit
++ push (el proveedor ARCA ya está cargado/sincronizado en la DB).
 
 ---
 

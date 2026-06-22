@@ -328,7 +328,10 @@ export function buildExtractionPrompt(text: string): string {
     case "SERACARH":
       return buildSindicalPrompt(relevantText, lspProvider);
     case "ARCA":
-      return buildArcaPrompt(relevantText);
+      // La DJ del F931 es larga y el "Importe total a pagar" del VEP cae más allá
+      // de las 80 líneas de `relevantText` → pasar el texto completo (2 páginas,
+      // acotado por textExtractStep) para no truncar el total y evitar que la IA lo invente.
+      return buildArcaPrompt(text);
     default:
       return buildGenericUtilityBillPrompt(relevantText);
   }
@@ -420,12 +423,15 @@ function buildArcaPrompt(relevantText: string): string {
     "- providerTaxId: null. El CUIT que figura en el documento (junto a 'C.U.I.T.'/'CUIT:') NO es de ARCA:",
     "  es el CUIT del CONSORCIO empleador (el contribuyente). No asignarlo al proveedor.",
 
-    "- consortium: el valor de 'Apellido y Nombre o Razón Social' del contribuyente (ej:",
-    "  'CONSORCIO DE PROPIETARIOS AV BELGRANO 2458 AL 2462'). Es la dirección del edificio.",
+    "- consortium: SOLO la razón social del contribuyente que sigue a 'Apellido y Nombre o",
+    "  Razón Social:' (ej: 'CONSORCIO DE PROPIETARIOS AV BELGRANO 2458 AL 2462'). NO incluir el",
+    "  'Nro. Verificador', 'Suma de Rem.', 'Versión' ni ningún número de las columnas vecinas.",
 
-    "- amount: el 'Importe total a pagar' que figura en el VEP (Volante Electrónico de Pago).",
-    "  CRÍTICO: usar SOLO ese total del VEP, NO los subtotales desglosados de la DJ",
-    "  (aportes, contribuciones, ART, etc.) ni la suma de remuneraciones.",
+    "- amount: COPIAR LITERAL la cifra que aparece junto a la etiqueta 'Importe total a pagar'",
+    "  del VEP (es el gran total al final del VEP, ej: 'Importe total a pagar $453.493,06').",
+    "  PROHIBIDO sumar, calcular o derivar el monto. PROHIBIDO usar los importes de la DJ",
+    "  ('MONTOS QUE SE INGRESAN', aportes/contribuciones S.S./O.S., ART, etc.) ni la suma de",
+    "  remuneraciones. Si NO encontrás la línea 'Importe total a pagar', devolvé null (no inventes).",
 
     "- dueDate: el 'Día de Expiración' del VEP, en formato YYYY-MM-DD (fecha límite de pago).",
     "  No usar la fecha de generación ni de presentación. Si no está, null.",

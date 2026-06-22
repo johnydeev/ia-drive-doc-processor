@@ -149,6 +149,30 @@ describe("buildExtractionPrompt — ARCA", () => {
     expect(prompt).toMatch(/Importe total a pagar/i);
     expect(prompt).toMatch(/VEP/);
   });
+
+  it("incluye el total del VEP aunque esté más allá de la línea 80 (la DJ es larga)", () => {
+    // Caso real: el "Importe total a pagar" del VEP cae ~línea 88 de la DJ+VEP.
+    // Antes el prompt se cortaba a 80 líneas → la IA no veía el total y lo inventaba.
+    const filler = Array.from({ length: 90 }, (_, i) => `Concepto ${i}: 0,00`);
+    const longArca = [
+      "931",
+      "S.U.S.S.",
+      "C.U.I.T. 30-68835011-1",
+      "CONSORCIO DE PROPIETARIOS AV BELGRANO 2458 AL 2462",
+      ...filler,
+      "VEP",
+      "Organismo Recaudador: ARCA",
+      "Importe total a pagar $453.493,06",
+    ].join("\n");
+    expect(identifyLSPProvider(longArca)).toBe("ARCA");
+    expect(buildExtractionPrompt(longArca)).toMatch(/453\.493,06/);
+  });
+
+  it("el prompt prohíbe sumar/inventar el monto (copiar literal del VEP, null si no está)", () => {
+    const prompt = buildExtractionPrompt(ARCA_TEXT);
+    expect(prompt).toMatch(/PROHIBIDO sumar/i);
+    expect(prompt).toMatch(/no inventes/i);
+  });
 });
 
 describe("identifyLSPProvider — falso positivo de PERSONAL", () => {

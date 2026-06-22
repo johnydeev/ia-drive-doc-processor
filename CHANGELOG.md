@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+### Fix
+- **ARCA F931: monto inventado por truncado de texto (2026-06-22)**. En la primera corrida real,
+  ARCA extrajo un monto **fabricado** (294.499,11 = suma de aportes de la DJ, cifra que no está
+  impresa en el papel) en vez del total real del VEP (453.493,06). Causa: la DJ es larga y el
+  "Importe total a pagar" del VEP cae ~línea 88, pero el prompt se cortaba a 80 líneas
+  (`extractRelevantLines`) → la IA no veía el total y lo rellenaba sumando la DJ. Fix: para ARCA
+  se pasa el texto completo (2 páginas, sin truncar a 80) y `buildArcaPrompt` exige copiar literal
+  el "Importe total a pagar", prohíbe sumar/calcular y devuelve null si no aparece. 2 tests nuevos
+  (146 totales).
+
 ### Feature
 - **Soporte ARCA F931 / SUSS (2026-06-15)**. El F931 de ARCA/AFIP (seguridad social del
   consorcio empleador) es recurrente y no se reconocía: el único CUIT del papel es el del
