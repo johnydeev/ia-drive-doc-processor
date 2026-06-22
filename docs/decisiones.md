@@ -26,7 +26,8 @@ prompt de facturas normales caería en Sin Asignar (busca un emisor con CUIT).
 
 **El "ARCA no tiene CUIT" no requirió cambios de schema:** el sistema ya soporta proveedores
 sin CUIT (matchProvider por nombre, igual que los sindicales). ARCA se registra como una fila
-en `_Proveedores` (ALTA) con CUIT vacío y matchNames `ORGANISMO RECAUDADOR ARCA|AFIP|F931`.
+en `_Proveedores` (ALTA) con CUIT vacío y **sin matchNames** (no hace falta: el prompt fija
+`provider="ARCA"`, que matchea el nombre canónico directo; un rebrand se corrige en el prompt).
 
 **Alternativas descartadas:** tratarlo como factura común (no hay emisor con CUIT → Sin
 Asignar); como LSP de servicio público (ahí el CUIT sería del proveedor, lo opuesto a ARCA).

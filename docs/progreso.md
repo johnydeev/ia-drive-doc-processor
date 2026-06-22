@@ -29,9 +29,11 @@ con empleados. Mismo modelo que los sindicales: el CUIT del papel es del **conso
 - **Rango de páginas**: ARCA re-extrae 2 páginas (el total está en el VEP/pág. 2), no 1.
 
 **Registro del proveedor (paso de datos, lo hace el owner):** una fila en `_Proveedores` (ALTA)
-con NOMBRE `ARCA`, CUIT **vacío**, NOMBRES ALTERNATIVOS `ORGANISMO RECAUDADOR ARCA|AFIP|F931`,
-ALIAS `ARCA`. El sistema ya soporta proveedores sin CUIT (matchea por nombre, igual que los
-sindicales) → no requiere cambios de schema. Detalles en decisiones.md.
+con NOMBRE `ARCA`, CUIT **vacío**, NOMBRES ALTERNATIVOS **vacío**, ALIAS `ARCA`. No hace falta
+`matchNames`: el prompt fija `provider="ARCA"` (no se extrae del papel), así que matchea el
+nombre canónico directo; si ARCA se renombra, se corrige el prompt. El sistema ya soporta
+proveedores sin CUIT (matchea por nombre, igual que los sindicales) → sin cambios de schema.
+Detalles en decisiones.md.
 
 ---
 
