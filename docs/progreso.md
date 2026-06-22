@@ -2,12 +2,17 @@
 
 Actualizado al 15/06/2026 (sesión 35).
 
+> **Estado de deploy:** todo lo de la sesión 35 (refactor H2, triage, SERACARH) está
+> **commiteado y deployado** en `efe83b8` (CI #79/#82/#83). Working tree limpio — la imagen en
+> prod = HEAD. Verificado en logs de prod: sistema sano (0 jobs fallidos / 0 boletas perdidas;
+> único evento recurrente = corte idle del pooler Supabase P1017, mitigado por `withDbRetry`).
+
 ---
 
 ## Distinción SERACARH en el nombre del proveedor (15/06/2026)
 
-**Estado: implementado y verificado (138 tests, +5; typecheck + lint + build:jobs OK).
-PENDIENTE: push (CI) + rebuild del worker.**
+**Estado: implementado, verificado y DEPLOYADO en `efe83b8` (CI #83). 138 tests; typecheck +
+lint + build:jobs OK.**
 
 Los consorcios con empleados reciben 2 boletas FATERYH (F0101 normal y F0106 = SERACARH) que
 resolvían al mismo proveedor "FATERYH" → nombre idéntico. Nuevo helper puro
@@ -19,8 +24,8 @@ el nombre del archivo en Drive y la DB; el `providerId` (FK) no cambia. Detalles
 
 ## Triage de documentos (boleta vs no-boleta) (15/06/2026)
 
-**Estado: implementado y verificado (133 tests; typecheck + lint + build:jobs OK).
-PENDIENTE: push (CI) + rebuild del worker.**
+**Estado: implementado, verificado y DEPLOYADO en `efe83b8` (CI #82/#83). 133 tests; typecheck
++ lint + build:jobs OK.**
 
 Capa de triage híbrida sobre el pipeline (H2) que clasifica cada documento como boleta /
 no-boleta y deriva los no-boleta a Revisión con prefijo `[NO BOLETA]` (sin Sheets/DB), con
@@ -40,31 +45,29 @@ Detalles en decisiones.md. Spec/plan:
 
 ---
 
-## ⏭️ PENDIENTES PARA LA PRÓXIMA SESIÓN (cierre sesión 34)
+## ⏭️ PENDIENTES PARA LA PRÓXIMA SESIÓN (cierre sesión 35)
 
-1. ~~**Boleta `MAYO 2026.pdf` en Sin Asignar**~~ → **RESUELTO 14/06** (ver sección
-   abajo). Era un bug real: la IA + el refinamiento tomaban la "Razón Social:" del
-   emisor como consorcio. Fix de doble capa (prompt + refinamiento determinístico).
-   **PENDIENTE: push (CI) + recuperar "MAYO 2026.pdf" de Sin Asignar → Pendientes.**
-2. ~~**Cortes del pooler de Supabase (P1017)**~~ → **MITIGADO 14/06** (ver sección
-   abajo). Retry acotado (`withDbRetry`) en las operaciones de DB del worker
-   (claim/finalize/client lookup) → un P1017 ya no deja jobs zombie ni dispara
-   reprocesos. **PENDIENTE: push (CI) + rebuild del worker.** Keep-alive proactivo
-   queda como opción si el P1017 sigue frecuente post-deploy.
-3. **Tier pago de Gemini (~USD 1-2/mes)** — decisión de negocio del owner. El free
-   tier funciona con el barrido de modelos + circuit breaker, pero tiene techo
-   diario. El pago elimina el riesgo de cuota.
-4. ~~**Refactor H2** — descomponer `processDriveFile` en pasos (Pipeline)~~ →
-   **HECHO 15/06** (ver sección abajo). El pipeline quedó descompuesto en 14 pasos
-   discretos + runner, con red de tests de caracterización. **PENDIENTE: push (CI) +
-   rebuild del worker.**
+**Todo el código hasta `efe83b8` está deployado (CI verde) y el working tree está limpio — no
+hay nada por commitear ni pushear.** Lo de sesiones 34-35 (MAYO/consorcio receptor, P1017,
+sindicales, refactor H2, triage, SERACARH) está todo en prod.
+
+Abiertos (no bloqueantes):
+1. **Tier pago de Gemini (~USD 1-2/mes)** — decisión de negocio del owner (sigue abierta). El
+   free tier funciona con el barrido de modelos + circuit breaker, pero tiene techo diario.
+2. **(Opcional) Reintento en el healthcheck del web ante P1017 idle** — discutido en sesión 35
+   y pospuesto: frecuencia baja (solo en idle) y sin impacto real (el contenedor sigue
+   healthy). Implementar solo si el ruido de logs molesta. Alternativa más fuerte: keep-alive
+   proactivo de DB (pinear cada ~4 min) — YAGNI a la frecuencia actual.
+3. **Verificar boletas históricas mal clasificadas** — con los fixes ya deployados (MAYO,
+   triage), si quedaron boletas viejas en Sin Asignar/Revisión se recuperan con "Reprocesar
+   Sin Asignar" desde el panel. En los logs de sesión 35 la cola estuvo vacía (sin pendientes).
 
 ---
 
 ## Refactor H2 — `processDriveFile` descompuesto en un Pipeline de pasos (15/06/2026)
 
-**Estado: implementado y verificado (121 tests, +8 de caracterización; typecheck + lint
-+ build:jobs OK). PENDIENTE: push (CI) + rebuild del worker.**
+**Estado: implementado, verificado y DEPLOYADO en `efe83b8` (CI #79). 121 tests (+8 de
+caracterización); typecheck + lint + build:jobs OK.**
 
 La "God function" del pipeline (~630 líneas, ~13 deps, 7 caminos de salida con side-effects
 en Drive/Sheets/DB) pasó a patrón **Pipe & Filter** sin cambiar el comportamiento observable:

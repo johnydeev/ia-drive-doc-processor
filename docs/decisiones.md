@@ -26,7 +26,7 @@ owner); mantener Sheets distinto de la DB (requeriría dos versiones de `extract
 e inconsistente).
 
 **Impacto:** 5 tests nuevos (`extraction.test.ts`); typecheck + lint + build:jobs OK; 138 tests
-totales. Sin migración. Deploy: push (CI) + rebuild del worker.
+totales. Sin migración. **Deployado en `efe83b8` (CI #83).**
 
 ---
 
@@ -65,8 +65,8 @@ por edificio (YAGNI).
 **Impacto / verificación:** 133 tests (clasificador + helper + 2 de caracterización nuevos:
 not_boleta heurística e IA); typecheck + lint (0 errores) + build:jobs OK. Imágenes (sin texto)
 sólo pasan por capa 2. Sin migración (isBoleta vive en el JSON de extracción). Spec/plan:
-`docs/superpowers/{specs,plans}/2026-06-15-triage-clasificacion-documentos*`. Deploy: push (CI)
-+ rebuild del worker.
+`docs/superpowers/{specs,plans}/2026-06-15-triage-clasificacion-documentos*`. **Deployado en
+`efe83b8` (CI #82/#83).**
 
 ---
 
@@ -116,8 +116,8 @@ paso. Sin cambio de comportamiento observable: **121 tests verdes** (8 de caract
 113 previos), typecheck + lint (0 errores; warnings pre-existentes) + build:jobs OK. Sin
 migración. Archivos nuevos: `src/jobs/pipeline/{context,runner}.ts`,
 `src/jobs/processPendingDocuments.job.test.ts`. Spec/plan:
-`docs/superpowers/{specs,plans}/2026-06-14-refactor-h2-pipeline*`. Deploy: push (CI) +
-rebuild del worker. Validación e2e opcional del owner: `diag-boleta.ts` sobre boletas reales
+`docs/superpowers/{specs,plans}/2026-06-14-refactor-h2-pipeline*`. **Deployado en `efe83b8`
+(CI #79).** Validación e2e opcional del owner: `diag-boleta.ts` sobre boletas reales
 (la lógica de matching/`resolveAssignment` no se tocó).
 
 ---

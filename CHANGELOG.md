@@ -23,8 +23,8 @@
   `result="not_boleta"` en `[metrics]`. Se separó `extractStep` en `textExtractStep` +
   `aiExtractStep` para insertar el gate de heurística sin gastar tokens. 133 tests (incl. 2 de
   caracterización: heurística e IA). Sin migración. Spec/plan en
-  `docs/superpowers/{specs,plans}/2026-06-15-triage-clasificacion-documentos*`. Deploy: push +
-  rebuild del worker.
+  `docs/superpowers/{specs,plans}/2026-06-15-triage-clasificacion-documentos*`. Deployado en
+  `efe83b8` (CI #82/#83).
 
 ### Refactor
 - **H2: `processDriveFile` descompuesto en un Pipeline de pasos (2026-06-15)**. La "God
@@ -41,8 +41,8 @@
   dinámicos (`resolveStatementsFolders`, `buildInvoiceFileName`) pasaron a seams
   inyectables del `ProcessingContext`. **121 tests verdes**, typecheck + lint (0 errores) +
   build:jobs OK. Sin migración. Archivos nuevos: `src/jobs/pipeline/{context,runner}.ts`.
-  Spec/plan en `docs/superpowers/{specs,plans}/2026-06-14-refactor-h2-pipeline*`. Deploy:
-  push + rebuild del worker.
+  Spec/plan en `docs/superpowers/{specs,plans}/2026-06-14-refactor-h2-pipeline*`. Deployado en
+  `efe83b8` (CI #79).
 
 ### Fix
 - **Robustez del worker ante cortes del pooler de Supabase (P1017) (2026-06-14)**. El
