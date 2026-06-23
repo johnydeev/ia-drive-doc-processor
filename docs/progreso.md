@@ -2,18 +2,32 @@
 
 Actualizado al 15/06/2026 (sesión 35).
 
-> **Estado de deploy:** el refactor H2, el triage y SERACARH están **deployados** en `efe83b8`
-> (CI #79/#82/#83). **El soporte ARCA F931 (abajo) es nuevo: implementado y verificado, pero
-> PENDIENTE de commit + push (CI) + registrar la fila ARCA en `_Proveedores`.** Logs de prod
-> sanos (0 jobs fallidos / 0 boletas perdidas; único evento = corte idle del pooler P1017,
-> mitigado por `withDbRetry`).
+> **Estado de deploy:** todo hasta `63cbfb0` (refactor H2, triage, SERACARH, ARCA F931 + su fix
+> de monto) está **deployado**. **Nuevo sin deployar: los filtros + N° de boleta en la UI de
+> Boletas entrantes (abajo).** Pendiente operativo: la boleta de prueba de ARCA espera el reset
+> de cuota IA (~04:00 AR) para reprocesarse con el fix de monto.
+
+---
+
+## Filtros + N° de boleta en la UI de Boletas entrantes (22/06/2026)
+
+**Estado: implementado y verificado (typecheck + lint + next build OK). PENDIENTE: commit + push.**
+
+En `/admin/boletas`: (a) nueva columna **N° Boleta** con los últimos 4 dígitos; (b) dos
+**dropdowns combinados** arriba para filtrar por **consorcio** y por **proveedor**. El filtrado
+es **server-side** (la API `/api/client/invoices` acepta `consortiumId`/`providerId` → filtra
+todo el dataset, no solo la página visible; vuelve a página 1 al cambiar el filtro). Las opciones
+de los dropdowns vienen de `facets` (consorcios/proveedores que **realmente tienen boletas**,
+distinct + alfabético), así no se llenan de opciones vacías. Sin migración. Detalles en
+decisiones.md.
 
 ---
 
 ## Soporte ARCA F931 / SUSS (impuestos de seguridad social del consorcio) (15/06/2026)
 
-**Estado: implementado y verificado (146 tests; typecheck + lint + build:jobs OK). El proveedor
-ARCA ya está cargado/sincronizado en la DB. PENDIENTE: commit + push (CI).**
+**Estado: implementado, verificado y DEPLOYADO en `63cbfb0` (146 tests). El proveedor ARCA ya
+está cargado/sincronizado en la DB. Reproceso de la boleta de prueba pendiente del reset de
+cuota IA (~04:00 AR) para confirmar el monto.**
 
 > **Fix tras prueba en prod (22/06):** la 1ª corrida real dio un monto **inventado**
 > (294.499,11 = suma de aportes de la DJ, cifra que NO está impresa) en vez del total del VEP

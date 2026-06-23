@@ -13,6 +13,13 @@
   (146 totales).
 
 ### Feature
+- **UI Boletas entrantes: filtros + N° de boleta (2026-06-22)**. En `/admin/boletas`: nueva
+  columna **N° Boleta** (últimos 4 dígitos) y dos **dropdowns combinados** arriba para filtrar
+  por **consorcio** y por **proveedor**. Filtrado **server-side**: la API
+  `/api/client/invoices` acepta `consortiumId`/`providerId` (filtra todo el dataset, no solo la
+  página; vuelve a página 1 al cambiar el filtro) y devuelve `facets` (consorcios/proveedores
+  que realmente tienen boletas, distinct + alfabético) para poblar los dropdowns. Se agregó el
+  campo `boletaNumber` a la respuesta. Sin migración.
 - **Soporte ARCA F931 / SUSS (2026-06-15)**. El F931 de ARCA/AFIP (seguridad social del
   consorcio empleador) es recurrente y no se reconocía: el único CUIT del papel es el del
   CONSORCIO (no hay emisor con CUIT) y el total está en el VEP (página 2), no en la DJ. Nuevo

@@ -4,6 +4,29 @@ Registro de decisiones tomadas ante problemas reales encontrados en producción.
 
 ---
 
+## 2026-06-22 — UI Boletas entrantes: filtros por consorcio/proveedor (server-side) + N° boleta
+
+**Problema:** la vista `/admin/boletas` lista 700+ boletas paginadas de a 50 sin forma de
+filtrar, y no mostraba el número de boleta.
+
+**Decisión:** filtrado **server-side** (no client-side sobre la página visible). La API
+`/api/client/invoices` acepta `consortiumId`/`providerId` y filtra todo el dataset; el contador y
+la paginación reflejan el filtro (y se vuelve a página 1 al cambiar). Las opciones de los
+dropdowns vienen de `facets` que la API calcula con `distinct` sobre las boletas del cliente
+(solo consorcios/proveedores que realmente tienen boletas, alfabético) — así no se llenan de
+opciones vacías y quedan estables al aplicar un filtro. Se agregó `boletaNumber` a la respuesta
+y una columna que muestra sus últimos 4 dígitos.
+
+**Alternativas descartadas:** filtrar client-side (solo filtraría la página de 50, no las 700+);
+poblar los dropdowns desde las tablas Consortium/Provider completas (mostraría opciones sin
+boletas).
+
+**Impacto:** `api/client/invoices/route.ts` (campo + params + facets) y `admin/boletas/page.tsx`
+(columna + 2 dropdowns + estado de filtros). typecheck + lint + next build OK. Sin migración.
+PENDIENTE: commit + push.
+
+---
+
 ## 2026-06-15 — Soporte ARCA F931 (SUSS): impuestos de seguridad social del consorcio
 
 **Problema:** casi todo consorcio con empleados paga mensualmente el F931 de ARCA/AFIP (aportes

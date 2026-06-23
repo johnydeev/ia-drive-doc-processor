@@ -14,6 +14,7 @@ type InvoiceRow = {
   consortiumId: string | null;
   consortium: string | null;
   provider: string | null;
+  boletaNumber: string | null;
   amount: number | null;
   period: string | null;
   dueDate: string | null;
@@ -21,6 +22,8 @@ type InvoiceRow = {
   sourceFileUrl: string | null;
   createdAt: string;
 };
+
+type Facet = { id: string; name: string };
 
 function formatAmount(v: number | null) {
   if (v == null) return "—";
@@ -34,6 +37,12 @@ function formatDateOnly(iso: string | null) {
   if (!iso) return "—";
   const d = new Date(iso);
   return isNaN(d.getTime()) ? "—" : d.toLocaleDateString("es-AR", { dateStyle: "short" });
+}
+/** Últimos 4 dígitos del número de boleta (identificador corto para la lista). */
+function formatBoletaShort(n: string | null) {
+  if (!n) return "—";
+  const last4 = n.replace(/\D/g, "").slice(-4);
+  return last4 ? `…${last4}` : "—";
 }
 
 export default function BoletasEntrantesPage() {
@@ -50,6 +59,9 @@ export default function BoletasEntrantesPage() {
   const [pageSize] = useState(50);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [deleting, setDeleting] = useState(false);
+  const [facets, setFacets] = useState<{ consortiums: Facet[]; providers: Facet[] }>({ consortiums: [], providers: [] });
+  const [consortiumFilter, setConsortiumFilter] = useState("");
+  const [providerFilter, setProviderFilter] = useState("");
 
   useEffect(() => {
     try {
@@ -63,18 +75,21 @@ export default function BoletasEntrantesPage() {
     setError(null);
     try {
       const params = new URLSearchParams({ page: String(page), pageSize: String(pageSize) });
+      if (consortiumFilter) params.set("consortiumId", consortiumFilter);
+      if (providerFilter) params.set("providerId", providerFilter);
       const res = await guardedFetch(`/api/client/invoices?${params}`, { cache: "no-store" });
       const data = await res.json();
       if (!res.ok || !data.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
       setInvoices(data.invoices);
       setTotal(data.total);
+      if (data.facets) setFacets(data.facets);
       setSelected(new Set());
     } catch (err) {
       setError(err instanceof Error ? err.message : "Error al cargar boletas");
     } finally {
       setLoading(false);
     }
-  }, [guardedFetch, page, pageSize]);
+  }, [guardedFetch, page, pageSize, consortiumFilter, providerFilter]);
 
   useEffect(() => { void fetchInvoices(); }, [fetchInvoices]);
 
@@ -161,6 +176,16 @@ export default function BoletasEntrantesPage() {
           <button type="button" className={styles.ghostBtn} disabled={loading} onClick={() => void fetchInvoices()}>
             Refrescar
           </button>
+          <select className={styles.select} value={consortiumFilter}
+            onChange={(e) => { setConsortiumFilter(e.target.value); setPage(1); }} aria-label="Filtrar por consorcio">
+            <option value="">Todos los consorcios</option>
+            {facets.consortiums.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+          </select>
+          <select className={styles.select} value={providerFilter}
+            onChange={(e) => { setProviderFilter(e.target.value); setPage(1); }} aria-label="Filtrar por proveedor">
+            <option value="">Todos los proveedores</option>
+            {facets.providers.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+          </select>
           <span style={{ opacity: 0.6, fontSize: 13 }}>
             {total} boleta{total !== 1 ? "s" : ""} · orden de entrada (más recientes arriba)
           </span>
@@ -183,6 +208,7 @@ export default function BoletasEntrantesPage() {
                     <th>Entrada</th>
                     <th>Consorcio</th>
                     <th>Proveedor</th>
+                    <th>N° Boleta</th>
                     <th>Monto</th>
                     <th>Periodo</th>
                     <th>Vto</th>
@@ -197,6 +223,7 @@ export default function BoletasEntrantesPage() {
                       <td>{formatDateTime(inv.createdAt)}</td>
                       <td>{inv.consortium ?? "—"}</td>
                       <td>{inv.provider ?? "—"}</td>
+                      <td>{formatBoletaShort(inv.boletaNumber)}</td>
                       <td>{formatAmount(inv.amount)}</td>
                       <td>{inv.period ?? "—"}</td>
                       <td>{formatDateOnly(inv.dueDate)}</td>

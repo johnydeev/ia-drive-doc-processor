@@ -105,6 +105,17 @@
   color: #1a1a2e;
 }
 
+/* Opciones del desplegable: color/fondo explícito para que no queden texto claro
+   sobre fondo claro (el popup nativo no hereda bien el color del .select). */
+.select option {
+  background: #1a1a2e;
+  color: #fff;
+}
+.page[data-theme="light"] .select option {
+  background: #fff;
+  color: #1a1a2e;
+}
+
 .tableWrap {
   overflow-x: auto;
   margin-bottom: 20px;
