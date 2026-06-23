@@ -59,9 +59,10 @@ export default function BoletasEntrantesPage() {
   const [pageSize] = useState(50);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [deleting, setDeleting] = useState(false);
-  const [facets, setFacets] = useState<{ consortiums: Facet[]; providers: Facet[] }>({ consortiums: [], providers: [] });
+  const [facets, setFacets] = useState<{ consortiums: Facet[]; providers: Facet[]; periods: Facet[] }>({ consortiums: [], providers: [], periods: [] });
   const [consortiumFilter, setConsortiumFilter] = useState("");
   const [providerFilter, setProviderFilter] = useState("");
+  const [periodFilter, setPeriodFilter] = useState("");
 
   useEffect(() => {
     try {
@@ -77,6 +78,7 @@ export default function BoletasEntrantesPage() {
       const params = new URLSearchParams({ page: String(page), pageSize: String(pageSize) });
       if (consortiumFilter) params.set("consortiumId", consortiumFilter);
       if (providerFilter) params.set("providerId", providerFilter);
+      if (periodFilter) params.set("period", periodFilter);
       const res = await guardedFetch(`/api/client/invoices?${params}`, { cache: "no-store" });
       const data = await res.json();
       if (!res.ok || !data.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
@@ -89,7 +91,7 @@ export default function BoletasEntrantesPage() {
     } finally {
       setLoading(false);
     }
-  }, [guardedFetch, page, pageSize, consortiumFilter, providerFilter]);
+  }, [guardedFetch, page, pageSize, consortiumFilter, providerFilter, periodFilter]);
 
   useEffect(() => { void fetchInvoices(); }, [fetchInvoices]);
 
@@ -185,6 +187,11 @@ export default function BoletasEntrantesPage() {
             onChange={(e) => { setProviderFilter(e.target.value); setPage(1); }} aria-label="Filtrar por proveedor">
             <option value="">Todos los proveedores</option>
             {facets.providers.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+          </select>
+          <select className={styles.select} value={periodFilter}
+            onChange={(e) => { setPeriodFilter(e.target.value); setPage(1); }} aria-label="Filtrar por periodo">
+            <option value="">Todos los periodos</option>
+            {facets.periods.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
           </select>
           <span style={{ opacity: 0.6, fontSize: 13 }}>
             {total} boleta{total !== 1 ? "s" : ""} · orden de entrada (más recientes arriba)

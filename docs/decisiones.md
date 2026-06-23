@@ -4,25 +4,32 @@ Registro de decisiones tomadas ante problemas reales encontrados en producción.
 
 ---
 
-## 2026-06-22 — UI Boletas entrantes: filtros por consorcio/proveedor (server-side) + N° boleta
+## 2026-06-22 — UI Boletas entrantes: filtros por consorcio/proveedor/periodo (server-side) + N° boleta
 
 **Problema:** la vista `/admin/boletas` lista 700+ boletas paginadas de a 50 sin forma de
 filtrar, y no mostraba el número de boleta.
 
 **Decisión:** filtrado **server-side** (no client-side sobre la página visible). La API
-`/api/client/invoices` acepta `consortiumId`/`providerId` y filtra todo el dataset; el contador y
-la paginación reflejan el filtro (y se vuelve a página 1 al cambiar). Las opciones de los
-dropdowns vienen de `facets` que la API calcula con `distinct` sobre las boletas del cliente
-(solo consorcios/proveedores que realmente tienen boletas, alfabético) — así no se llenan de
-opciones vacías y quedan estables al aplicar un filtro. Se agregó `boletaNumber` a la respuesta
-y una columna que muestra sus últimos 4 dígitos.
+`/api/client/invoices` acepta `consortiumId`/`providerId`/`period` y filtra todo el dataset; el
+contador y la paginación reflejan el filtro (y se vuelve a página 1 al cambiar). Las opciones de
+los dropdowns vienen de `facets` que la API calcula con `distinct` sobre las boletas del cliente
+(solo consorcios/proveedores/periodos que realmente tienen boletas; consorcios/proveedores
+alfabético, periodos del más reciente al más viejo) — así no se llenan de opciones vacías y
+quedan estables al aplicar un filtro. Se agregó `boletaNumber` a la respuesta y una columna que
+muestra sus últimos 4 dígitos.
+
+**Gotcha del período (Period es por consorcio):** cada consorcio tiene su propio `Period`, así
+que un mismo "06/2026" corresponde a **muchos `periodId` distintos**. El primer intento filtraba
+por `periodId` → el dropdown repetía "06/2026" N veces y al elegir uno traía **un solo consorcio**.
+Corregido: el período se filtra por **etiqueta MM/YYYY** (`where: { periodRef: { is: { month, year } } }`,
+matchea en todos los consorcios) y el dropdown se **deduplica por etiqueta** (`parsePeriodLabel`).
 
 **Alternativas descartadas:** filtrar client-side (solo filtraría la página de 50, no las 700+);
-poblar los dropdowns desde las tablas Consortium/Provider completas (mostraría opciones sin
+poblar los dropdowns desde las tablas Consortium/Provider/Period completas (mostraría opciones sin
 boletas).
 
 **Impacto:** `api/client/invoices/route.ts` (campo + params + facets) y `admin/boletas/page.tsx`
-(columna + 2 dropdowns + estado de filtros). typecheck + lint + next build OK. Sin migración.
+(columna + 3 dropdowns + estado de filtros). typecheck + lint + next build OK. Sin migración.
 PENDIENTE: commit + push.
 
 ---

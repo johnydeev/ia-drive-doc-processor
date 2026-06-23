@@ -13,12 +13,15 @@ Actualizado al 15/06/2026 (sesión 35).
 
 **Estado: implementado y verificado (typecheck + lint + next build OK). PENDIENTE: commit + push.**
 
-En `/admin/boletas`: (a) nueva columna **N° Boleta** con los últimos 4 dígitos; (b) dos
-**dropdowns combinados** arriba para filtrar por **consorcio** y por **proveedor**. El filtrado
-es **server-side** (la API `/api/client/invoices` acepta `consortiumId`/`providerId` → filtra
-todo el dataset, no solo la página visible; vuelve a página 1 al cambiar el filtro). Las opciones
-de los dropdowns vienen de `facets` (consorcios/proveedores que **realmente tienen boletas**,
-distinct + alfabético), así no se llenan de opciones vacías. Sin migración. Detalles en
+En `/admin/boletas`: (a) nueva columna **N° Boleta** con los últimos 4 dígitos; (b) tres
+**dropdowns combinados** arriba para filtrar por **consorcio**, **proveedor** y **periodo**. El
+filtrado es **server-side** (la API `/api/client/invoices` acepta
+`consortiumId`/`providerId`/`period` → filtra todo el dataset, no solo la página visible;
+vuelve a página 1 al cambiar el filtro). Las opciones de los dropdowns vienen de `facets`
+(consorcios/proveedores/periodos que **realmente tienen boletas**; periodos más recientes
+primero), así no se llenan de opciones vacías. **El período se filtra por etiqueta MM/YYYY y el
+dropdown se deduplica por etiqueta** (cada consorcio tiene su propio `Period`, por eso filtrar
+por `periodId` repetía el período y traía un solo consorcio). Sin migración. Detalles en
 decisiones.md.
 
 ---
