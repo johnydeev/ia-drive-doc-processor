@@ -1,11 +1,85 @@
 # Progreso del proyecto — drive-doc-processor
 
-Actualizado al 15/06/2026 (sesión 35).
+Actualizado al 25/06/2026 (sesión 36).
 
 > **Estado de deploy:** todo hasta `63cbfb0` (refactor H2, triage, SERACARH, ARCA F931 + su fix
-> de monto) está **deployado**. **Nuevo sin deployar: los filtros + N° de boleta en la UI de
-> Boletas entrantes (abajo).** Pendiente operativo: la boleta de prueba de ARCA espera el reset
-> de cuota IA (~04:00 AR) para reprocesarse con el fix de monto.
+> de monto) está **deployado**. Sin deployar: los filtros + N° de boleta en la UI de Boletas
+> entrantes. **Nuevo sin commitear (lo commitea el owner): soporte Cerebras + Groq en la cadena
+> de IA (abajo).** Pendiente operativo: la boleta de prueba de ARCA espera el reset de cuota IA
+> (~04:00 AR) para reprocesarse con el fix de monto.
+
+---
+
+## Banco de pruebas local de LLMs (25/06/2026)
+
+**Estado: implementado y verificado (161 tests, +6 nuevos; typecheck + lint OK). SIN COMMITEAR.**
+
+Herramienta de desarrollo para iterar prompts y comparar modelos sobre boletas reales sin tocar
+producción. Lee PDFs de una carpeta (`pruebas de LLMs/`, gitignored) y los pasa por la **lógica**
+del pipeline (extracción IA por cada modelo + triage + matching read-only contra la DB +
+canonización), en modo **dry run**: el reporte muestra qué se registraría en Sheets/DB sin escribir.
+Si junto a una boleta hay `<nombre>.expected.json`, mide aciertos por campo y por modelo (ground
+truth opcional). Enfoque A: reusa las funciones puras del pipeline (no corre `runPipeline` con mocks).
+- `src/lib/testbench.ts`: `runLogicalPipeline` + `compareToExpected` (lógica pura, 6 tests).
+- `scripts/llm-testbench.ts`: CLI que corre la carpeta y escribe `resultados.json` + `reporte.md`.
+- Uso: `npx tsx scripts/llm-testbench.ts ["./pruebas de LLMs"] [cliente]`.
+- Caveat: el OCR no corre local (solo en Docker) → boletas-imagen se prueban en el pipeline real.
+Spec/plan: `docs/superpowers/{specs,plans}/2026-06-25-banco-pruebas-llms*`. Detalles en decisiones.md.
+
+---
+
+## Más cuota de IA gratis: Cerebras + Groq en la cadena (24/06/2026)
+
+**Estado: implementado y verificado (155 tests, +9 nuevos; typecheck + lint (0 errores) +
+build:jobs OK). SIN COMMITEAR — lo commitea el owner. PENDIENTE owner: cargar
+`CEREBRAS_API_KEY`/`GROQ_API_KEY` en `.env`, validar calidad con `scripts/compare-extractors.ts`
+sobre PDFs reales, y rebuild de worker (+web) si la calidad es buena.**
+
+El throughput cayó a <½ del histórico: Google recortó el free tier de Gemini (cuota diaria por
+modelo) y ya no alcanza una jornada. Como **predominan facturas variadas** (no sistemáticas), la
+palanca elegida fue **sumar oferta de IA gratuita** — no batchSize/frecuencia, que con tope
+diario solo cambian el ritmo, no el total. Cambios:
+- Nuevo `OpenAICompatibleExtractorService` (Chat Completions API de OpenAI, reutiliza el SDK con
+  `baseURL`) → instancias **Cerebras** y **Groq**, intercambiables vía el contrato `AiExtractor`.
+- Cadena reordenada **capacidad primero**. **Actualización 25/06: Groq se sacó de la cadena de
+  producción** → queda `Cerebras → Gemini → OpenAI → Claude`. Cerebras alcanza como principal; Groq
+  se evaluará aparte en el banco de pruebas (`createAiExtractionChain` lo sigue soportando,
+  reactivar = 1 línea). Solo en el **pipeline automático**; el scan manual no se tocó.
+- `isRateLimitError` reconoce el `status === 429` del SDK de OpenAI → el circuit breaker de cuota
+  (`aiPausedUntil`) sigue funcionando con los nuevos proveedores.
+- Env nuevas: `CEREBRAS_API_KEY` / `GROQ_API_KEY` (+ `CEREBRAS_MODEL` / `GROQ_MODEL`).
+  `docker-compose.yml` NO se toca (los 3 servicios usan `env_file: .env`).
+- Gate de validación: `scripts/compare-extractors.ts <pdf...>` corre cada proveedor sobre el
+  mismo texto y muestra los campos lado a lado (solo lectura, sin DB/Sheets).
+- Efecto colateral menor: la firma de `pipelineLog.aiExtraction` pasó de un union hardcodeado a
+  `AiProvider` (propagación de ampliar el tipo).
+
+Free tiers (verificados 06/2026): **Cerebras 1M tokens/día** (~300+ boletas, sin tarjeta),
+**Groq** 1.000-14.400 req/día. El techo gratuito pasa de ~100/día a varios cientos/día. Modelos
+por defecto: `gpt-oss-120b` (Cerebras) y `llama-3.3-70b-versatile` (Groq), configurables por env.
+**Validado el 25/06** con un F931 de ARCA real: Cerebras y Groq extraen idéntico, ambos con el
+**monto correcto del VEP** (453.493,06, el dato difícil). Cerebras **retiró los modelos Llama** de
+su catálogo free (solo quedan `gpt-oss-120b` y `zai-glm-4.7`) → el default pasó de `llama-3.3-70b`
+a `gpt-oss-120b`. Nota: el comparador local no hace OCR (poppler/tesseract solo están en Docker),
+así que boletas-imagen se prueban dentro del pipeline.
+Spec/plan: `docs/superpowers/{specs,plans}/2026-06-24-cuota-ia-gratis-cerebras-groq*`. Detalles en
+decisiones.md.
+
+---
+
+## Entorno de prueba: cliente propio + campo Rendiciones en el alta (24/06/2026, en progreso)
+
+**Estado: campo Rendiciones agregado al alta/edición de clientes (verificado: typecheck + lint +
+next build OK), SIN COMMITEAR. Setup del cliente de prueba pendiente del owner (depende del tipo
+de cuenta de Google — personal vs Workspace, por el requisito de Unidad Compartida para que la app
+pueda CREAR las subcarpetas de Rendiciones y los archivos de carga manual).**
+
+Para probar las nuevas IAs (Cerebras/Groq) end-to-end con el Drive del owner, se da de alta un
+Client de prueba en la misma DB. Gap resuelto: el formulario de alta/edición no permitía cargar la
+carpeta **Rendiciones** (`statements`), obligatoria (sino el scheduler saltea el cliente) → ahora
+es un campo más del panel (`POST`/`PATCH`/`GET` de `/api/admin/clients` + ambas UIs `admin/page.tsx`
+y `admin/clients/[id]/page.tsx`). Pendiente: guía de setup de Google (carpetas + Sheets + service
+account) según el tipo de cuenta.
 
 ---
 

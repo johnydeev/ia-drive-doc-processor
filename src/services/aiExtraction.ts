@@ -28,6 +28,8 @@ export interface AiProviderCredentials {
  * `apiKey` presente.
  */
 export interface AiExtractionChainConfig {
+  cerebras?: AiProviderCredentials;
+  groq?: AiProviderCredentials;
   gemini?: AiProviderCredentials;
   openai?: AiProviderCredentials;
   anthropic?: AiProviderCredentials;
@@ -69,6 +71,11 @@ export class AiExtractionChain {
     return this.extractors.length;
   }
 
+  /** Orden de fallback de los proveedores (para tests y diagnóstico). */
+  get providerOrder(): AiProvider[] {
+    return this.extractors.map((e) => e.provider);
+  }
+
   hasProviders(): boolean {
     return this.extractors.length > 0;
   }
@@ -98,12 +105,36 @@ export class AiExtractionChain {
 /**
  * Construye la cadena importando dinámicamente solo los servicios cuyos
  * proveedores tienen API key configurada (mantiene la carga perezosa de SDKs
- * que ya tenía el pipeline). Orden de fallback: Gemini → OpenAI → Claude.
+ * que ya tenía el pipeline). Orden de fallback: Cerebras → Groq → Gemini → OpenAI → Claude.
  */
 export async function createAiExtractionChain(
   config: AiExtractionChainConfig
 ): Promise<AiExtractionChain> {
   const extractors: AiExtractor[] = [];
+
+  if (config.cerebras?.apiKey) {
+    const { OpenAICompatibleExtractorService } = await import("@/services/openAICompatibleExtractor.service");
+    extractors.push(
+      new OpenAICompatibleExtractorService({
+        provider: "cerebras",
+        apiKey: config.cerebras.apiKey,
+        baseURL: "https://api.cerebras.ai/v1",
+        model: config.cerebras.model?.trim() || "gpt-oss-120b",
+      })
+    );
+  }
+
+  if (config.groq?.apiKey) {
+    const { OpenAICompatibleExtractorService } = await import("@/services/openAICompatibleExtractor.service");
+    extractors.push(
+      new OpenAICompatibleExtractorService({
+        provider: "groq",
+        apiKey: config.groq.apiKey,
+        baseURL: "https://api.groq.com/openai/v1",
+        model: config.groq.model?.trim() || "llama-3.3-70b-versatile",
+      })
+    );
+  }
 
   if (config.gemini?.apiKey) {
     const { GeminiExtractorService } = await import("@/services/geminiExtractor.service");

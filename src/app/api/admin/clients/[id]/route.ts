@@ -44,6 +44,7 @@ export async function GET(
       driveFolderUnassigned: (drive.unassigned as string) ?? "",
       driveFolderFailed: (drive.failed as string) ?? "",
       driveFolderReceipts: (drive.receipts as string) ?? "",
+      driveFolderStatements: (drive.statements as string) ?? "",
       hasPrivateKey: Boolean(google.privateKey),
       hasGeminiApiKey: Boolean(extraction.geminiApiKey),
       hasOpenaiApiKey: Boolean(extraction.openaiApiKey),
@@ -69,6 +70,7 @@ const patchSchema = z.object({
   driveFolderUnassigned: z.string().optional().nullable(),
   driveFolderFailed: z.string().optional().nullable(),
   driveFolderReceipts: z.string().optional().nullable(),
+  driveFolderStatements: z.string().optional().nullable(),
   geminiApiKey: z.string().min(10).optional().nullable(),
   openaiApiKey: z.string().min(10).optional().nullable(),
   anthropicApiKey: z.string().min(10).optional().nullable(),
@@ -128,6 +130,7 @@ export async function PATCH(
     if (body.driveFolderUnassigned !== undefined) drive.unassigned = body.driveFolderUnassigned ?? null;
     if (body.driveFolderFailed !== undefined) drive.failed = body.driveFolderFailed ?? null;
     if (body.driveFolderReceipts !== undefined) drive.receipts = body.driveFolderReceipts ?? null;
+    if (body.driveFolderStatements !== undefined) drive.statements = body.driveFolderStatements ?? null;
 
     const updated = await prisma.client.update({
       where: { id },

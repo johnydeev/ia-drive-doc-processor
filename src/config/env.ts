@@ -23,6 +23,10 @@ export interface EnvConfig {
   GEMINI_MODEL?: string;
   ANTHROPIC_API_KEY?: string;
   ANTHROPIC_MODEL?: string;
+  CEREBRAS_API_KEY?: string;
+  CEREBRAS_MODEL?: string;
+  GROQ_API_KEY?: string;
+  GROQ_MODEL?: string;
   SESSION_SECRET: string;
   DATABASE_URL: string;
   GOOGLE_CREDENTIALS_ENCRYPTION_KEY?: string;
@@ -65,6 +69,10 @@ export const env: EnvConfig = {
   GEMINI_MODEL: optionalEnv("GEMINI_MODEL"),
   ANTHROPIC_API_KEY: optionalEnv("ANTHROPIC_API_KEY"),
   ANTHROPIC_MODEL: optionalEnv("ANTHROPIC_MODEL"),
+  CEREBRAS_API_KEY: optionalEnv("CEREBRAS_API_KEY"),
+  CEREBRAS_MODEL: optionalEnv("CEREBRAS_MODEL"),
+  GROQ_API_KEY: optionalEnv("GROQ_API_KEY"),
+  GROQ_MODEL: optionalEnv("GROQ_MODEL"),
   SESSION_SECRET: requireEnv("SESSION_SECRET"),
   DATABASE_URL: requireEnv("DATABASE_URL"),
   GOOGLE_CREDENTIALS_ENCRYPTION_KEY: optionalEnv("GOOGLE_CREDENTIALS_ENCRYPTION_KEY"),

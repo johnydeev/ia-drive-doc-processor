@@ -32,7 +32,7 @@ type ClientMetricsResponse = { ok: boolean; error?: string; clients?: ClientMetr
 type CreateClientForm = {
   companyName: string; email: string; password: string;
   driveFolderPending: string; driveFolderScanned: string;
-  driveFolderUnassigned: string; driveFolderFailed: string; driveFolderReceipts: string;
+  driveFolderUnassigned: string; driveFolderFailed: string; driveFolderReceipts: string; driveFolderStatements: string;
   sheetsId: string; altaSheetsId: string; sheetName: string;
   geminiApiKey: string; openaiApiKey: string; anthropicApiKey: string;
   googleProjectId: string; googleClientEmail: string; googlePrivateKey: string;
@@ -47,7 +47,7 @@ const EMPTY_DASH = "-";
 const INITIAL_FORM: CreateClientForm = {
   companyName: "", email: "", password: "",
   driveFolderPending: "", driveFolderScanned: "",
-  driveFolderUnassigned: "", driveFolderFailed: "", driveFolderReceipts: "",
+  driveFolderUnassigned: "", driveFolderFailed: "", driveFolderReceipts: "", driveFolderStatements: "",
   sheetsId: "", altaSheetsId: "", sheetName: "Datos",
   geminiApiKey: "", openaiApiKey: "", anthropicApiKey: "",
   googleProjectId: "", googleClientEmail: "", googlePrivateKey: "",
@@ -531,6 +531,7 @@ export default function AdminPage() {
                   <input placeholder="Carpeta Sin Asignar (ID, opcional)" value={createForm.driveFolderUnassigned} onChange={set("driveFolderUnassigned")} />
                   <input placeholder="Carpeta Fallidos (ID, opcional)" value={createForm.driveFolderFailed} onChange={set("driveFolderFailed")} />
                   <input placeholder="Carpeta Recibos (ID, opcional)" value={createForm.driveFolderReceipts} onChange={set("driveFolderReceipts")} />
+                  <input placeholder="Carpeta Rendiciones * (ID)" value={createForm.driveFolderStatements} onChange={set("driveFolderStatements")} required />
                 </div>
                 <p className={styles.formSectionLabel}>Google Sheets</p>
                 <div className={styles.formGrid}>

@@ -25,6 +25,7 @@ type ClientConfig = {
   driveFolderUnassigned: string;
   driveFolderFailed: string;
   driveFolderReceipts: string;
+  driveFolderStatements: string;
   hasPrivateKey: boolean;
   hasGeminiApiKey: boolean;
   hasOpenaiApiKey: boolean;
@@ -47,6 +48,7 @@ type FormState = {
   driveFolderUnassigned: string;
   driveFolderFailed: string;
   driveFolderReceipts: string;
+  driveFolderStatements: string;
   geminiApiKey: string;
   openaiApiKey: string;
   anthropicApiKey: string;
@@ -80,6 +82,7 @@ export default function EditClientPage() {
     driveFolderUnassigned: "",
     driveFolderFailed: "",
     driveFolderReceipts: "",
+    driveFolderStatements: "",
     geminiApiKey: "",
     openaiApiKey: "",
     anthropicApiKey: "",
@@ -120,6 +123,7 @@ export default function EditClientPage() {
         driveFolderUnassigned: data.client.driveFolderUnassigned,
         driveFolderFailed: data.client.driveFolderFailed,
         driveFolderReceipts: data.client.driveFolderReceipts,
+        driveFolderStatements: data.client.driveFolderStatements,
         geminiApiKey: "",
         openaiApiKey: "",
         anthropicApiKey: "",
@@ -154,6 +158,7 @@ export default function EditClientPage() {
         driveFolderUnassigned: form.driveFolderUnassigned || null,
         driveFolderFailed: form.driveFolderFailed || null,
         driveFolderReceipts: form.driveFolderReceipts || null,
+        driveFolderStatements: form.driveFolderStatements || null,
       };
       // Solo enviar claves sensibles si el usuario las rellenó
       if (form.googlePrivateKey.trim()) payload.googlePrivateKey = form.googlePrivateKey.trim();
@@ -317,6 +322,10 @@ export default function EditClientPage() {
                 <div className={styles.field}>
                   <label className={styles.fieldLabel}>Recibos</label>
                   <input className={styles.input} value={form.driveFolderReceipts} onChange={set("driveFolderReceipts")} placeholder="Opcional" />
+                </div>
+                <div className={styles.field}>
+                  <label className={styles.fieldLabel}>Rendiciones *</label>
+                  <input className={styles.input} value={form.driveFolderStatements} onChange={set("driveFolderStatements")} placeholder="ID de carpeta" />
                 </div>
               </div>
             </section>

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { AiExtractionChain, type AiExtractor } from "@/services/aiExtraction";
+import { AiExtractionChain, createAiExtractionChain, type AiExtractor } from "@/services/aiExtraction";
 import { RateLimitError } from "@/lib/aiErrors";
 import { AiProvider, AiUsageMetrics } from "@/types/aiUsage.types";
 import { ExtractedDocumentData } from "@/types/extractedDocument.types";
@@ -151,5 +151,26 @@ describe("AiExtractionChain metadata", () => {
     ]);
     expect(chain.hasProviders()).toBe(true);
     expect(chain.providerCount).toBe(2);
+  });
+});
+
+describe("createAiExtractionChain — orden capacidad-primero", () => {
+  it("ordena Cerebras → Groq → Gemini → OpenAI cuando todos tienen key", async () => {
+    const chain = await createAiExtractionChain({
+      cerebras: { apiKey: "x", model: "llama-3.3-70b" },
+      groq: { apiKey: "x", model: "llama-3.3-70b-versatile" },
+      gemini: { apiKey: "x" },
+      openai: { apiKey: "x" },
+    });
+    expect(chain.providerOrder).toEqual(["cerebras", "groq", "gemini", "openai"]);
+  });
+
+  it("incluye solo los proveedores con apiKey presente", async () => {
+    const chain = await createAiExtractionChain({
+      cerebras: { apiKey: "x" },
+      groq: {},
+      gemini: { apiKey: "" },
+    });
+    expect(chain.providerOrder).toEqual(["cerebras"]);
   });
 });

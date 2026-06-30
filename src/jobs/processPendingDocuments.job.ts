@@ -39,6 +39,10 @@ export interface ProcessJobConfig {
   driveStatementsFolderId?: string | null;
   googleConfig?: ClientGoogleConfig | null;
   aiConfig?: {
+    cerebrasApiKey?: string;
+    cerebrasModel?: string;
+    groqApiKey?: string;
+    groqModel?: string;
     geminiApiKey?: string;
     geminiModel?: string;
     openaiApiKey?: string;
@@ -196,14 +200,21 @@ async function createProcessingContext(
   const consortiumRepository = new ConsortiumRepository();
   const providerRepository = new ProviderRepository();
   const lspServiceRepository = new LspServiceRepository();
+  const cerebrasApiKey = config.aiConfig?.cerebrasApiKey?.trim() || env.CEREBRAS_API_KEY?.trim();
   const geminiApiKey = config.aiConfig?.geminiApiKey?.trim() || env.GEMINI_API_KEY?.trim();
   const openaiApiKey = config.aiConfig?.openaiApiKey?.trim() || env.OPENAI_API_KEY?.trim();
   const anthropicApiKey = config.aiConfig?.anthropicApiKey?.trim() || env.ANTHROPIC_API_KEY?.trim();
+  const cerebrasModel = config.aiConfig?.cerebrasModel?.trim() || env.CEREBRAS_MODEL;
   const geminiModel = config.aiConfig?.geminiModel?.trim() || env.GEMINI_MODEL;
   const openaiModel = config.aiConfig?.openaiModel?.trim() || env.OPENAI_MODEL;
   const anthropicModel = config.aiConfig?.anthropicModel?.trim() || env.ANTHROPIC_MODEL;
   const geminiModule = geminiApiKey ? await import("@/services/geminiExtractor.service") : null;
+  // Groq se sacó de la cadena de producción (2026-06-25): Cerebras alcanza como
+  // principal y Groq se evaluará aparte en el banco de pruebas. La cadena queda
+  // Cerebras → Gemini → OpenAI → Claude. `createAiExtractionChain` sigue
+  // soportando `groq` (reactivar = agregar la línea), y el banco lo usa por separado.
   const aiChain = await createAiExtractionChain({
+    cerebras: { apiKey: cerebrasApiKey, model: cerebrasModel },
     gemini: { apiKey: geminiApiKey, model: geminiModel },
     openai: { apiKey: openaiApiKey, model: openaiModel },
     anthropic: { apiKey: anthropicApiKey, model: anthropicModel },

@@ -24,6 +24,15 @@ export function isRateLimitError(error: unknown): boolean {
   if (error instanceof RateLimitError) return true;
   if (error === null || error === undefined) return false;
 
+  // El SDK de OpenAI (OpenAI/Cerebras/Groq) lanza APIError con `status` numérico
+  // y/o `code`. Cerebras/Groq pueden no incluir "429" en el mensaje, así que el
+  // status es la señal fiable.
+  if (typeof error === "object") {
+    const e = error as { status?: unknown; code?: unknown };
+    if (e.status === 429) return true;
+    if (e.code === "rate_limit_exceeded" || e.code === "insufficient_quota") return true;
+  }
+
   const text = (error instanceof Error ? error.message : String(error)).toLowerCase();
 
   return (

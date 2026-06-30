@@ -13,6 +13,37 @@
   (146 totales).
 
 ### Feature
+- **Groq fuera de la cadena de producción (2026-06-25)**. A pedido del owner, se sacó Groq del
+  wiring del pipeline (`createProcessingContext`): la cadena de producción queda
+  `Cerebras → Gemini → OpenAI → Claude`. Cerebras alcanza como principal; Groq se evaluará en el
+  banco de pruebas. `createAiExtractionChain` y `OpenAICompatibleExtractorService` lo siguen
+  soportando (reactivar = 1 línea). typecheck + 161 tests + build:jobs OK. SIN COMMITEAR.
+- **Banco de pruebas local de LLMs (2026-06-25)**. Herramienta de desarrollo para iterar prompts y
+  comparar modelos sobre boletas reales sin tocar producción. `src/lib/testbench.ts`
+  (`runLogicalPipeline` + `compareToExpected`) replica la lógica del pipeline (extracción + triage +
+  matching read-only + canonización) en **dry run** (no escribe DB/Sheets), y el CLI
+  `scripts/llm-testbench.ts` lee una carpeta (`pruebas de LLMs/`, gitignored), corre cada boleta por
+  cada modelo configurado y escribe `resultados.json` + `reporte.md`. Ground truth opcional
+  (`<nombre>.expected.json` → aciertos por campo). 6 tests nuevos (161 totales). Sin migración. SIN COMMITEAR.
+- **Más cuota de IA gratis: Cerebras + Groq en la cadena (2026-06-24)**. El throughput cayó a
+  <½ del histórico porque Google recortó el free tier de Gemini (cuota diaria por modelo). Como
+  predominan facturas variadas, se sumó **oferta** de IA gratuita en vez de tocar batchSize/
+  frecuencia (que con tope diario solo cambian el ritmo). Nuevo `OpenAICompatibleExtractorService`
+  (Chat Completions API de OpenAI, reutiliza el SDK con `baseURL`) → Cerebras y Groq. Cadena
+  reordenada **capacidad primero**: `Cerebras → Groq → Gemini → OpenAI → Claude` (solo el
+  pipeline automático; el scan manual no se tocó). `isRateLimitError` ahora reconoce el
+  `status === 429` del SDK (el circuit breaker de cuota sigue válido con los nuevos). Env nuevas
+  `CEREBRAS_API_KEY`/`GROQ_API_KEY` (+ `*_MODEL`); `docker-compose.yml` intacto (usa `env_file`).
+  Script `scripts/compare-extractors.ts` para validar calidad sobre PDFs reales. Free tiers
+  (06/2026): Cerebras 1M tokens/día (~300+ boletas, modelo `gpt-oss-120b` — Cerebras retiró Llama
+  del free tier), Groq 1.000-14.400 req/día (`llama-3.3-70b-versatile`). Validado el 25/06 con un
+  F931 de ARCA real (ambos sacan el monto correcto del VEP). 9 tests nuevos
+  (155 totales); typecheck + lint + build:jobs OK. Sin migración. SIN COMMITEAR (lo commitea el owner).
+- **Alta/edición de clientes: campo "Rendiciones" (statements) (2026-06-24)**. El formulario de
+  crear/editar cliente (panel admin) ahora incluye la carpeta **Rendiciones**, obligatoria para
+  procesar (sin ella el scheduler saltea el cliente). Backend (`POST`/`PATCH`/`GET` de
+  `/api/admin/clients`) + UI (`admin/page.tsx` y `admin/clients/[id]/page.tsx`). Permite dar de
+  alta un cliente 100% desde el panel sin tocar la DB. typecheck + lint + next build OK. SIN COMMITEAR.
 - **UI Boletas entrantes: filtros + N° de boleta (2026-06-22)**. En `/admin/boletas`: nueva
   columna **N° Boleta** (últimos 4 dígitos) y tres **dropdowns combinados** arriba para filtrar
   por **consorcio**, **proveedor** y **periodo**. Filtrado **server-side**: la API

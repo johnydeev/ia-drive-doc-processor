@@ -4,6 +4,108 @@ Registro de decisiones tomadas ante problemas reales encontrados en producción.
 
 ---
 
+## 2026-06-25 — Banco de pruebas local de LLMs (testbench)
+
+**Problema:** para mejorar la extracción (iterar prompts, comparar modelos) hace falta procesar
+boletas reales de forma repetible sin tocar la producción del cliente. `compare-extractors` solo
+compara la extracción cruda; falta el resto del flujo (triage, matching, canonización, resultado).
+
+**Decisión (enfoque A — reusar funciones puras):** un módulo `src/lib/testbench.ts`
+(`runLogicalPipeline`) que replica la secuencia del pipeline llamando a las mismas funciones puras
+(`identifyLSPProvider`, `classifyDocumentType`, `isMissingAmount`, `extractCuitsFromText`,
+`matchConsortium`/`matchProvider`, `annotateSindicalProvider`) sin side-effects, y un CLI
+`scripts/llm-testbench.ts` que lee una carpeta, carga el directorio del cliente (DB **read-only**) y
+escribe reportes. Decisiones del brainstorming: (a) **destino = archivos locales** (dry run, no
+escribe DB/Sheets; el reporte muestra qué se registraría); (b) **alcance = pipeline completo** con
+matching read-only; (c) **ground truth opcional** (`<nombre>.expected.json` → aciertos por campo,
+montos por valor con `normalizeBusinessAmount` y CUITs por dígitos con `cuitsEqual`).
+
+**Alternativas descartadas:** correr `runPipeline` real con ~8 deps mockeadas (mucha maquinaria; y
+la cadena real corta en el primer modelo OK, lo que choca con "comparar modelos"); volcar a un
+sandbox de DB/Sheets (se prefirió cero escritura); fine-tuning de modelos (otro proyecto).
+
+**Impacto:** nuevos `src/lib/testbench.ts` (+test, 6 tests) y `scripts/llm-testbench.ts`;
+`.gitignore` ignora `pruebas de LLMs/` (datos reales del cliente). 161 tests; typecheck + lint OK.
+Sin migración. SIN COMMITEAR. Caveat: el OCR no corre local (solo Docker) → boletas-imagen en el
+pipeline real. Spec/plan: `docs/superpowers/{specs,plans}/2026-06-25-banco-pruebas-llms*`.
+
+---
+
+## 2026-06-24 — Más cuota de IA gratis: Cerebras + Groq en la cadena de extracción
+
+**Problema:** el throughput cayó a menos de la mitad del histórico (~80-100/día). Causa externa:
+Google recortó el free tier de Gemini, cuya cuota es **diaria por modelo**
+(`GenerateRequestsPerDayPerProjectPerModel-FreeTier`); el barrido de 5 modelos ya no suma
+suficiente para una jornada. Restricción del owner: la solución debe ser **100% gratis** (sin
+tier pago ni crédito).
+
+**Por qué no batchSize/frecuencia:** con tope **diario**, `batchSize`/`intervalMinutes` controlan
+el *ritmo*, no el *total* — procesar más rápido solo adelanta el agotamiento. El cuello de botella
+es la cuota diaria total de IA.
+
+**Decisión:** sumar **oferta** de IA gratuita de otros proveedores (cada uno su propio balde,
+legítimo). Como predominan **facturas variadas** (no sistemáticas), se descartó el parser
+determinístico (rinde poco). Cambios:
+- Nuevo `OpenAICompatibleExtractorService` (`src/services/openAICompatibleExtractor.service.ts`):
+  Cerebras y Groq hablan la **Chat Completions API de OpenAI**, así que se reutiliza el SDK
+  `openai` cambiando `baseURL` + el mismo prompt/parseo/refinamiento. El llamado al modelo se
+  inyecta como seam `complete` (testeable sin red). Es genérico → a futuro Mistral/OpenRouter
+  son otra instancia, sin código nuevo.
+- Cadena reordenada **capacidad primero** en `createAiExtractionChain`:
+  `Cerebras → Groq → Gemini → OpenAI → Claude` (se gastan primero los baldes grandes). Nuevo
+  getter `providerOrder` para test/diagnóstico. Solo en el **pipeline automático**; el scan
+  manual NO se tocó (carga puntual, bajo volumen — decisión del owner).
+  **[Actualización 25/06]** Groq se sacó del wiring del pipeline (pedido del owner: no le dio
+  confianza tras desacertar datos críticos en una factura variada). La cadena de producción queda
+  `Cerebras → Gemini → OpenAI → Claude`; Groq se evaluará con más detalle en el banco de pruebas.
+  `createAiExtractionChain` y `OpenAICompatibleExtractorService` siguen soportando Groq (reactivar
+  = volver a pasar `groq` en `createProcessingContext`); el banco lo usa por separado.
+- `isRateLimitError` reconoce el `status === 429` (y `code` `rate_limit_exceeded`/
+  `insufficient_quota`) del `APIError` del SDK de OpenAI: Cerebras/Groq pueden no incluir "429"
+  en el mensaje, y sin esto un 429 suyo degradaría la boleta a OCR_ONLY → Revisión en vez de
+  volver a Pendientes (rompería el circuit breaker `aiPausedUntil`).
+- Keys por **env global** (`CEREBRAS_API_KEY`/`GROQ_API_KEY` + `*_MODEL`): son del operador y hay
+  1 cliente → sin migración, sin UI, sin encriptación. `docker-compose.yml` intacto (`env_file`).
+- Gate de validación previo a confiar el 1er lugar a Llama: `scripts/compare-extractors.ts`
+  corre cada proveedor sobre el mismo texto de PDFs reales y muestra los campos lado a lado.
+
+**Alternativas descartadas:** tier pago de Gemini / crédito OpenAI (el owner exige gratis);
+parser determinístico para LSPs (predominan variadas); rotación de keys/proyectos de Gemini
+(contra los ToS de Google); OpenRouter (requiere cargar US$10 para el tier útil → no es gratis
+puro); keys por cliente (env global alcanza).
+
+**Free tiers (verificados 06/2026):** Cerebras **1.000.000 tokens/día** (~300+ boletas, sin
+tarjeta, context cap 8.192 tokens → ARCA de 2 páginas podría exceder y caer al fallback), Groq
+1.000 req/día (Llama 70B) o 14.400 (Llama 8B). El techo gratuito pasa de ~100/día a varios
+cientos/día.
+
+**Impacto:** 9 tests nuevos (4 extractor genérico + 3 isRateLimitError + 2 orden de cadena),
+155 totales; typecheck + lint (0 errores) + build:jobs OK. Sin migración. Archivos: nuevos
+`openAICompatibleExtractor.service.ts` (+test) y `scripts/compare-extractors.ts`; modificados
+`aiUsage.types.ts`, `aiErrors.ts`, `aiExtraction.ts`, `env.ts`, `processPendingDocuments.job.ts`,
+`logger.ts`. SIN COMMITEAR (lo commitea el owner). Spec/plan:
+`docs/superpowers/{specs,plans}/2026-06-24-cuota-ia-gratis-cerebras-groq*`.
+
+**Validación + ajuste de modelo (25/06):** prueba real con `compare-extractors.ts` sobre un F931
+de ARCA (BELGRANO 2458). Resultado: Cerebras y Groq extraen idéntico y ambos sacan el **monto
+correcto del VEP** (453.493,06 — el dato difícil del ARCA). El `consortium` salió con ruido
+idéntico en los dos (viene del texto del PDF, no del modelo; ARCA matchea por CUIT igual). **El
+default de Cerebras cambió de `llama-3.3-70b` a `gpt-oss-120b`**: Cerebras retiró los modelos Llama
+de su catálogo free (solo quedan `gpt-oss-120b` y `zai-glm-4.7`), por eso `llama-3.3-70b` daba 404.
+Groq mantiene `llama-3.3-70b-versatile`. Cambios: `aiExtraction.ts`, `compare-extractors.ts`,
+`.env.example`. (Nota operativa: el comparador local no hace OCR — poppler/tesseract solo están en
+la imagen Docker — así que las boletas-imagen se prueban dentro del pipeline, no con el script.)
+**2º caso (factura común variada, CALLAO 1441 / ALETEC SRL):** Cerebras acertó todo —distinguió el
+CUIT del **emisor** (`30-66115265-2`, ALETEC) del **receptor** (`30-70200241-5`, el consorcio), el
+N° de comprobante con sus ceros (`00002-00003876`) y el **monto correcto (109.400)**—, mientras
+Groq tomó el CUIT del consorcio receptor como proveedor (y malformado) y erró el monto
+(128.786,78). Confirma **con datos reales** el orden **Cerebras primero**: `gpt-oss-120b` es
+netamente más confiable que Llama en las facturas variadas, que son la mayoría del volumen. (La
+boleta había ido a Sin Asignar solo porque ALETEC no estaba en el directorio, no por la IA: el
+pipeline saca el CUIT del texto con `extractCuitsFromText`, así que basta cargar el proveedor.)
+
+---
+
 ## 2026-06-22 — UI Boletas entrantes: filtros por consorcio/proveedor/periodo (server-side) + N° boleta
 
 **Problema:** la vista `/admin/boletas` lista 700+ boletas paginadas de a 50 sin forma de

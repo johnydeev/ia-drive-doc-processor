@@ -30,6 +30,19 @@ describe("isRateLimitError", () => {
     expect(isRateLimitError("HTTP 429: too many requests")).toBe(true);
   });
 
+  it("detecta el APIError del SDK de OpenAI por status 429 (Cerebras/Groq)", () => {
+    // El SDK no garantiza '429' en el message; el status numérico es la señal fiable.
+    expect(isRateLimitError({ status: 429, message: "Rate limit reached for model" })).toBe(true);
+  });
+
+  it("detecta el code rate_limit_exceeded del SDK de OpenAI", () => {
+    expect(isRateLimitError({ code: "rate_limit_exceeded", message: "slow down" })).toBe(true);
+  });
+
+  it("NO clasifica como rate-limit un error con status 500", () => {
+    expect(isRateLimitError({ status: 500, message: "internal error" })).toBe(false);
+  });
+
   it("reconoce el mensaje del barrido de modelos (en español, visto en prod)", () => {
     // Regresión real: la cadena de IA pasa el MENSAJE del error (string) al
     // pipeline; el RateLimitError del barrido dice "sin cuota" (español) y no

@@ -18,6 +18,7 @@ const bodySchema = z
     driveFolderUnassigned: z.string().optional(),
     driveFolderFailed: z.string().optional(),
     driveFolderReceipts: z.string().optional(),
+    driveFolderStatements: z.string().optional(),
     sheetsId: z.string().min(10),
     altaSheetsId: z.string().min(10).optional(),
     sheetName: z.string().min(1).optional(),
@@ -83,6 +84,7 @@ export async function POST(request: Request) {
     if (body.driveFolderUnassigned?.trim()) driveFoldersJson.unassigned = body.driveFolderUnassigned.trim();
     if (body.driveFolderFailed?.trim())     driveFoldersJson.failed     = body.driveFolderFailed.trim();
     if (body.driveFolderReceipts?.trim())   driveFoldersJson.receipts   = body.driveFolderReceipts.trim();
+    if (body.driveFolderStatements?.trim()) driveFoldersJson.statements = body.driveFolderStatements.trim();
 
     // Las API keys de IA se encriptan igual que la private key de Google
     const geminiApiKey = body.geminiApiKey?.trim();
