@@ -83,13 +83,27 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Prepare clean Docker config (no credential helper)
+      # Login a GHCR SIN `docker login` ni credential helper: se escribe el auth
+      # (base64 de usuario:token) directamente en un config.json propio del job.
+      # Evita el error "A specified logon session does not exist" del helper de
+      # Windows (que falla en el runner sin sesión interactiva, y que el
+      # login-action no esquiva ni con DOCKER_CONFIG — runner-images #11211), y
+      # también el problema del CRLF del pipe a --password-stdin en PowerShell 5.1.
+      # docker pull/compose leen este config vía DOCKER_CONFIG (env del job). El
+      # GITHUB_TOKEN es efímero (expira al terminar el job).
+      - name: Prepare Docker config with GHCR auth (no credential helper)
         shell: powershell
+        env:
+          GHCR_USER: johnydeev
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          $ErrorActionPreference = 'Stop'
           New-Item -ItemType Directory -Force -Path $env:DOCKER_CONFIG | Out-Null
-          $cfg = Join-Path $env:DOCKER_CONFIG "config.json"
-          [System.IO.File]::WriteAllText($cfg, "{}")
-          Write-Host "DOCKER_CONFIG = $env:DOCKER_CONFIG (config.json limpio, sin credsStore)"
+          $pair = "{0}:{1}" -f $env:GHCR_USER, $env:GHCR_TOKEN
+          $auth = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($pair))
+          $cfg = @{ auths = @{ "ghcr.io" = @{ auth = $auth } } } | ConvertTo-Json -Depth 5
+          [System.IO.File]::WriteAllText((Join-Path $env:DOCKER_CONFIG "config.json"), $cfg)
+          Write-Host "Auth de ghcr.io escrito en $env:DOCKER_CONFIG (sin helper, sin docker login)"
 
       # Crítica #3: el .env viene desde secrets.PROD_ENV_FILE (GitHub Secret),
       # en vez de copiarse desde un path hardcodeado en el runner. Requiere
@@ -110,15 +124,8 @@ jobs:
           $lines = (Get-Content .env | Measure-Object -Line).Lines
           Write-Host "::notice::.env escrito desde secret ($lines lineas)"
 
-      # Crítica #2: docker login via action oficial (maneja --password-stdin
-      # cross-platform sin el problema del CRLF del pipe de PowerShell 5.1).
-      # El token no aparece como argumento de comando visible.
-      - name: Login to GHCR
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: johnydeev
-          password: ${{ secrets.GITHUB_TOKEN }}
+      # (El login a GHCR ya está resuelto arriba escribiendo el auth en el
+      # config.json del job — sin `docker login` ni credential helper.)
 
       # Exporta los logs de los containers actuales a ./logs/ antes de tirarlos
       # abajo. Si el deploy revienta o un worker tira un stack útil, el siguiente

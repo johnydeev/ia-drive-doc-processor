@@ -13,10 +13,15 @@ terminated.`. Causa: `docker login` usa el credential helper de Docker Desktop
 Manager** y requiere una sesión de logon **interactiva** que el runner no tiene. Quitar `credsStore`
 del config global a mano **no alcanza**: Docker Desktop lo re-agrega al arrancar.
 
-**Decisión:** el job `deploy` usa un **`DOCKER_CONFIG` propio del job** (`${{ github.workspace }}/.docker-ci`)
-con un `config.json` `{}` limpio (sin `credsStore`), creado en un step previo al login. (Ojo: el
-contexto `runner` —p. ej. `runner.temp`— **no** está disponible en `env` a nivel de job; usar uno
-ahí hace que el workflow falle a validar antes de arrancar, con duración 0s. Por eso `github.workspace`.) Así
+**Decisión (approach final):** **no usar `docker login` en absoluto** en el job `deploy`. Un step
+escribe el `auth` (base64 de `usuario:token`) directamente en un `config.json` propio del job
+(`DOCKER_CONFIG = ${{ github.workspace }}/.docker-ci`); `docker pull`/`compose` autentican leyendo
+ese config. Así no se invoca ningún credential helper ni el comando `docker login`. El job `build`
+(ubuntu) sigue con `docker/login-action` normal (en Linux no hay problema). Camino recorrido:
+(1) quitar `credsStore` del config global → Docker Desktop lo re-pone; (2) `DOCKER_CONFIG` limpio +
+`docker/login-action` → el action no esquiva el helper igual (runner-images #11211); (3) **auth
+manual en el config** → definitivo. Ojo extra: `runner.temp` **no** está disponible en `env` a nivel
+de job (rompe la validación del workflow, duración 0s) → se usa `github.workspace`. Así
 `docker login`/`pull`/`compose` guardan las credenciales en base64 en ese config temporal, **sin
 invocar el helper de Windows** → independiente del config global que gestiona Docker Desktop. El
 `env` a nivel de job aplica a todos los steps (login + build/restart).
@@ -25,8 +30,9 @@ invocar el helper de Windows** → independiente del config global que gestiona 
 instalar otro credential helper (no hay uno headless confiable en Windows); correr el runner como
 servicio con sesión persistente (frágil).
 
-**Impacto:** `.github/workflows/ci.yml` (job `deploy`: `env.DOCKER_CONFIG` + step "Prepare clean
-Docker config"). Sin cambios en el código de la app. SIN COMMITEAR.
+**Impacto:** `.github/workflows/ci.yml` (job `deploy`: `env.DOCKER_CONFIG` + step "Prepare Docker
+config with GHCR auth"; se eliminó el step "Login to GHCR" que usaba `docker/login-action`). Sin
+cambios en el código de la app. SIN COMMITEAR.
 
 ---
 
