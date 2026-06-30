@@ -77,7 +77,9 @@ jobs:
       # del credsStore=desktop, que falla en el runner sin sesión interactiva (y
       # que Docker Desktop re-agrega al config global, por eso editarlo a mano no
       # alcanza). Aplica a login + pull + compose de todo el job.
-      DOCKER_CONFIG: ${{ runner.temp }}/dockercfg
+      # NOTA: el contexto `runner` NO está disponible en `env` a nivel de job →
+      # se usa `github.workspace` (sí disponible). El dir se crea en el step de abajo.
+      DOCKER_CONFIG: ${{ github.workspace }}/.docker-ci
     steps:
       - uses: actions/checkout@v4
 

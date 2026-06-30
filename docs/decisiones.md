@@ -13,8 +13,10 @@ terminated.`. Causa: `docker login` usa el credential helper de Docker Desktop
 Manager** y requiere una sesión de logon **interactiva** que el runner no tiene. Quitar `credsStore`
 del config global a mano **no alcanza**: Docker Desktop lo re-agrega al arrancar.
 
-**Decisión:** el job `deploy` usa un **`DOCKER_CONFIG` propio del job** (`${{ runner.temp }}/dockercfg`)
-con un `config.json` `{}` limpio (sin `credsStore`), creado en un step previo al login. Así
+**Decisión:** el job `deploy` usa un **`DOCKER_CONFIG` propio del job** (`${{ github.workspace }}/.docker-ci`)
+con un `config.json` `{}` limpio (sin `credsStore`), creado en un step previo al login. (Ojo: el
+contexto `runner` —p. ej. `runner.temp`— **no** está disponible en `env` a nivel de job; usar uno
+ahí hace que el workflow falle a validar antes de arrancar, con duración 0s. Por eso `github.workspace`.) Así
 `docker login`/`pull`/`compose` guardan las credenciales en base64 en ese config temporal, **sin
 invocar el helper de Windows** → independiente del config global que gestiona Docker Desktop. El
 `env` a nivel de job aplica a todos los steps (login + build/restart).
