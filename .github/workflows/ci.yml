@@ -71,8 +71,23 @@ jobs:
     needs: build
     if: github.event_name == 'push' && github.ref == 'refs/heads/master'
     runs-on: self-hosted
+    env:
+      # Config de Docker propio del job (limpio, sin el credential helper de
+      # Docker Desktop). Evita el error "A specified logon session does not exist"
+      # del credsStore=desktop, que falla en el runner sin sesión interactiva (y
+      # que Docker Desktop re-agrega al config global, por eso editarlo a mano no
+      # alcanza). Aplica a login + pull + compose de todo el job.
+      DOCKER_CONFIG: ${{ runner.temp }}/dockercfg
     steps:
       - uses: actions/checkout@v4
+
+      - name: Prepare clean Docker config (no credential helper)
+        shell: powershell
+        run: |
+          New-Item -ItemType Directory -Force -Path $env:DOCKER_CONFIG | Out-Null
+          $cfg = Join-Path $env:DOCKER_CONFIG "config.json"
+          [System.IO.File]::WriteAllText($cfg, "{}")
+          Write-Host "DOCKER_CONFIG = $env:DOCKER_CONFIG (config.json limpio, sin credsStore)"
 
       # Crítica #3: el .env viene desde secrets.PROD_ENV_FILE (GitHub Secret),
       # en vez de copiarse desde un path hardcodeado en el runner. Requiere

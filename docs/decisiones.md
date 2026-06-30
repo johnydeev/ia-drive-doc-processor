@@ -4,6 +4,30 @@ Registro de decisiones tomadas ante problemas reales encontrados en producción.
 
 ---
 
+## 2026-06-25 — Fix deploy CI: `docker login` en runner Windows (credsStore)
+
+**Problema:** el job `deploy` (self-hosted Windows) fallaba en "Login to GHCR" con
+`error storing credentials - A specified logon session does not exist. It may already have been
+terminated.`. Causa: `docker login` usa el credential helper de Docker Desktop
+(`credsStore: "desktop"` en `~/.docker/config.json`), que guarda en el **Windows Credential
+Manager** y requiere una sesión de logon **interactiva** que el runner no tiene. Quitar `credsStore`
+del config global a mano **no alcanza**: Docker Desktop lo re-agrega al arrancar.
+
+**Decisión:** el job `deploy` usa un **`DOCKER_CONFIG` propio del job** (`${{ runner.temp }}/dockercfg`)
+con un `config.json` `{}` limpio (sin `credsStore`), creado en un step previo al login. Así
+`docker login`/`pull`/`compose` guardan las credenciales en base64 en ese config temporal, **sin
+invocar el helper de Windows** → independiente del config global que gestiona Docker Desktop. El
+`env` a nivel de job aplica a todos los steps (login + build/restart).
+
+**Alternativas descartadas:** quitar `credsStore` del config global (Docker Desktop lo re-pone);
+instalar otro credential helper (no hay uno headless confiable en Windows); correr el runner como
+servicio con sesión persistente (frágil).
+
+**Impacto:** `.github/workflows/ci.yml` (job `deploy`: `env.DOCKER_CONFIG` + step "Prepare clean
+Docker config"). Sin cambios en el código de la app. SIN COMMITEAR.
+
+---
+
 ## 2026-06-25 — Banco de pruebas local de LLMs (testbench)
 
 **Problema:** para mejorar la extracción (iterar prompts, comparar modelos) hace falta procesar
