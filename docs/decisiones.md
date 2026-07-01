@@ -32,7 +32,7 @@ servicio con sesión persistente (frágil).
 
 **Impacto:** `.github/workflows/ci.yml` (job `deploy`: `env.DOCKER_CONFIG` + step "Prepare Docker
 config with GHCR auth"; se eliminó el step "Login to GHCR" que usaba `docker/login-action`). Sin
-cambios en el código de la app. SIN COMMITEAR.
+cambios en el código de la app. **Commiteado y deployado** (HEAD `bcff5c3`).
 
 ---
 
@@ -58,7 +58,7 @@ sandbox de DB/Sheets (se prefirió cero escritura); fine-tuning de modelos (otro
 
 **Impacto:** nuevos `src/lib/testbench.ts` (+test, 6 tests) y `scripts/llm-testbench.ts`;
 `.gitignore` ignora `pruebas de LLMs/` (datos reales del cliente). 161 tests; typecheck + lint OK.
-Sin migración. SIN COMMITEAR. Caveat: el OCR no corre local (solo Docker) → boletas-imagen en el
+Sin migración. **Commiteado.** Caveat: el OCR no corre local (solo Docker) → boletas-imagen en el
 pipeline real. Spec/plan: `docs/superpowers/{specs,plans}/2026-06-25-banco-pruebas-llms*`.
 
 ---
@@ -115,7 +115,7 @@ cientos/día.
 155 totales; typecheck + lint (0 errores) + build:jobs OK. Sin migración. Archivos: nuevos
 `openAICompatibleExtractor.service.ts` (+test) y `scripts/compare-extractors.ts`; modificados
 `aiUsage.types.ts`, `aiErrors.ts`, `aiExtraction.ts`, `env.ts`, `processPendingDocuments.job.ts`,
-`logger.ts`. SIN COMMITEAR (lo commitea el owner). Spec/plan:
+`logger.ts`. **Commiteado y deployado.** Spec/plan:
 `docs/superpowers/{specs,plans}/2026-06-24-cuota-ia-gratis-cerebras-groq*`.
 
 **Validación + ajuste de modelo (25/06):** prueba real con `compare-extractors.ts` sobre un F931

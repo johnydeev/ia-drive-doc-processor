@@ -3,6 +3,13 @@
 ## [Unreleased]
 
 ### Fix
+- **Deploy CI: login a GHCR en runner Windows self-hosted (2026-06-30)**. El job `deploy` fallaba
+  en el `docker login` con `A specified logon session does not exist` — el credential helper de
+  Docker Desktop (`credsStore: "desktop"`) requiere una sesión de logon interactiva que el runner no
+  tiene, y Docker Desktop lo re-agrega al config global. Solución: **no usar `docker login`**; un
+  step escribe el `auth` (base64 `usuario:token`) en un `config.json` propio del job
+  (`DOCKER_CONFIG = github.workspace/.docker-ci`), y `docker pull`/`compose` autentican leyendo ese
+  config. El job `build` (ubuntu) sigue con `docker/login-action` normal (en Linux no hay problema).
 - **ARCA F931: monto inventado por truncado de texto (2026-06-22)**. En la primera corrida real,
   ARCA extrajo un monto **fabricado** (294.499,11 = suma de aportes de la DJ, cifra que no está
   impresa en el papel) en vez del total real del VEP (453.493,06). Causa: la DJ es larga y el
@@ -17,15 +24,13 @@
   wiring del pipeline (`createProcessingContext`): la cadena de producción queda
   `Cerebras → Gemini → OpenAI → Claude`. Cerebras alcanza como principal; Groq se evaluará en el
   banco de pruebas. `createAiExtractionChain` y `OpenAICompatibleExtractorService` lo siguen
-  soportando (reactivar = 1 línea). typecheck + 161 tests + build:jobs OK. SIN COMMITEAR.
-- **Banco de pruebas local de LLMs (2026-06-25)**. Herramienta de desarrollo para iterar prompts y
+  soportando (reactivar = 1 línea). typecheck + 161 tests + build:jobs OK.- **Banco de pruebas local de LLMs (2026-06-25)**. Herramienta de desarrollo para iterar prompts y
   comparar modelos sobre boletas reales sin tocar producción. `src/lib/testbench.ts`
   (`runLogicalPipeline` + `compareToExpected`) replica la lógica del pipeline (extracción + triage +
   matching read-only + canonización) en **dry run** (no escribe DB/Sheets), y el CLI
   `scripts/llm-testbench.ts` lee una carpeta (`pruebas de LLMs/`, gitignored), corre cada boleta por
   cada modelo configurado y escribe `resultados.json` + `reporte.md`. Ground truth opcional
-  (`<nombre>.expected.json` → aciertos por campo). 6 tests nuevos (161 totales). Sin migración. SIN COMMITEAR.
-- **Más cuota de IA gratis: Cerebras + Groq en la cadena (2026-06-24)**. El throughput cayó a
+  (`<nombre>.expected.json` → aciertos por campo). 6 tests nuevos (161 totales). Sin migración.- **Más cuota de IA gratis: Cerebras + Groq en la cadena (2026-06-24)**. El throughput cayó a
   <½ del histórico porque Google recortó el free tier de Gemini (cuota diaria por modelo). Como
   predominan facturas variadas, se sumó **oferta** de IA gratuita en vez de tocar batchSize/
   frecuencia (que con tope diario solo cambian el ritmo). Nuevo `OpenAICompatibleExtractorService`
@@ -38,13 +43,12 @@
   (06/2026): Cerebras 1M tokens/día (~300+ boletas, modelo `gpt-oss-120b` — Cerebras retiró Llama
   del free tier), Groq 1.000-14.400 req/día (`llama-3.3-70b-versatile`). Validado el 25/06 con un
   F931 de ARCA real (ambos sacan el monto correcto del VEP). 9 tests nuevos
-  (155 totales); typecheck + lint + build:jobs OK. Sin migración. SIN COMMITEAR (lo commitea el owner).
+  (155 totales); typecheck + lint + build:jobs OK. Sin migración.
 - **Alta/edición de clientes: campo "Rendiciones" (statements) (2026-06-24)**. El formulario de
   crear/editar cliente (panel admin) ahora incluye la carpeta **Rendiciones**, obligatoria para
   procesar (sin ella el scheduler saltea el cliente). Backend (`POST`/`PATCH`/`GET` de
   `/api/admin/clients`) + UI (`admin/page.tsx` y `admin/clients/[id]/page.tsx`). Permite dar de
-  alta un cliente 100% desde el panel sin tocar la DB. typecheck + lint + next build OK. SIN COMMITEAR.
-- **UI Boletas entrantes: filtros + N° de boleta (2026-06-22)**. En `/admin/boletas`: nueva
+  alta un cliente 100% desde el panel sin tocar la DB. typecheck + lint + next build OK.- **UI Boletas entrantes: filtros + N° de boleta (2026-06-22)**. En `/admin/boletas`: nueva
   columna **N° Boleta** (últimos 4 dígitos) y tres **dropdowns combinados** arriba para filtrar
   por **consorcio**, **proveedor** y **periodo**. Filtrado **server-side**: la API
   `/api/client/invoices` acepta `consortiumId`/`providerId`/`period` (filtra todo el dataset,

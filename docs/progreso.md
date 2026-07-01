@@ -1,18 +1,42 @@
 # Progreso del proyecto — drive-doc-processor
 
-Actualizado al 25/06/2026 (sesión 36).
+Actualizado al 30/06/2026 (sesión 36).
 
-> **Estado de deploy:** todo hasta `63cbfb0` (refactor H2, triage, SERACARH, ARCA F931 + su fix
-> de monto) está **deployado**. Sin deployar: los filtros + N° de boleta en la UI de Boletas
-> entrantes. **Nuevo sin commitear (lo commitea el owner): soporte Cerebras + Groq en la cadena
-> de IA (abajo).** Pendiente operativo: la boleta de prueba de ARCA espera el reset de cuota IA
-> (~04:00 AR) para reprocesarse con el fix de monto.
+> **Estado (cierre sesión 36):** todo el trabajo de la sesión está **commiteado y pusheado**
+> (HEAD `bcff5c3`): Cerebras + Groq en la cadena, **Groq fuera de producción**, campo Rendiciones
+> en el alta de clientes, banco de pruebas de LLMs, y el fix del **deploy CI** (login a GHCR en el
+> runner Windows). El **código nuevo ya está deployado** (imagen nueva corriendo en prod, web
+> healthy). **Pendiente operativo para activar Cerebras:** el `.env` de producción se arma desde el
+> GitHub Secret `PROD_ENV_FILE`; hay que dejarlo **completo** (las 8 variables — incluidas
+> `CEREBRAS_API_KEY` y `DIRECT_URL`) y re-deployar. Hasta entonces el worker procesa con **Gemini**
+> (funciona OK, pero sin la mejora de cuota). Ver la entrada "Deploy CI + activación de Cerebras".
+
+---
+
+## Deploy CI + activación de Cerebras en producción (30/06/2026)
+
+**Estado: commiteado y pusheado (HEAD `bcff5c3`); código deployado. Pendiente: dejar el secret
+`PROD_ENV_FILE` completo con `CEREBRAS_API_KEY` + re-deploy para que el worker use Cerebras.**
+
+- **Fix deploy CI (login a GHCR en runner Windows self-hosted):** el `docker login` fallaba con
+  `A specified logon session does not exist` — el credential helper de Docker Desktop
+  (`credsStore: "desktop"`) necesita una sesión de logon interactiva que el runner no tiene, y
+  Docker Desktop re-agrega el `credsStore` al config global. Solución final: **no usar
+  `docker login`**; un step escribe el `auth` (base64 `usuario:token`) directo en un `config.json`
+  propio del job (`DOCKER_CONFIG = ${{ github.workspace }}/.docker-ci`), y `docker pull`/`compose`
+  autentican leyendo ese config. Detalles en decisiones.md.
+- **Activación de Cerebras (pendiente operativo):** el código nuevo está deployado, pero el worker
+  usa Gemini porque `CEREBRAS_API_KEY` no está en el `.env` de prod (que viene del secret
+  `PROD_ENV_FILE`, no del `.env` local). Además, un intento de deploy falló porque el secret quedó
+  **incompleto** al pegarlo a mano (faltaba `DIRECT_URL` → `prisma migrate deploy` con `P1012`). Fix:
+  pegar el `.env` **completo** en el secret (se copió al portapapeles con `Get-Content .env -Raw |
+  Set-Clipboard`) + re-deploy. Con eso el worker pasa a Cerebras (`gpt-oss-120b`).
 
 ---
 
 ## Banco de pruebas local de LLMs (25/06/2026)
 
-**Estado: implementado y verificado (161 tests, +6 nuevos; typecheck + lint OK). SIN COMMITEAR.**
+**Estado: implementado, verificado y COMMITEADO (161 tests, +6 nuevos; typecheck + lint OK).**
 
 Herramienta de desarrollo para iterar prompts y comparar modelos sobre boletas reales sin tocar
 producción. Lee PDFs de una carpeta (`pruebas de LLMs/`, gitignored) y los pasa por la **lógica**
@@ -30,10 +54,10 @@ Spec/plan: `docs/superpowers/{specs,plans}/2026-06-25-banco-pruebas-llms*`. Deta
 
 ## Más cuota de IA gratis: Cerebras + Groq en la cadena (24/06/2026)
 
-**Estado: implementado y verificado (155 tests, +9 nuevos; typecheck + lint (0 errores) +
-build:jobs OK). SIN COMMITEAR — lo commitea el owner. PENDIENTE owner: cargar
-`CEREBRAS_API_KEY`/`GROQ_API_KEY` en `.env`, validar calidad con `scripts/compare-extractors.ts`
-sobre PDFs reales, y rebuild de worker (+web) si la calidad es buena.**
+**Estado: implementado, verificado, COMMITEADO y DEPLOYADO (código nuevo en prod, 155 tests +9).
+Validado con `compare-extractors.ts` sobre PDFs reales. Pendiente operativo: activar Cerebras en
+prod cargando `CEREBRAS_API_KEY` en el secret `PROD_ENV_FILE` (ver "Deploy CI + activación de
+Cerebras" arriba); hasta entonces el worker usa Gemini.**
 
 El throughput cayó a <½ del histórico: Google recortó el free tier de Gemini (cuota diaria por
 modelo) y ya no alcanza una jornada. Como **predominan facturas variadas** (no sistemáticas), la
@@ -69,8 +93,8 @@ decisiones.md.
 
 ## Entorno de prueba: cliente propio + campo Rendiciones en el alta (24/06/2026, en progreso)
 
-**Estado: campo Rendiciones agregado al alta/edición de clientes (verificado: typecheck + lint +
-next build OK), SIN COMMITEAR. Setup del cliente de prueba pendiente del owner (depende del tipo
+**Estado: campo Rendiciones agregado al alta/edición de clientes (verificado + COMMITEADO +
+deployado). Setup del cliente de prueba pendiente del owner (depende del tipo
 de cuenta de Google — personal vs Workspace, por el requisito de Unidad Compartida para que la app
 pueda CREAR las subcarpetas de Rendiciones y los archivos de carga manual).**
 
