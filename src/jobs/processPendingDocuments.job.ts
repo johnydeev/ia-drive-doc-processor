@@ -442,9 +442,11 @@ async function resolveAssignment(
   const normOcrCuit = cuitDigits(rawCuit);
   const normOcrName = normName(rawName);
 
-  // Matching en 4 niveles (CUIT allTaxIds → CUIT providerTaxId → nombre exacto →
-  // nombre parcial), ver lib/assignmentMatching.
-  const providerMatch = matchProvider(allProviders, rawCuit, rawName, allTaxIds, consortiumCuitNorm);
+  // Matching de proveedor: SOLO por CUIT (allTaxIds → providerTaxId). El match por
+  // nombre queda habilitado únicamente para sindicales/ARCA (CUIT del papel =
+  // consorcio, sin CUIT propio) vía `isSindicalLsp`. Facturas normales sin CUIT de
+  // proveedor en DB → null → Sin Asignar. Ver lib/assignmentMatching + decisiones.md.
+  const providerMatch = matchProvider(allProviders, rawCuit, rawName, allTaxIds, consortiumCuitNorm, isSindicalLsp);
 
   // Log informativo: el CUIT del OCR coincide con el del consorcio (no se usa como
   // proveedor). Se emite salvo que el proveedor se haya resuelto por allTaxIds.
@@ -944,56 +946,68 @@ async function assignmentStep(ctx: PipelineContext): Promise<StepResult> {
   );
   m.ms.assign = Date.now() - assignStart;
 
-  // ── Fallback visual: si el proveedor no fue encontrado y el emisor
-  // estaba en imagen, intentar extracción visual con Gemini ──────────────
-  if (
-    assignment.unassigned &&
-    assignment.consortiumId &&
-    !pdfExtractor.getLastHasEmitterBlock() &&
-    geminiModule &&
-    geminiApiKey
-  ) {
-    const pngBuffer = pdfExtractor.getLastOcrPng();
-    if (pngBuffer) {
+  // ── Fallback visual (Gemini): SOLO cuando falta el CUIT del proveedor o del
+  // consorcio (boletas con el emisor en imagen/logo, o 100% imagen). Ahorro de
+  // tokens: si ya matchearon ambos por CUIT, no se dispara. Cerebras es texto puro
+  // (no ve imágenes) → la visión es siempre vía Gemini multimodal. Tolerancia 0:
+  // el CUIT que devuelve Gemini debe matchear EXACTO contra la DB, sino Sin Asignar.
+  const cuitMissing =
+    assignment.reasonCategory === "provider_not_found" ||
+    assignment.reasonCategory === "consortium_not_found";
+
+  if (cuitMissing && geminiModule && geminiApiKey) {
+    // Recorte del membrete a alta DPI (mejor lectura del CUIT); si falla, cae al
+    // PNG de página completa que dejó el OCR.
+    const membretePng =
+      (ctx.buffer ? await pdfExtractor.extractMembreteImage(ctx.buffer) : null) ??
+      pdfExtractor.getLastOcrPng();
+
+    if (membretePng) {
       try {
-        pipelineLog.stepStart(cid, "→ Fallback visual: extrayendo emisor con Gemini Vision...");
+        pipelineLog.stepStart(cid, "→ Fallback visual: leyendo membrete con Gemini Vision...");
         const visualExtractor = new geminiModule.GeminiExtractorService({
           apiKey: geminiApiKey,
           model: geminiModel,
         });
-        const visualResult = await visualExtractor.extractProviderFromImage(
-          pngBuffer,
+        const visual = await visualExtractor.extractPartiesFromImage(
+          membretePng,
           assignment.canonicalConsortium ?? extracted.consortium ?? ""
         );
 
-        if (visualResult.providerTaxId || visualResult.providerName) {
+        const visionCuits = [visual.providerTaxId, visual.consortiumTaxId]
+          .filter((c): c is string => Boolean(c));
+
+        if (visionCuits.length > 0 || visual.providerName || visual.consortiumName) {
           pipelineLog.stepStart(cid,
-            `→ Gemini Vision extrajo: provider="${visualResult.providerName}" ` +
-            `taxId="${visualResult.providerTaxId}"`
+            `→ Gemini Vision: emisor="${visual.providerName}" (${visual.providerTaxId}) | ` +
+            `consorcio="${visual.consortiumName}" (${visual.consortiumTaxId})`
           );
 
-          if (visualResult.providerTaxId) {
-            extracted.providerTaxId = visualResult.providerTaxId;
+          // Sumar los CUITs de la visión a allTaxIds → el re-matching por CUIT los
+          // usa tanto para el proveedor como para el consorcio (100% imagen).
+          if (visionCuits.length > 0) {
+            const merged = new Set([...(extracted.allTaxIds ?? []), ...visionCuits]);
+            extracted.allTaxIds = [...merged];
           }
-          if (visualResult.providerName) {
-            extracted.provider = visualResult.providerName;
-          }
+          if (visual.providerTaxId) extracted.providerTaxId = visual.providerTaxId;
+          if (visual.providerName) extracted.provider = visual.providerName;
+          // Solo pisar el consorcio si aún no se había matcheado (boleta 100% imagen).
+          if (!assignment.consortiumId && visual.consortiumName) extracted.consortium = visual.consortiumName;
 
           const visualAssignment = await resolveAssignment(
             extracted, cid, file.id, consortiumRepository, providerRepository, lspServiceRepository, lspProvider
           );
 
           if (!visualAssignment.unassigned) {
-            pipelineLog.stepStart(cid, "✅ Fallback visual: proveedor encontrado");
+            pipelineLog.stepStart(cid, "✅ Fallback visual: asignación resuelta por CUIT del membrete");
             assignment = visualAssignment;
           } else {
             pipelineLog.stepStart(cid,
-              `⚠️ Fallback visual: proveedor no encontrado en DB ` +
-              `(${visualResult.providerName} / ${visualResult.providerTaxId})`
+              `⚠️ Fallback visual: CUIT del membrete no matchea la DB → Sin Asignar`
             );
           }
         } else {
-          pipelineLog.stepStart(cid, "⚠️ Fallback visual: Gemini Vision no pudo extraer el emisor");
+          pipelineLog.stepStart(cid, "⚠️ Fallback visual: Gemini Vision no pudo leer CUITs del membrete");
         }
       } catch (visualError) {
         pipelineLog.stepStart(cid,

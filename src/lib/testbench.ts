@@ -4,6 +4,7 @@ import { AiUsageMetrics } from "@/types/aiUsage.types";
 import {
   identifyLSPProvider,
   annotateSindicalProvider,
+  usesConsortiumCuit,
   type LSPProvider,
 } from "@/lib/extraction";
 import { classifyDocumentType } from "@/lib/documentClassifier";
@@ -121,7 +122,8 @@ export async function runLogicalPipeline(input: {
     extracted.providerTaxId,
     extracted.provider ?? lspProvider,
     allTaxIds,
-    consortiumCuitNorm
+    consortiumCuitNorm,
+    usesConsortiumCuit(lspProvider)
   );
 
   base.match = {

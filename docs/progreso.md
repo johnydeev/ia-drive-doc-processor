@@ -2,12 +2,62 @@
 
 Actualizado al 02/07/2026 (sesión 37).
 
-> **Estado (sesión 37, sin commitear):** refactor del scheduler para que cada cliente corra en su
-> propio loop, agendado exactamente a su `intervalMinutes` propio, en vez de un tick global fijo de
-> 5 min con throttle interno silencioso. Ver entrada "Scheduler: loop por cliente en vez de tick
-> global fijo". typecheck + lint + `build:jobs` + tests de caracterización + script de timing:
-> todo OK. **Cerebras confirmado activo en producción** (ver logs, entrada actualizada abajo) — ya
-> no está pendiente.
+> **Estado (sesión 37, sin commitear):** (1) refactor del scheduler para que cada cliente corra en
+> su propio loop, agendado exactamente a su `intervalMinutes`; (2) **matching de proveedor endurecido
+> a SOLO CUIT** (fix de asignación cruzada — caso ASCENSORES POTENZA); (3) **fallback de visión
+> Gemini reforzado** para leer el CUIT del membrete en imagen (trigger por CUIT faltante, recorte
+> alta DPI, boletas 100% imagen, tolerancia 0). typecheck + lint + `build:jobs` + 170 tests: todo OK.
+> **Cerebras confirmado activo en producción** (ver logs) — ya no está pendiente.
+
+---
+
+## Visión Gemini para CUIT del membrete en imagen (02/07/2026)
+
+**Estado: implementado, verificado (170 tests + typecheck + lint + build:jobs OK). Sin commitear.**
+
+**Problema:** con el proveedor ahora solo-CUIT, las boletas cuyo CUIT del emisor está en el membrete
+como imagen/logo (que `pdf-parse` no lee) irían a Sin Asignar aunque el proveedor esté cargado.
+Cerebras es texto puro (no ve imágenes) → la visión es vía Gemini.
+
+**Decisión:** reforzar el fallback de visión que ya existía. (1) **Trigger por CUIT faltante**: corre
+solo si `reasonCategory ∈ {provider_not_found, consortium_not_found}` — si ya hay ambos CUITs, no se
+dispara (ahorro de tokens). (2) **Recorte del membrete a 300 DPI** (`renderTopRegionPng`, pdftoppm +
+`@napi-rs/canvas`) en vez de la página completa a 200 DPI. (3) **Recupera emisor Y consorcio**
+(`extractPartiesFromImage`) → sirve para boletas 100% imagen. (4) **Tolerancia 0**: el CUIT de Gemini
+matchea exacto contra la DB o Sin Asignar (sin fuzzy). Ver `docs/decisiones.md` (2026-07-02).
+
+**Archivos:** `src/services/ocr.service.ts`, `src/services/pdfTextExtractor.service.ts`,
+`src/services/geminiExtractor.service.ts`, `src/jobs/processPendingDocuments.job.ts` + 4 tests nuevos
+de caracterización.
+
+**Nota operativa:** depende de que el cliente tenga Gemini configurado (MorinigoAdm ya lo tiene). Sin
+Gemini, la boleta-imagen va a Sin Asignar. Boletas 100% imagen sin OCR bueno del consorcio ahora
+pueden resolverse por el CUIT que lee Gemini del membrete.
+
+---
+
+## Matching de proveedor: solo por CUIT (02/07/2026)
+
+**Estado: implementado, verificado (166 tests + typecheck + lint + build:jobs OK). Sin commitear.**
+
+**Problema:** una factura de ASCENSORES POTENZA (proveedor no cargado) se asignó a otro proveedor
+que sí estaba en la DB. El texto del PDF solo trae el CUIT del consorcio (el del emisor está en el
+logo, que `pdf-parse` no lee); sin CUIT de proveedor, el matching caía al fallback por **nombre
+parcial** (`slice(0,5)`) y colisionaba con otro *"ASCENSORES ..."*.
+
+**Decisión:** proveedor = **solo CUIT**. Si no está el CUIT del proveedor en la boleta → Sin
+Asignar. El match por nombre queda habilitado (parámetro `allowNameMatch`) SOLO para sindicales/ARCA
+(SUTERH/FATERYH/SERACARH/ARCA, que no tienen CUIT propio). Consorcio queda igual (CUIT + fallback
+nombre/fuzzy/alias — necesario para boletas de servicios que no traen el CUIT del edificio). Ver
+`docs/decisiones.md` (2026-07-02) para el detalle y alternativas descartadas.
+
+**Archivos:** `src/lib/assignmentMatching.ts`, `src/jobs/processPendingDocuments.job.ts`,
+`src/lib/testbench.ts`, `scripts/diag-boleta.ts` + tests
+(`assignmentMatching.test.ts`, `processPendingDocuments.job.test.ts`).
+
+**Nota operativa:** boletas cuyo proveedor no cargue su CUIT en el papel (o cuyo CUIT esté solo en
+el logo/imagen sin buen OCR) van a Sin Asignar por diseño — el owner las revisa o pide rehacer la
+factura. Cargar el proveedor con su CUIT en el directorio ALTA resuelve los casos legítimos.
 
 ---
 

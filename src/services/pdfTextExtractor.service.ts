@@ -89,6 +89,24 @@ export class PdfTextExtractorService {
     }
   }
 
+  /**
+   * Recorte del membrete (franja superior de la página 1) a alta DPI, para el
+   * fallback de visión cuando falta el CUIT del emisor (o del consorcio). On-demand:
+   * solo se llama cuando el matching por CUIT no resolvió. Devuelve null si falla.
+   */
+  async extractMembreteImage(
+    buffer: Buffer,
+    opts?: { dpi?: number; topFraction?: number }
+  ): Promise<Buffer | null> {
+    try {
+      const { OcrService } = await import("@/services/ocr.service");
+      return await new OcrService().renderTopRegionPng(buffer, opts);
+    } catch (err) {
+      console.error(`[pdf-extractor] extractMembreteImage falló: ${err instanceof Error ? err.message : "?"}`);
+      return null;
+    }
+  }
+
   private mergeTexts(directText: string, ocrText: string): string {
     if (!directText) return ocrText;
     if (!ocrText) return directText;

@@ -3,6 +3,23 @@
 ## [Unreleased]
 
 ### Changed
+- **Visión Gemini reforzada para el CUIT del membrete en imagen (2026-07-02)**. Complementa el
+  matching solo-CUIT: cuando falta el CUIT del proveedor (o del consorcio) porque está en el
+  membrete como imagen/logo, se lee con Gemini Vision. Mejoras sobre el fallback previo: (1) se
+  dispara SOLO cuando falta un CUIT (`reasonCategory` = provider/consortium_not_found) → ahorro de
+  tokens; (2) recorta la franja superior de la página 1 a 300 DPI (`@napi-rs/canvas`) en vez de la
+  página entera a 200 DPI; (3) recupera emisor Y consorcio (sirve para boletas 100% imagen); (4)
+  tolerancia 0 — el CUIT leído matchea exacto contra la DB o va a Sin Asignar. Cerebras es texto
+  puro, así que la visión es siempre vía Gemini. 4 tests nuevos (170 total). Sin migración. Ver
+  decisiones.md.
+- **Matching de proveedor endurecido a SOLO CUIT (2026-07-02)**. Una factura de un proveedor NO
+  cargado (ASCENSORES POTENZA) se asignaba por error a otro proveedor de la DB con nombre parecido,
+  por el fallback de "nombre parcial" (`slice(0,5)` → dos *"ASCENSORES ..."* colisionaban). Ahora el
+  proveedor se matchea solo por CUIT (`allTaxIds` / `providerTaxId`, excluyendo el del consorcio); si
+  no está el CUIT del proveedor en la boleta → Sin Asignar. El match por nombre queda habilitado
+  (`allowNameMatch`) SOLO para el conjunto cerrado de sindicales/ARCA (SUTERH/FATERYH/SERACARH/ARCA),
+  que no tienen CUIT propio. El consorcio no cambia (CUIT + fallback nombre/fuzzy/alias). 166 tests
+  (regresión del bug + gating). Sin migración. Ver decisiones.md.
 - **Scheduler: loop independiente por cliente en vez de tick global fijo (2026-07-02)**. Antes había
   un `setInterval` global cada 5 min sobre todos los clientes, con throttle interno silencioso por
   cliente (`shouldEvaluateClient`) — el log `CICLO DE ESCANEO` aparecía cada 5 min sin importar el

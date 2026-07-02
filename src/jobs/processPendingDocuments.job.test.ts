@@ -44,7 +44,12 @@ function makeFile(over: Partial<ProcessDriveFileInput> = {}): ProcessDriveFileIn
   return { id: "file-1", name: "boleta.pdf", mimeType: "application/pdf", webViewLink: null, ...over };
 }
 
-/** Datos extraídos por IA que matchean el consorcio/proveedor sembrados en makeContext. */
+/**
+ * Datos extraídos por IA que matchean el consorcio/proveedor sembrados en makeContext.
+ * Trae los DOS CUITs de la boleta (proveedor + consorcio): desde 2026-07-02 el
+ * proveedor se matchea SOLO por CUIT, así que el camino feliz requiere el CUIT del
+ * proveedor (30-65511651-2) presente. El del consorcio (30-11111111-1) también va.
+ */
 function okExtraction(over: Partial<ExtractedDocumentData> = {}): ExtractedDocumentData {
   return emptyExtraction({
     consortium: "THAMES 647",
@@ -52,8 +57,8 @@ function okExtraction(over: Partial<ExtractedDocumentData> = {}): ExtractedDocum
     amount: 118000,
     boletaNumber: "0001",
     dueDate: "2026-05-10",
-    providerTaxId: null,
-    allTaxIds: [],
+    providerTaxId: "30-65511651-2",
+    allTaxIds: ["30-65511651-2", "30-11111111-1"],
     ...over,
   });
 }
@@ -88,11 +93,17 @@ function makeContext(configOver: Partial<ProcessJobConfig> = {}) {
   };
 
   const pdfExtractor = {
-    extractTextFromPdf: vi.fn().mockResolvedValue("documento de prueba importe total a pagar"),
+    // El texto incluye los dos CUITs (proveedor 30-65511651-2 + consorcio
+    // 30-11111111-1): el pipeline descarta CUITs que NO aparecen en el texto
+    // (anti-alucinación), y desde 2026-07-02 el proveedor se matchea solo por CUIT.
+    extractTextFromPdf: vi.fn().mockResolvedValue(
+      "documento de prueba importe total a pagar CUIT 30-65511651-2 consorcio 30-11111111-1"
+    ),
     getLastTextSource: vi.fn().mockReturnValue("direct"),
     getLastHasEmitterBlock: vi.fn().mockReturnValue(true),
     getLastOcrMs: vi.fn().mockReturnValue(0),
     getLastOcrPng: vi.fn().mockReturnValue(null),
+    extractMembreteImage: vi.fn().mockResolvedValue(null),
   };
 
   const sheetsService = {
@@ -360,5 +371,107 @@ describe("processDriveFile — caracterización de los 7 caminos de salida", () 
     expect(ctx.invoiceRepository.saveProcessedInvoice).not.toHaveBeenCalled();
     expect(summary.notBoleta).toBe(1);
     expect(metricsCore().result).toBe("not_boleta");
+  });
+
+  describe("fallback visual Gemini (CUIT del membrete en imagen)", () => {
+    /** Instala un geminiModule mock cuyo extractPartiesFromImage devuelve `parties`. */
+    function withGeminiVision(ctx: TestContext, parties: {
+      providerName?: string | null; providerTaxId?: string | null;
+      consortiumName?: string | null; consortiumTaxId?: string | null;
+    }) {
+      const spy = vi.fn().mockResolvedValue({
+        providerName: null, providerTaxId: null, consortiumName: null, consortiumTaxId: null, ...parties,
+      });
+      (ctx as unknown as { geminiModule: unknown }).geminiModule = {
+        GeminiExtractorService: class {
+          extractPartiesFromImage = spy;
+        },
+      };
+      (ctx as unknown as { geminiApiKey?: string }).geminiApiKey = "gemini-key";
+      return spy;
+    }
+
+    it("recupera el CUIT del proveedor del membrete (emisor en imagen) → OK", async () => {
+      const ctx = makeContext();
+      // Texto SIN el CUIT del proveedor (está en el logo); solo el del consorcio.
+      ctx.pdfExtractor.extractTextFromPdf.mockResolvedValue(
+        "factura importe total a pagar consorcio 30-11111111-1"
+      );
+      ctx.pdfExtractor.extractMembreteImage = vi.fn().mockResolvedValue(Buffer.from("membrete-png"));
+      ctx.aiChain.run.mockImplementation(async (_t, cb) => {
+        cb?.("cerebras", true);
+        return {
+          data: okExtraction({ providerTaxId: null, allTaxIds: ["30-11111111-1"] }),
+          usage: null, provider: "cerebras",
+        };
+      });
+      // Gemini Vision lee el CUIT del emisor (que sí está cargado en la DB).
+      const spy = withGeminiVision(ctx, { providerName: "TIGRE ASCENSORES S.A.", providerTaxId: "30-65511651-2" });
+      const summary = createBaseSummary(1);
+
+      await processDriveFile(makeFile(), asContext(ctx), summary);
+
+      expect(spy).toHaveBeenCalledTimes(1);
+      expect(ctx.pdfExtractor.extractMembreteImage).toHaveBeenCalledTimes(1);
+      expect(ctx.sheetsService.insertRow).toHaveBeenCalledTimes(1);
+      expect(summary.processed).toBe(1);
+      expect(metricsCore().result).toBe("ok");
+    });
+
+    it("NO se dispara si ya matchearon ambos CUITs (ahorro de tokens)", async () => {
+      const ctx = makeContext(); // okExtraction trae los 2 CUITs → asigna sin visión
+      ctx.pdfExtractor.extractMembreteImage = vi.fn().mockResolvedValue(Buffer.from("x"));
+      const spy = withGeminiVision(ctx, { providerTaxId: "30-65511651-2" });
+      const summary = createBaseSummary(1);
+
+      await processDriveFile(makeFile(), asContext(ctx), summary);
+
+      expect(spy).not.toHaveBeenCalled();
+      expect(ctx.pdfExtractor.extractMembreteImage).not.toHaveBeenCalled();
+      expect(metricsCore().result).toBe("ok");
+    });
+
+    it("NO se dispara por no_amount (solo por CUIT faltante)", async () => {
+      const ctx = makeContext();
+      ctx.aiChain.run.mockImplementation(async (_t, cb) => {
+        cb?.("cerebras", true);
+        return { data: okExtraction({ amount: null }), usage: null, provider: "cerebras" };
+      });
+      ctx.pdfExtractor.extractMembreteImage = vi.fn().mockResolvedValue(Buffer.from("x"));
+      const spy = withGeminiVision(ctx, { providerTaxId: "30-65511651-2" });
+      const summary = createBaseSummary(1);
+
+      await processDriveFile(makeFile(), asContext(ctx), summary);
+
+      expect(spy).not.toHaveBeenCalled();
+      expect(ctx.pdfExtractor.extractMembreteImage).not.toHaveBeenCalled();
+      expect(metricsCore().result).toBe("no_amount");
+    });
+
+    it("CUIT del membrete no está en la DB → sigue en Sin Asignar", async () => {
+      const ctx = makeContext();
+      ctx.pdfExtractor.extractTextFromPdf.mockResolvedValue(
+        "factura importe total a pagar consorcio 30-11111111-1"
+      );
+      ctx.pdfExtractor.extractMembreteImage = vi.fn().mockResolvedValue(Buffer.from("membrete-png"));
+      ctx.aiChain.run.mockImplementation(async (_t, cb) => {
+        cb?.("cerebras", true);
+        return {
+          data: okExtraction({ providerTaxId: null, allTaxIds: ["30-11111111-1"] }),
+          usage: null, provider: "cerebras",
+        };
+      });
+      // Gemini lee un CUIT de proveedor que NO está cargado (tolerancia 0).
+      const spy = withGeminiVision(ctx, { providerName: "PROVEEDOR NUEVO", providerTaxId: "30-99999999-9" });
+      const summary = createBaseSummary(1);
+
+      await processDriveFile(makeFile(), asContext(ctx), summary);
+
+      expect(spy).toHaveBeenCalledTimes(1);
+      expect(ctx.driveService.moveFileToUnassigned).toHaveBeenCalledWith("file-1", "pending", "unassigned");
+      expect(ctx.sheetsService.insertRow).not.toHaveBeenCalled();
+      expect(summary.unassigned).toBe(1);
+      expect(metricsCore().result).toBe("unassigned");
+    });
   });
 });

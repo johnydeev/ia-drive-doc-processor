@@ -4,6 +4,104 @@ Registro de decisiones tomadas ante problemas reales encontrados en producción.
 
 ---
 
+## 2026-07-02 — CUIT del membrete en imagen: fallback de visión Gemini reforzado
+
+**Problema:** con el matching de proveedor ahora **solo por CUIT** (entrada anterior), las boletas
+cuyo CUIT del emisor está en el **membrete como imagen/logo** (que `pdf-parse` no lee — caso
+ASCENSORES POTENZA) irían a Sin Asignar aunque el proveedor esté cargado. Necesitábamos recuperar el
+CUIT desde la imagen. Cerebras (`gpt-oss-120b`, proveedor principal) es **texto puro, no ve
+imágenes**, así que la visión tiene que ser vía Gemini (multimodal, free tier).
+
+**Contexto:** ya existía un fallback de visión con Gemini (`extractProviderFromImage`), pero (a) solo
+corría si `assignment.unassigned && consortiumId && !hasEmitterBlock` — y en el bug viejo el
+proveedor matcheaba MAL por nombre → `unassigned=false` → nunca se disparaba; (b) mandaba la **página
+completa a 200 DPI** (CUIT chico ilegible); (c) no cubría boletas 100% imagen (exigía `consortiumId`
+previo); (d) el gate `!hasEmitterBlock` es una heurística por palabras clave poco confiable.
+
+**Decisión (elegida con el owner):**
+- **Trigger preciso por CUIT faltante:** el fallback corre SOLO si
+  `reasonCategory ∈ {provider_not_found, consortium_not_found}` (falta el CUIT del proveedor y/o del
+  consorcio). Si ya matchearon ambos por CUIT → NO se dispara (**ahorro de tokens**, pedido del
+  owner). Tampoco corre por `no_amount`, `no_period`, `lsp_clientnumber_not_registered`, etc.
+- **Recorte del membrete a alta DPI:** `OcrService.renderTopRegionPng` renderiza la franja superior
+  (~40%) de la página 1 a **300 DPI** (pdftoppm + recorte con `@napi-rs/canvas`) y le manda ESO a
+  Gemini Vision — mucho más legible que la página completa a 200 DPI. Si falla, cae al PNG de página
+  completa que ya dejaba el OCR.
+- **Recupera ambas partes:** `extractPartiesFromImage` devuelve emisor **y** receptor (proveedor +
+  consorcio con sus CUITs). Los CUITs de la visión se suman a `allTaxIds` y se re-corre
+  `resolveAssignment` → sirve tanto para el proveedor como para el **consorcio en boletas 100%
+  imagen** (donde no hay texto para matchear el edificio).
+- **Tolerancia 0 (sin fuzzy):** el CUIT que devuelve Gemini debe matchear **exacto** contra la DB.
+  Sin corrección por distancia de edición — Gemini devuelve el CUIT limpio (no es ruido carácter a
+  carácter como tesseract), así que el fuzzy aportaba poco y sí sumaba riesgo. Si aparece un caso
+  real de lectura a 1 dígito, se evalúa agregar fuzzy conservador con datos.
+
+**Alternativas descartadas:** tesseract dedicado al membrete (whitelist de dígitos + preprocesado) —
+lee peor los logos estilizados que un modelo de visión; queda como opción futura para clientes sin
+Gemini. Corrección difusa de CUIT contra la DB (distancia ≤1/≤2) — descartada por ahora (tolerancia
+0). Hacer multimodal la cadena principal — overkill; Gemini como fallback puntual alcanza.
+
+**Impacto:** `src/services/ocr.service.ts` (`renderTopRegionPng` + `@napi-rs/canvas`),
+`src/services/pdfTextExtractor.service.ts` (`extractMembreteImage`),
+`src/services/geminiExtractor.service.ts` (`extractProviderFromImage` → `extractPartiesFromImage`,
+ahora emisor + receptor), `src/jobs/processPendingDocuments.job.ts` (reescrito el bloque de fallback
+visual: trigger por `reasonCategory`, recorte alta DPI, merge de CUITs a `allTaxIds`). Tests: 4
+casos nuevos de caracterización (recupera CUIT del emisor → OK; no dispara con ambos CUITs; no
+dispara por no_amount; CUIT del membrete no en DB → Sin Asignar). 170 tests + typecheck + lint (0
+errores) + build:jobs OK. Sin migración. Depende de que el cliente tenga Gemini configurado (ya lo
+tiene); sin Gemini, la boleta-imagen va a Sin Asignar.
+
+---
+
+## 2026-07-02 — Matching de proveedor: SOLO por CUIT (se elimina el fallback por nombre)
+
+**Problema:** una factura de **ASCENSORES POTENZA S.R.L.** (CASTRO BARROS 1310) se asignó a un
+proveedor **equivocado** que sí estaba en la DB. ASCENSORES POTENZA no estaba cargado. Root cause
+confirmado extrayendo el texto real del PDF: el único CUIT en el texto es el del **consorcio**
+(`30-71741718-2`); el CUIT del emisor (ASCENSORES POTENZA) no aparece — está en el membrete/logo
+(imagen), que `pdf-parse` no lee. Sin CUIT de proveedor, `matchProvider` caía al **Intento 3
+"nombre parcial"** (`src/lib/assignmentMatching.ts`), que compara con
+`normOcrName.includes(normName(p.canonicalName).slice(0, 5))`: `"ascensores potenza"` contiene
+`"ascen"` (los primeros 5 chars de cualquier otro *"ASCENSORES ..."* de la DB) → **falso match** al
+primer ascensores cargado. El `slice(0,5)` hace colisionar a cualquier par de proveedores con
+prefijo común.
+
+**Decisión:** el proveedor se matchea **SOLO por CUIT** (Intentos 0 y 1: `allTaxIds` y
+`providerTaxId`, ambos excluyendo el CUIT del consorcio). Si no hay CUIT de proveedor en la boleta
+(o no está en la DB) → `null` → **Sin Asignar**. Se agrega el parámetro `allowNameMatch` (default
+`false`) a `matchProvider`; los Intentos 2 y 3 (nombre exacto / matchNames / parcial) solo corren si
+`allowNameMatch=true`. El caller lo activa **únicamente** para el conjunto cerrado de proveedores
+"CUIT del papel = consorcio" (**sindicales SUTERH/FATERYH/SERACARH y ARCA**), que no tienen CUIT
+propio y por diseño se identifican por nombre — vía `usesConsortiumCuit(lspProvider)`. Modelo de
+boleta válida (no-sindical): **2 CUITs presentes** — el del emisor (proveedor, en DB) y el del
+consorcio (en DB). Anti-alucinación ya vigente: el pipeline descarta CUITs que no aparecen en el
+texto, así que un CUIT de proveedor inexistente en el papel no puede colarse.
+
+`pickByName` (desambiguación cuando varios proveedores comparten el MISMO CUIT, ej. sindicales que
+usan el CUIT recaudador) sigue activa siempre: no asigna por nombre, solo elige entre candidatos
+que ya matchearon por CUIT.
+
+**Alternativas descartadas:**
+- Endurecer también el **consorcio** a solo-CUIT (el usuario lo mencionó): descartado — muchas
+  boletas de servicios (Edesur/AySA/Metrogas) y facturas normales NO imprimen el CUIT del consorcio
+  y se matchean por dirección/nombre. Requerirlo mandaría a Sin Asignar a todo ese volumen. El
+  consorcio queda igual (CUIT primero, fallback nombre/fuzzy/alias). Decisión del owner.
+- Aplicar solo-CUIT también a sindicales/ARCA: descartado — no tienen CUIT propio, irían todas a
+  Sin Asignar. Se conserva su match por nombre (conjunto cerrado y con nombres distintivos).
+- Tunear el prompt de Cerebras para que extraiga mejor el CUIT: no aplica a este caso — el CUIT del
+  proveedor no está en la capa de texto del PDF (está en el logo), así que ningún prompt lo saca; se
+  necesitaría OCR. La regla determinística (solo-CUIT) es la protección correcta y robusta.
+
+**Impacto:** `src/lib/assignmentMatching.ts` (`matchProvider` + `allowNameMatch`),
+`src/jobs/processPendingDocuments.job.ts` (pasa `isSindicalLsp`), `src/lib/testbench.ts` y
+`scripts/diag-boleta.ts` (pasan `usesConsortiumCuit(lspProvider)`). Tests:
+`src/lib/assignmentMatching.test.ts` (regresión del bug ASCENSORES POTENZA + gating por
+`allowNameMatch`) y `src/jobs/processPendingDocuments.job.test.ts` (fixtures del camino feliz ahora
+llevan los 2 CUITs, presentes en el texto mock). Verificado: 166 tests OK, typecheck + lint (0
+errores) + build:jobs OK. Sin migración.
+
+---
+
 ## 2026-07-02 — Scheduler: loop independiente por cliente en vez de tick global fijo
 
 **Problema:** el usuario cambió `intervalMinutes` de un cliente a 20 min y, viendo los logs, tuvo

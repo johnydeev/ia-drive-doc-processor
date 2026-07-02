@@ -152,27 +152,43 @@ export class GeminiExtractorService implements AiExtractor {
     return this.lastUsage;
   }
 
-  async extractProviderFromImage(
+  /**
+   * Visión (Gemini multimodal): lee el membrete/imagen de la factura y devuelve el
+   * EMISOR (proveedor) y el RECEPTOR (consorcio) con sus CUITs. Se usa como fallback
+   * SOLO cuando el matching por CUIT no resolvió (Cerebras es texto puro, no ve
+   * imágenes). En boletas 100% imagen también recupera el consorcio; si el consorcio
+   * ya se conoce (`knownConsortiumName`) se pasa como contexto para no confundirlo con
+   * el emisor. Barre modelos; si todos fallan devuelve null sin lanzar.
+   */
+  async extractPartiesFromImage(
     pngBuffer: Buffer,
-    consortiumName: string
-  ): Promise<{ providerName: string | null; providerTaxId: string | null }> {
+    knownConsortiumName?: string
+  ): Promise<{
+    providerName: string | null;
+    providerTaxId: string | null;
+    consortiumName: string | null;
+    consortiumTaxId: string | null;
+  }> {
     const base64Image = pngBuffer.toString("base64");
+    const consortiumHint = knownConsortiumName?.trim()
+      ? `El consorcio receptor ya fue identificado como "${knownConsortiumName.trim()}" — NO lo confundas con el emisor.`
+      : "El consorcio receptor todavía no se conoce: identificalo también.";
     const prompt = [
       "Sos un asistente especializado en facturas argentinas.",
-      "En la imagen hay una factura. El consorcio receptor ya fue identificado",
-      `como "${consortiumName}".`,
-      "Tu única tarea es identificar al EMISOR de la factura (quien factura,",
-      "no quien recibe). Buscá en el bloque superior izquierdo o superior",
-      "derecho donde aparece la razón social y CUIT del emisor.",
+      "En la imagen hay una factura (o su membrete). Identificá a las dos partes:",
+      "- EMISOR (proveedor): quien factura. Razón social + CUIT, normalmente en el",
+      "  bloque superior izquierdo o superior derecho.",
+      "- RECEPTOR (consorcio): a quién se factura. Razón social + CUIT.",
+      consortiumHint,
       "",
       "Respondé SOLO con un JSON sin texto adicional:",
-      '{ "providerName": "RAZÓN SOCIAL DEL EMISOR o null", "providerTaxId": "XX-XXXXXXXX-X o null" }',
+      '{ "providerName": "RAZÓN SOCIAL DEL EMISOR o null", "providerTaxId": "XX-XXXXXXXX-X o null",',
+      '  "consortiumName": "RAZÓN SOCIAL DEL RECEPTOR o null", "consortiumTaxId": "XX-XXXXXXXX-X o null" }',
       "",
       "IMPORTANTE:",
-      "- providerTaxId debe ser el CUIT del EMISOR, no del receptor/consorcio.",
-      `- El CUIT del consorcio receptor es diferente — NO lo uses.`,
-      "- Si no podés identificar el emisor con certeza, devolvé null en ambos campos.",
-      "- No inventes datos.",
+      "- providerTaxId es el CUIT del EMISOR; consortiumTaxId es el del RECEPTOR. No los mezcles.",
+      "- Copiá los CUITs dígito por dígito, exactamente como aparecen. No los inventes ni completes.",
+      "- Si no podés leer un dato con certeza, devolvé null en ese campo.",
     ].join("\n");
 
     const contents = [{
@@ -183,8 +199,6 @@ export class GeminiExtractorService implements AiExtractor {
       ],
     }];
 
-    // Fallback liviano (enriquecimiento opcional): barre modelos; si todos
-    // fallan devuelve null sin lanzar — el caller sigue sin el dato visual.
     for (const modelName of this.buildModelCandidates()) {
       try {
         const model = this.getModel(modelName);
@@ -194,17 +208,22 @@ export class GeminiExtractorService implements AiExtractor {
         });
         const outputText = result.response.text() || "{}";
         const clean = outputText.replace(/```json|```/g, "").trim();
-        const parsed = JSON.parse(clean) as { providerName?: string | null; providerTaxId?: string | null };
+        const parsed = JSON.parse(clean) as {
+          providerName?: string | null; providerTaxId?: string | null;
+          consortiumName?: string | null; consortiumTaxId?: string | null;
+        };
         GeminiExtractorService.workingModelName = modelName;
         return {
           providerName: parsed.providerName ?? null,
           providerTaxId: parsed.providerTaxId ?? null,
+          consortiumName: parsed.consortiumName ?? null,
+          consortiumTaxId: parsed.consortiumTaxId ?? null,
         };
       } catch {
         continue;
       }
     }
-    return { providerName: null, providerTaxId: null };
+    return { providerName: null, providerTaxId: null, consortiumName: null, consortiumTaxId: null };
   }
 
   async extractStructuredDataFromImage(

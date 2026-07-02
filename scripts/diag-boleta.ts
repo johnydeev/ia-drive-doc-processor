@@ -21,7 +21,7 @@ import { getPrismaClient, isDatabaseConfigured } from "@/lib/prisma";
 import { PdfTextExtractorService } from "@/services/pdfTextExtractor.service";
 import { extractCuitsFromText, cuitDigits, formatCuit } from "@/lib/cuit";
 import { matchConsortium, matchProvider } from "@/lib/assignmentMatching";
-import { identifyLSPProvider, refineExtractionWithRawText } from "@/lib/extraction";
+import { identifyLSPProvider, refineExtractionWithRawText, usesConsortiumCuit } from "@/lib/extraction";
 import type { ExtractedDocumentData } from "@/types/extractedDocument.types";
 
 /** Extracted vacío para correr solo el refinamiento determinístico del consorcio. */
@@ -107,7 +107,7 @@ async function main() {
   // LSP), el proveedor se identifica por NOMBRE → se simula con ese nombre.
   const lsp = identifyLSPProvider(text);
   const consortiumCuitNorm = cuitDigits(consortiumHit?.row.cuit);
-  const providerHit = matchProvider(providers, null, lsp, cuits, consortiumCuitNorm);
+  const providerHit = matchProvider(providers, null, lsp, cuits, consortiumCuitNorm, usesConsortiumCuit(lsp));
   console.log(
     providerHit
       ? `Proveedor:  MATCH "${providerHit.row.canonicalName}" — ${providerHit.method}`

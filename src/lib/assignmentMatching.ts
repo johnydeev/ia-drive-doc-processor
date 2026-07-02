@@ -127,18 +127,33 @@ export function matchConsortium(
 }
 
 /**
- * Matchea un proveedor en 4 niveles (en orden de confianza):
+ * Matchea un proveedor. Por defecto **SOLO por CUIT** (2 niveles):
  *   0. CUIT (allTaxIds) — excluye el CUIT del consorcio
  *   1. CUIT del providerTaxId (legacy) — excluye el CUIT del consorcio
- *   2. Nombre exacto / matchNames
- *   3. Nombre parcial (substring)
+ * Sin match por CUIT → null (el caller manda la boleta a Sin Asignar).
+ *
+ * El match por NOMBRE (niveles 2 y 3) está **desactivado por defecto**: era la
+ * fuente de asignaciones cruzadas — dos proveedores con prefijo común colisionaban
+ * por el substring `slice(0,5)` (caso real: una factura de "ASCENSORES POTENZA" no
+ * cargado se asignó a otro "ASCENSORES ..." que sí estaba en la DB). Ver
+ * decisiones.md 2026-07-02.
+ *
+ * `allowNameMatch=true` reactiva los niveles 2 y 3 SOLO para el conjunto cerrado
+ * de proveedores "CUIT del papel = consorcio" (sindicales SUTERH/FATERYH/SERACARH
+ * y ARCA), que no tienen CUIT propio y por diseño se identifican por nombre. El
+ * caller lo activa con `usesConsortiumCuit(lspProvider)`.
+ *
+ * La desambiguación por nombre DENTRO de un match por CUIT (`pickByName`, cuando
+ * varios proveedores comparten CUIT) sigue activa siempre: no asigna por nombre,
+ * solo elige entre candidatos que YA matchearon por CUIT.
  */
 export function matchProvider(
   allProviders: ProviderMatchRow[],
   rawCuit: string | null,
   rawName: string | null,
   allTaxIds: string[],
-  consortiumCuitNorm: string
+  consortiumCuitNorm: string,
+  allowNameMatch = false
 ): MatchResult<ProviderMatchRow> | null {
   const normOcrCuit = normCuit(rawCuit);
   const normOcrName = normName(rawName);
@@ -162,22 +177,26 @@ export function matchProvider(
     }
   }
 
-  // Intento 2: nombre / matchNames exacto
-  if (normOcrName.length >= 3) {
-    const found = allProviders.find((p) => {
-      if (normName(p.canonicalName) === normOcrName) return true;
-      return parseMatchNames(p.matchNames).some((n) => normName(n) === normOcrName);
-    });
-    if (found) return { row: found, method: `nombre exacto ("${normOcrName}")` };
-  }
+  // Niveles por NOMBRE: SOLO para sindicales/ARCA (sin CUIT propio). Para facturas
+  // normales queda cortado acá → Sin Asignar (ver docstring).
+  if (allowNameMatch) {
+    // Intento 2: nombre / matchNames exacto
+    if (normOcrName.length >= 3) {
+      const found = allProviders.find((p) => {
+        if (normName(p.canonicalName) === normOcrName) return true;
+        return parseMatchNames(p.matchNames).some((n) => normName(n) === normOcrName);
+      });
+      if (found) return { row: found, method: `nombre exacto ("${normOcrName}")` };
+    }
 
-  // Intento 3: nombre parcial
-  if (normOcrName.length >= 5) {
-    const found = allProviders.find((p) =>
-      normName(p.canonicalName).includes(normOcrName) ||
-      normOcrName.includes(normName(p.canonicalName).slice(0, 5))
-    );
-    if (found) return { row: found, method: `nombre parcial ("${normOcrName}")` };
+    // Intento 3: nombre parcial
+    if (normOcrName.length >= 5) {
+      const found = allProviders.find((p) =>
+        normName(p.canonicalName).includes(normOcrName) ||
+        normOcrName.includes(normName(p.canonicalName).slice(0, 5))
+      );
+      if (found) return { row: found, method: `nombre parcial ("${normOcrName}")` };
+    }
   }
 
   return null;
