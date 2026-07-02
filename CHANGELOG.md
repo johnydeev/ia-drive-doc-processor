@@ -2,7 +2,21 @@
 
 ## [Unreleased]
 
+### Changed
+- **Scheduler: loop independiente por cliente en vez de tick global fijo (2026-07-02)**. Antes había
+  un `setInterval` global cada 5 min sobre todos los clientes, con throttle interno silencioso por
+  cliente (`shouldEvaluateClient`) — el log `CICLO DE ESCANEO` aparecía cada 5 min sin importar el
+  `intervalMinutes` configurado, dando la impresión de que el cambio no se tomaba. Ahora cada
+  cliente corre en su propio `setTimeout` que se reprograma solo con su `intervalMinutes` fresco de
+  la DB: el log de "Escaneando Drive" y su resultado aparecen exactamente cada `intervalMinutes` de
+  ese cliente, sin logs de relleno. Un loop de discovery aparte (silencioso salvo altas/bajas)
+  detecta clientes nuevos o desactivados. Ver decisiones.md.
+
 ### Fix
+- **Activación de Cerebras en producción confirmada (2026-07-02)**. El secret `PROD_ENV_FILE` se
+  completó con `CEREBRAS_API_KEY` + `DIRECT_URL` y se re-deployó. Confirmado revisando `docker logs`
+  del worker en vivo: procesa boletas reales con `provider: cerebras`, `model: gpt-oss-120b` de
+  forma consistente. Ya no está pendiente.
 - **Deploy CI: login a GHCR en runner Windows self-hosted (2026-06-30)**. El job `deploy` fallaba
   en el `docker login` con `A specified logon session does not exist` — el credential helper de
   Docker Desktop (`credsStore: "desktop"`) requiere una sesión de logon interactiva que el runner no

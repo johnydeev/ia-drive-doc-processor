@@ -1,22 +1,65 @@
 # Progreso del proyecto — drive-doc-processor
 
-Actualizado al 30/06/2026 (sesión 36).
+Actualizado al 02/07/2026 (sesión 37).
 
-> **Estado (cierre sesión 36):** todo el trabajo de la sesión está **commiteado y pusheado**
-> (HEAD `bcff5c3`): Cerebras + Groq en la cadena, **Groq fuera de producción**, campo Rendiciones
-> en el alta de clientes, banco de pruebas de LLMs, y el fix del **deploy CI** (login a GHCR en el
-> runner Windows). El **código nuevo ya está deployado** (imagen nueva corriendo en prod, web
-> healthy). **Pendiente operativo para activar Cerebras:** el `.env` de producción se arma desde el
-> GitHub Secret `PROD_ENV_FILE`; hay que dejarlo **completo** (las 8 variables — incluidas
-> `CEREBRAS_API_KEY` y `DIRECT_URL`) y re-deployar. Hasta entonces el worker procesa con **Gemini**
-> (funciona OK, pero sin la mejora de cuota). Ver la entrada "Deploy CI + activación de Cerebras".
+> **Estado (sesión 37, sin commitear):** refactor del scheduler para que cada cliente corra en su
+> propio loop, agendado exactamente a su `intervalMinutes` propio, en vez de un tick global fijo de
+> 5 min con throttle interno silencioso. Ver entrada "Scheduler: loop por cliente en vez de tick
+> global fijo". typecheck + lint + `build:jobs` + tests de caracterización + script de timing:
+> todo OK. **Cerebras confirmado activo en producción** (ver logs, entrada actualizada abajo) — ya
+> no está pendiente.
 
 ---
 
-## Deploy CI + activación de Cerebras en producción (30/06/2026)
+## Scheduler: loop por cliente en vez de tick global fijo (02/07/2026)
 
-**Estado: commiteado y pusheado (HEAD `bcff5c3`); código deployado. Pendiente: dejar el secret
-`PROD_ENV_FILE` completo con `CEREBRAS_API_KEY` + re-deploy para que el worker use Cerebras.**
+**Estado: implementado, verificado (typecheck + lint + build:jobs + tests OK). Sin commitear.**
+
+**Problema:** el usuario cambió `intervalMinutes` de un cliente a 20 min y, mirando los logs, dio
+la impresión de que "no se tomó" — el log `CICLO DE ESCANEO` seguía apareciendo cada 5 min. En
+realidad el intervalo SÍ se respetaba (el tick global de 5 min es solo el piso de polling; el
+throttle real por cliente vive en `shouldEvaluateClient` y salteaba el trabajo en silencio), pero
+no había ninguna evidencia visible de eso — el usuario pidió explícitamente que el log de "inicio
+de escaneo" coincida con el intervalo configurado, sin logs de relleno.
+
+**Decisión:** eliminar el tick global fijo (`setInterval` cada `SCHEDULER_TICK_MS` = 5 min sobre
+TODOS los clientes) y reemplazarlo por **un `setTimeout` independiente por cliente**, que se
+reprograma solo leyendo su `intervalMinutes` fresco de la DB en cada vuelta
+(`src/jobs/scheduler.ts`: `tick()` + `scheduleNext()`). Un loop de "discovery" separado
+(`discover()`, cada `CLIENT_DISCOVERY_INTERVAL_MS` = 5 min, silencioso salvo altas/bajas) arranca
+el timer de un cliente nuevo (primer ciclo inmediato) o detiene el de uno desactivado/borrado.
+
+Con esto, `schedulerLog.clientScanning` ("Escaneando Drive") y su resultado
+(`clientNoPdfs`/`jobsQueued`) aparecen **exactamente** cada `intervalMinutes` de ese cliente — el
+log ya no está desacoplado del intervalo real. Se sacaron los logs del tick global que ya no tenían
+sentido en el modelo nuevo (`cycleStart`, `cycleEmpty`, `cycleEnd`, `cycleSummary` agregado); se
+agregaron `clientDiscovered`/`clientRemoved` (solo en altas/bajas reales).
+
+**Archivos:**
+- `src/jobs/scheduler.ts` — reescrito: `runClientCycle()` (ex-cuerpo del for), `tick()`,
+  `scheduleNext()`, `discover()`.
+- `src/jobs/schedulerTiming.ts` — se sacó `shouldEvaluateClient`/`SCHEDULER_TICK_MS`, se agregó
+  `CLIENT_DISCOVERY_INTERVAL_MS`. `resolveClientIntervalMs`/`resolveBatchSize` sin cambios.
+- `src/lib/logger.ts` — `schedulerLog`: nuevo `clientDiscovered`/`clientRemoved`, `skippedBusy` pasa
+  a ser por-cliente; se sacaron `cycleStart`/`cycleEmpty`/`cycleEnd`/`cycleSummary`.
+- `src/repositories/client.repository.ts` — nuevo `findActiveById(id)` (releer un cliente puntual
+  antes de cada ciclo/reprogramación).
+- `scripts/test-scheduler-interval.ts` — reescrito para el modelo nuevo (cada cliente corre a su
+  propio intervalo, sin acoplarse al tick de otros).
+
+**Pendiente:** el usuario debe verificar en un entorno corriendo que, al cambiar `intervalMinutes`
+a 30 min, el log `Escaneando Drive` de ese cliente pase a aparecer cada 30 min (el cambio toma
+efecto al terminar el ciclo en curso, no instantáneamente).
+
+---
+
+## Deploy CI + activación de Cerebras en producción (30/06/2026, confirmado 02/07/2026)
+
+**Estado: commiteado, pusheado y DEPLOYADO. `PROD_ENV_FILE` completo (`CEREBRAS_API_KEY` +
+`DIRECT_URL` incluidas) y worker corriendo con Cerebras. Confirmado el 02/07/2026 revisando los
+logs reales del contenedor `ia-drive-doc-processor-worker-1` (imagen `dc5d063`, 19hs corriendo):
+decenas de boletas procesadas con `"provider":"cerebras","model":"gpt-oss-120b"` y "IA: CEREBRAS
+extrajo datos correctamente" de forma consistente en las últimas horas. Ya NO está pendiente.**
 
 - **Fix deploy CI (login a GHCR en runner Windows self-hosted):** el `docker login` fallaba con
   `A specified logon session does not exist` — el credential helper de Docker Desktop
@@ -25,12 +68,11 @@ Actualizado al 30/06/2026 (sesión 36).
   `docker login`**; un step escribe el `auth` (base64 `usuario:token`) directo en un `config.json`
   propio del job (`DOCKER_CONFIG = ${{ github.workspace }}/.docker-ci`), y `docker pull`/`compose`
   autentican leyendo ese config. Detalles en decisiones.md.
-- **Activación de Cerebras (pendiente operativo):** el código nuevo está deployado, pero el worker
-  usa Gemini porque `CEREBRAS_API_KEY` no está en el `.env` de prod (que viene del secret
-  `PROD_ENV_FILE`, no del `.env` local). Además, un intento de deploy falló porque el secret quedó
-  **incompleto** al pegarlo a mano (faltaba `DIRECT_URL` → `prisma migrate deploy` con `P1012`). Fix:
-  pegar el `.env` **completo** en el secret (se copió al portapapeles con `Get-Content .env -Raw |
-  Set-Clipboard`) + re-deploy. Con eso el worker pasa a Cerebras (`gpt-oss-120b`).
+- **Activación de Cerebras (resuelto 02/07/2026):** un intento de deploy había fallado porque el
+  secret `PROD_ENV_FILE` quedó **incompleto** al pegarlo a mano (faltaba `DIRECT_URL` →
+  `prisma migrate deploy` con `P1012`). Fix: pegar el `.env` **completo** en el secret (se copió al
+  portapapeles con `Get-Content .env -Raw | Set-Clipboard`) + re-deploy. Confirmado en logs reales
+  del worker: procesa con Cerebras (`gpt-oss-120b`).
 
 ---
 
@@ -52,12 +94,11 @@ Spec/plan: `docs/superpowers/{specs,plans}/2026-06-25-banco-pruebas-llms*`. Deta
 
 ---
 
-## Más cuota de IA gratis: Cerebras + Groq en la cadena (24/06/2026)
+## Más cuota de IA gratis: Cerebras + Groq en la cadena (24/06/2026, Cerebras activo desde 02/07/2026)
 
 **Estado: implementado, verificado, COMMITEADO y DEPLOYADO (código nuevo en prod, 155 tests +9).
-Validado con `compare-extractors.ts` sobre PDFs reales. Pendiente operativo: activar Cerebras en
-prod cargando `CEREBRAS_API_KEY` en el secret `PROD_ENV_FILE` (ver "Deploy CI + activación de
-Cerebras" arriba); hasta entonces el worker usa Gemini.**
+Validado con `compare-extractors.ts` sobre PDFs reales. Cerebras activo en prod desde 02/07/2026
+(ver "Deploy CI + activación de Cerebras" arriba) — es el proveedor principal, confirmado en logs.**
 
 El throughput cayó a <½ del histórico: Google recortó el free tier de Gemini (cuota diaria por
 modelo) y ya no alcanza una jornada. Como **predominan facturas variadas** (no sistemáticas), la

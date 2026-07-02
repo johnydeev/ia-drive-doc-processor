@@ -420,6 +420,21 @@ Customizable por cliente en `extractionConfigJson.columnMapping`.
 | `tunnel` | `cloudflared tunnel run` | Cloudflare Tunnel, token via env |
 Los 3 servicios comparten `image: drive-doc-processor:latest`. Solo `web` tiene `build:`.
 
+### CI/CD (GitHub Actions) — deploy automático en la PC del owner
+Cada commit a `master` dispara el pipeline completo: **tests → build de la imagen Docker → deploy**.
+- El runner que ejecuta el job `deploy` es **self-hosted y corre en la PC local del owner**
+  (Windows) — no es un runner en la nube. El deploy termina corriendo la imagen nueva ahí mismo,
+  expuesta al mundo vía el túnel de Cloudflare (servicio `tunnel`, dominio propio).
+- **No hay ambiente de staging intermedio: cada commit a `master` es un deploy real a producción.**
+  Por eso Claude nunca commitea ni pushea (lo hace el owner) — ver reglas de migraciones abajo, que
+  aplican el mismo principio.
+- El deploy reinicia los contenedores (`web`, `scheduler`, `worker`) con la imagen nueva. Esto
+  significa que un cambio que solo tiene efecto al reiniciar un proceso long-running (ej. el
+  scheduler, que lee config en memoria al arrancar) **se aplica solo** apenas el owner commitea y
+  el pipeline termina — no hace falta pedirle que reinicie nada a mano.
+- Login a GHCR en este runner Windows self-hosted no usa `docker login` (falla por el credential
+  helper de Docker Desktop) — ver `docs/decisiones.md` (2026-06-25) para el detalle del workaround.
+
 
 ## ⚠️ Reglas obligatorias para migraciones de base de datos
 

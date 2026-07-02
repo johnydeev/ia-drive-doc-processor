@@ -18,6 +18,15 @@ export class ClientRepository {
     return rows.map((row) => this.mapClient(row));
   }
 
+  /** Releer un cliente puntual antes de cada ciclo (intervalMinutes/batchSize al día). Null si se desactivó/borró. */
+  async findActiveById(id: string): Promise<ProcessingClient | null> {
+    const prisma = this.prisma;
+    const row = await prisma.client.findFirst({
+      where: { id, isActive: true, role: "CLIENT" },
+    });
+    return row ? this.mapClient(row) : null;
+  }
+
   private mapClient(row: Client): ProcessingClient {
     return {
       id: row.id,

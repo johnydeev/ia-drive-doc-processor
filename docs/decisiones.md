@@ -4,6 +4,52 @@ Registro de decisiones tomadas ante problemas reales encontrados en producción.
 
 ---
 
+## 2026-07-02 — Scheduler: loop independiente por cliente en vez de tick global fijo
+
+**Problema:** el usuario cambió `intervalMinutes` de un cliente a 20 min y, viendo los logs, tuvo
+la impresión de que "no se tomó" — el log `CICLO DE ESCANEO` seguía apareciendo cada 5 min. Con el
+modelo anterior (`setInterval` global cada `SCHEDULER_TICK_MS` = 5 min sobre TODOS los clientes +
+`shouldEvaluateClient` salteando en silencio los clientes cuyo intervalo aún no venció) el intervalo
+SÍ se respetaba en la práctica, pero no había ninguna evidencia de eso en los logs: el tick externo
+(fijo en 5 min, el piso de polling) imprimía igual aunque no se escaneara nada. El usuario pidió
+explícitamente que el log de "inicio de escaneo" coincida con el intervalo configurado, sin ruido
+de logs de relleno.
+
+**Decisión:** reemplazar el tick global fijo por **un `setTimeout` independiente por cliente**
+(`src/jobs/scheduler.ts`), que se reprograma solo leyendo su `intervalMinutes` fresco de la DB en
+cada vuelta (`tick()` → `runClientCycle()` → `scheduleNext()`, agenda el siguiente ciclo a
+`resolveClientIntervalMs(client.intervalMinutes, ...)` ms). Un loop de "discovery" separado
+(`discover()`, cada `CLIENT_DISCOVERY_INTERVAL_MS` = 5 min — piso mínimo, no es el intervalo de
+ningún cliente) arranca el timer de un cliente activo nuevo (primer ciclo inmediato) o detiene el
+de uno desactivado/borrado; es silencioso salvo que haya una alta o baja real.
+
+Con esto `schedulerLog.clientScanning` y su resultado (`clientNoPdfs`/`jobsQueued`) aparecen
+**exactamente** cada `intervalMinutes` de ese cliente. Se sacaron los logs del tick global que ya
+no tenían sentido (`cycleStart`, `cycleEmpty`, `cycleEnd`, `cycleSummary` agregado multi-cliente);
+se agregaron `clientDiscovered`/`clientRemoved` (solo en altas/bajas). `skippedBusy` pasó a ser
+por-cliente (antes era global).
+
+**Alternativas descartadas:**
+- Agregar un log explícito de "esperando intervalo, faltan N min" en cada tick salteado: hubiera
+  resuelto la confusión sin refactor, pero el usuario pidió explícitamente evitar logs
+  innecesarios — con múltiples ticks salteados por cada ciclo real (ej. 4 ticks salteados por cada
+  cliente de 20 min), esto genera más ruido, no menos.
+- Bajar `SCHEDULER_TICK_MS` a la cadencia del cliente más chico: es el bug histórico que ya
+  documentaba `schedulerTiming.ts` (un tick grueso hace que TODOS los clientes corran a esa
+  cadencia, sin importar su propio `intervalMinutes`) — no es multi-tenant seguro.
+
+**Impacto:** `src/jobs/scheduler.ts` (reescrito), `src/jobs/schedulerTiming.ts` (se sacó
+`shouldEvaluateClient`/`SCHEDULER_TICK_MS`, se agregó `CLIENT_DISCOVERY_INTERVAL_MS`),
+`src/lib/logger.ts` (`schedulerLog`: nuevos `clientDiscovered`/`clientRemoved`, se sacaron los
+métodos del tick global), `src/repositories/client.repository.ts` (nuevo `findActiveById`),
+`scripts/test-scheduler-interval.ts` (reescrito para el modelo nuevo). Comportamiento: al cambiar
+`intervalMinutes` desde el panel, el cambio toma efecto al terminar el ciclo en curso de ESE
+cliente (no instantáneo, pero sin reiniciar el proceso). Verificado con `npm run typecheck`,
+`npm run lint`, `npm run build:jobs`, `npx vitest run` (tests de caracterización del pipeline) y
+`npx tsx scripts/test-scheduler-interval.ts` — todo OK.
+
+---
+
 ## 2026-06-25 — Fix deploy CI: `docker login` en runner Windows (credsStore)
 
 **Problema:** el job `deploy` (self-hosted Windows) fallaba en "Login to GHCR" con
@@ -135,6 +181,11 @@ Groq tomó el CUIT del consorcio receptor como proveedor (y malformado) y erró 
 netamente más confiable que Llama en las facturas variadas, que son la mayoría del volumen. (La
 boleta había ido a Sin Asignar solo porque ALETEC no estaba en el directorio, no por la IA: el
 pipeline saca el CUIT del texto con `extractCuitsFromText`, así que basta cargar el proveedor.)
+
+**Confirmación en producción (02/07/2026):** `PROD_ENV_FILE` se completó con `CEREBRAS_API_KEY` +
+`DIRECT_URL` y se re-deployó. Verificado revisando `docker logs` del contenedor worker en vivo:
+boletas reales procesadas con `"provider":"cerebras","model":"gpt-oss-120b"` de forma consistente
+en las últimas horas — Cerebras es el proveedor principal en producción, ya no pendiente.
 
 ---
 

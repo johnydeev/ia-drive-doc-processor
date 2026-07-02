@@ -62,21 +62,18 @@ function miniDivider(process: ProcessTag): void {
 // ═══════════════════════════════════════════════════════════════════════════
 
 export const schedulerLog = {
-  starting(intervalMinutes: number) {
-    divider("scheduler", `🚀 SCHEDULER INICIADO — intervalo: ${intervalMinutes} min`);
+  starting(defaultIntervalMinutes: number) {
+    divider("scheduler", `🚀 SCHEDULER INICIADO — intervalo por defecto: ${defaultIntervalMinutes} min`);
   },
 
-  cycleStart(clientCount: number) {
-    divider("scheduler", `🔄 CICLO DE ESCANEO — ${clientCount} cliente(s) activo(s)`);
+  /** Cliente activo nuevo: arranca su propio loop, agendado a su intervalMinutes. */
+  clientDiscovered(clientId: string, clientName: string, intervalMinutes: number) {
+    log("info", "scheduler", `➕ Cliente detectado — "${clientName}" [${shortId(clientId)}] — intervalo: ${intervalMinutes} min`);
   },
 
-  cycleEmpty() {
-    log("info", "scheduler", "Sin clientes activos para procesar");
-  },
-
-  cycleEnd() {
-    log("info", "scheduler", "Ciclo de escaneo finalizado");
-    console.log(`[${timestamp()}] [SCHEDULER] ${"═".repeat(50)}`);
+  /** Cliente desactivado/borrado: se detiene su loop. */
+  clientRemoved(clientId: string) {
+    log("info", "scheduler", `➖ Cliente ya no está activo — se detiene su loop [${shortId(clientId)}]`);
   },
 
   clientPaused(clientId: string, clientName: string) {
@@ -127,20 +124,9 @@ export const schedulerLog = {
     log("error", "scheduler", `Error fatal del scheduler: ${error}`);
   },
 
-  skippedBusy() {
-    log("warn", "scheduler", "Ciclo omitido — el anterior aún está corriendo");
-  },
-
-  cycleSummary(summary: { totalFound: number; totalQueued: number; totalSkipped: number; totalAlreadyLoaded?: number }) {
-    miniDivider("scheduler");
-    log("info", "scheduler", `📊 RESUMEN DEL CICLO AUTOMÁTICO`);
-    log("info", "scheduler", `  Encontrados:  ${summary.totalFound}`);
-    log("info", "scheduler", `  Encolados:    ${summary.totalQueued}`);
-    log("info", "scheduler", `  Ya en cola:   ${summary.totalSkipped}`);
-    if (summary.totalAlreadyLoaded) {
-      log("info", "scheduler", `  Ya cargadas:  ${summary.totalAlreadyLoaded} (con Invoice — movidas fuera de Pendientes)`);
-    }
-    miniDivider("scheduler");
+  /** Ciclo de este cliente saltado porque el anterior (de ESTE cliente) aún seguía corriendo. */
+  skippedBusy(clientId: string, clientName: string) {
+    log("warn", "scheduler", `Ciclo omitido — el anterior de "${clientName}" [${shortId(clientId)}] aún está corriendo`);
   },
 };
 
