@@ -17,6 +17,9 @@ export interface EnvConfig {
   GOOGLE_SHEETS_ID: string;
   GOOGLE_SHEETS_SHEET_NAME: string;
   PROCESS_INTERVAL_MINUTES: string;
+  // Cada cuántos min el worker loguea su latido de vida cuando la cola está vacía.
+  // Opcional (default 30 en jobWorkerMain). No afecta el procesamiento de jobs.
+  WORKER_HEARTBEAT_MINUTES?: string;
   OPENAI_API_KEY?: string;
   OPENAI_MODEL?: string;
   GEMINI_API_KEY?: string;
@@ -63,6 +66,7 @@ export const env: EnvConfig = {
   GOOGLE_SHEETS_ID: optionalEnv("GOOGLE_SHEETS_ID") ?? "",
   GOOGLE_SHEETS_SHEET_NAME: optionalEnv("GOOGLE_SHEETS_SHEET_NAME") ?? "Datos",
   PROCESS_INTERVAL_MINUTES: requireEnv("PROCESS_INTERVAL_MINUTES"),
+  WORKER_HEARTBEAT_MINUTES: optionalEnv("WORKER_HEARTBEAT_MINUTES"),
   OPENAI_API_KEY: optionalEnv("OPENAI_API_KEY"),
   OPENAI_MODEL: optionalEnv("OPENAI_MODEL"),
   GEMINI_API_KEY: optionalEnv("GEMINI_API_KEY"),

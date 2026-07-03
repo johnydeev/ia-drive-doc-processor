@@ -1,17 +1,32 @@
 # Progreso del proyecto — drive-doc-processor
 
-Actualizado al 02/07/2026 (sesión 37).
+Actualizado al 03/07/2026 (sesión 37).
 
 > **Estado (sesión 37, sin commitear):** (1) refactor del scheduler para que cada cliente corra en
 > su propio loop, agendado exactamente a su `intervalMinutes`; (2) **matching de proveedor endurecido
 > a SOLO CUIT** (fix de asignación cruzada — caso ASCENSORES POTENZA); (3) **fallback de visión
 > Gemini reforzado** para leer el CUIT del membrete en imagen (trigger por CUIT faltante, recorte
 > alta DPI, boletas 100% imagen, tolerancia 0); (4) **vista general de consorcios en tarjetas** con
-> deuda del período y deuda total. typecheck + lint + `build:jobs` + 170 tests: todo OK. **Cerebras
-> confirmado activo en producción** (ver logs) — ya no está pendiente.
+> deuda del período y deuda total + deep-link con loader; (5) **heartbeat del worker configurable**
+> (`WORKER_HEARTBEAT_MINUTES`, default 30 — menos ruido de logs). typecheck + lint + `build:jobs` +
+> 170 tests: todo OK. **Cerebras confirmado activo en producción** (ver logs) — ya no está pendiente.
 >
-> **Nota:** (1) y (2)/(3) ya se commitearon y deployaron (imagen `ec6099f` corriendo en prod). (4)
-> —las tarjetas— sigue **sin commitear** (validación local pendiente del owner).
+> **Nota:** (1), (2) y (3) ya se commitearon y deployaron (imagen `ec6099f` en prod). (4) las tarjetas
+> las validó el owner en local. (4) y (5) siguen **sin commitear**.
+
+---
+
+## Heartbeat del worker configurable (03/07/2026)
+
+**Estado: implementado, verificado (typecheck + build:jobs + lint OK). Sin commitear.**
+
+El worker logueaba el latido de vida ("Cola vacía — esperando jobs") cada 5 min (hardcodeado), lo
+que el owner vio como ruido. Se hizo el intervalo **configurable** vía env opcional
+`WORKER_HEARTBEAT_MINUTES` (default **30**, piso 1 min). Solo afecta ese log — el polling de 2s y el
+procesamiento de jobs no cambian; el scheduler tampoco. Se descartó atarlo al `intervalMinutes` (que
+es por-cliente, y el worker es global). Con el default 30, apenas se deploya baja de 5 a 30 min sin
+tocar el secret. Archivos: `src/config/env.ts`, `src/jobs/jobWorkerMain.ts`, `.env.example`,
+`CLAUDE.md`. Detalle en `docs/decisiones.md` (2026-07-03).
 
 ---
 

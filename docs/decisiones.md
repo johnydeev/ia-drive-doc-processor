@@ -4,6 +4,32 @@ Registro de decisiones tomadas ante problemas reales encontrados en producción.
 
 ---
 
+## 2026-07-03 — Heartbeat del worker configurable (menos ruido en logs)
+
+**Problema:** el worker logueaba "Cola vacía — esperando jobs (heartbeat)" **cada 5 min** (constante
+hardcodeada `IDLE_HEARTBEAT_MS = 5 * 60_000`), aun sin trabajo. El owner lo vio como ruido innecesario
+en la terminal de Docker.
+
+**Contexto:** ese log es solo una **señal de vida** (el worker hace polling silencioso cada 2s; el
+latido cada varios minutos confirma que el proceso está vivo/ocioso vs. colgado). No es funcional.
+
+**Decisión:** hacer el intervalo del heartbeat **configurable por env** con default más silencioso.
+Nueva variable **opcional** `WORKER_HEARTBEAT_MINUTES` (default **30**, piso de 1 min). Se descartó
+atarlo al `intervalMinutes` del scheduler porque ese valor es **por-cliente** y el worker es un proceso
+**global** (sirve a todos los clientes) → acoplarlo a un campo por-cliente es conceptualmente
+incorrecto y se rompe con multi-cliente. Un env dedicado con default es lo más limpio: sin
+acoplamiento, ajustable sin tocar código.
+
+**Impacto:** `src/config/env.ts` (declara la env opcional), `src/jobs/jobWorkerMain.ts`
+(`IDLE_HEARTBEAT_MS` pasa a leer `env.WORKER_HEARTBEAT_MINUTES` con default 30 y piso 1), `.env.example`
++ `CLAUDE.md` (doc). **Solo afecta la frecuencia del log**: el polling de 2s y el procesamiento de jobs
+no cambian; el scheduler tampoco. Como el default es 30, apenas se deploya el heartbeat baja de 5 a 30
+min **sin tocar el secret `PROD_ENV_FILE`**; para otro valor se agrega `WORKER_HEARTBEAT_MINUTES=X` al
+secret (manteniéndolo completo). typecheck + build:jobs + lint (0 errores) OK. Es cambio en el proceso
+worker → toma efecto con el rebuild/redeploy del CI.
+
+---
+
 ## 2026-07-02 — Vista general de consorcios: tarjetas con deuda (período + total)
 
 **Problema / pedido:** la vista `/admin/consortiums` tenía una lista lateral angosta de los 47

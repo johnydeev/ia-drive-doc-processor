@@ -454,6 +454,7 @@ DATABASE_URL=               # PostgreSQL Supabase (pooler)
 DIRECT_URL=                 # PostgreSQL Supabase (directo, para migraciones)
 SESSION_SECRET=             # JWT signing key (mín 32 chars)
 PROCESS_INTERVAL_MINUTES=   # Intervalo scheduler (ej: 5)
+WORKER_HEARTBEAT_MINUTES=   # opcional (default 30): cada cuántos min el worker loguea el latido de vida en ocioso. Solo log, no afecta el procesamiento.
 # Opcionales (fallback global si el cliente no tiene config propia)
 GOOGLE_CLIENT_EMAIL=
 GOOGLE_PRIVATE_KEY=

@@ -15,6 +15,12 @@
   Solo lectura, sin migración. Ver decisiones.md.
 
 ### Changed
+- **Heartbeat del worker configurable (2026-07-03)**. El log de vida del worker ("Cola vacía —
+  esperando jobs") pasa de cada 5 min hardcodeado a configurable vía env opcional
+  `WORKER_HEARTBEAT_MINUTES` (default 30, piso 1 min). Solo afecta ese log; el polling de 2s y el
+  procesamiento de jobs no cambian. Con el default 30, apenas se deploya el heartbeat baja de 5 a 30
+  min sin tocar el secret de producción. Archivos: `src/config/env.ts`, `src/jobs/jobWorkerMain.ts`,
+  `.env.example`, `CLAUDE.md`. Ver decisiones.md.
 - **Visión Gemini reforzada para el CUIT del membrete en imagen (2026-07-02)**. Complementa el
   matching solo-CUIT: cuando falta el CUIT del proveedor (o del consorcio) porque está en el
   membrete como imagen/logo, se lee con Gemini Vision. Mejoras sobre el fallback previo: (1) se

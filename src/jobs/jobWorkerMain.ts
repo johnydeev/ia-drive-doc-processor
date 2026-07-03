@@ -252,8 +252,14 @@ async function handleJob(job: {
   return summary;
 }
 
-/** Heartbeat idle: loguear "cola vacía" como mucho cada 5 min (no cada poll de 2s). */
-const IDLE_HEARTBEAT_MS = 5 * 60_000;
+/**
+ * Heartbeat idle: loguear "cola vacía" como mucho cada N min (no cada poll de 2s).
+ * Configurable vía WORKER_HEARTBEAT_MINUTES (opcional, default 30). Piso de 1 min
+ * para evitar spamear si alguien lo setea en 0/negativo. Solo afecta el log de
+ * vida — el polling (2s) y el procesamiento de jobs no cambian.
+ */
+const IDLE_HEARTBEAT_MINUTES = Math.max(1, Number(env.WORKER_HEARTBEAT_MINUTES) || 30);
+const IDLE_HEARTBEAT_MS = IDLE_HEARTBEAT_MINUTES * 60_000;
 
 async function runWorker(): Promise<void> {
   workerLog.starting();
