@@ -45,6 +45,17 @@ function formatBoletaShort(n: string | null) {
   return last4 ? `…${last4}` : "—";
 }
 
+/**
+ * Convierte una URL de Google Drive (webViewLink `.../d/<id>/view`, `open?id=<id>`,
+ * etc.) a la URL `/preview` embebible en un iframe (visor de Drive, scrolleable).
+ * Si no reconoce el formato devuelve la URL original (fallback: abrir en Drive).
+ */
+function toDrivePreviewUrl(url: string): string {
+  const m = url.match(/\/d\/([^/]+)/) ?? url.match(/[?&]id=([^&]+)/);
+  const id = m?.[1];
+  return id ? `https://drive.google.com/file/d/${id}/preview` : url;
+}
+
 export default function BoletasEntrantesPage() {
   const router = useRouter();
   const { guardedFetch } = useAuthGuard();
@@ -63,6 +74,16 @@ export default function BoletasEntrantesPage() {
   const [consortiumFilter, setConsortiumFilter] = useState("");
   const [providerFilter, setProviderFilter] = useState("");
   const [periodFilter, setPeriodFilter] = useState("");
+  // Modal de vista previa de boleta (iframe de Drive, sin salir de la pestaña).
+  const [preview, setPreview] = useState<{ url: string; sourceUrl: string; title: string } | null>(null);
+
+  // Cerrar el modal con Escape.
+  useEffect(() => {
+    if (!preview) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setPreview(null); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [preview]);
 
   useEffect(() => {
     try {
@@ -161,7 +182,7 @@ export default function BoletasEntrantesPage() {
           </div>
           <div className={styles.headerActions}>
             <button type="button" className={styles.ghostBtn} onClick={() => router.push("/admin/consortiums")}>
-              Volver al panel
+              Volver a Consorcios
             </button>
             <button type="button" className={styles.ghostBtn}
               onClick={() => setTheme((t) => t === "dark" ? "light" : "dark")}>
@@ -237,7 +258,17 @@ export default function BoletasEntrantesPage() {
                       <td>{inv.isDuplicate ? "Sí" : "—"}</td>
                       <td>
                         {inv.sourceFileUrl
-                          ? <a href={inv.sourceFileUrl} target="_blank" rel="noopener noreferrer" style={{ color: "#3b82f6" }}>Ver</a>
+                          ? <button
+                              type="button"
+                              onClick={() => setPreview({
+                                url: toDrivePreviewUrl(inv.sourceFileUrl!),
+                                sourceUrl: inv.sourceFileUrl!,
+                                title: `${inv.provider ?? "Boleta"}${inv.consortium ? ` — ${inv.consortium}` : ""}`,
+                              })}
+                              style={{ background: "none", border: "none", color: "#3b82f6", cursor: "pointer", padding: 0, font: "inherit", textDecoration: "underline" }}
+                            >
+                              Ver
+                            </button>
                           : "—"}
                       </td>
                     </tr>
@@ -260,6 +291,64 @@ export default function BoletasEntrantesPage() {
           </>
         )}
       </main>
+
+      {/* Modal de vista previa: iframe del visor de Drive (scrolleable), sin salir de la pestaña. */}
+      {preview && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          onClick={() => setPreview(null)}
+          style={{
+            position: "fixed", inset: 0, zIndex: 1000,
+            background: "rgba(0,0,0,0.7)",
+            display: "flex", alignItems: "center", justifyContent: "center",
+            padding: "24px",
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              width: "min(900px, 92vw)", height: "90vh",
+              background: "#0f1629", border: "1px solid rgba(255,255,255,0.12)",
+              borderRadius: 12, display: "flex", flexDirection: "column",
+              overflow: "hidden", boxShadow: "0 20px 60px rgba(0,0,0,0.5)",
+            }}
+          >
+            <div style={{
+              display: "flex", alignItems: "center", justifyContent: "space-between",
+              gap: 12, padding: "12px 16px", borderBottom: "1px solid rgba(255,255,255,0.1)",
+            }}>
+              <span style={{ fontSize: 14, fontWeight: 600, color: "#eef2ff", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {preview.title}
+              </span>
+              <div style={{ display: "flex", gap: 8, flexShrink: 0 }}>
+                <a
+                  href={preview.sourceUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  style={{ fontSize: 13, color: "#7aaeff", textDecoration: "none", padding: "6px 10px", border: "1px solid rgba(91,140,247,0.35)", borderRadius: 8 }}
+                >
+                  Abrir en Drive ↗
+                </a>
+                <button
+                  type="button"
+                  onClick={() => setPreview(null)}
+                  style={{ fontSize: 16, color: "#c8d8ff", background: "none", border: "1px solid rgba(255,255,255,0.15)", borderRadius: 8, width: 34, height: 34, cursor: "pointer" }}
+                  aria-label="Cerrar vista previa"
+                >
+                  ✕
+                </button>
+              </div>
+            </div>
+            <iframe
+              src={preview.url}
+              title="Vista previa de boleta"
+              style={{ flex: 1, width: "100%", border: "none", background: "#fff" }}
+              allow="autoplay"
+            />
+          </div>
+        </div>
+      )}
     </div>
   );
 }

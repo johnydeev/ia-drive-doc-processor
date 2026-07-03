@@ -910,6 +910,23 @@ export default function ConsortiumsPage() {
     if (selectedId) void fetchInvoices(selectedId, p.id);
   }, [selectedId, fetchInvoices]);
 
+  // Período actual del cliente = mes mayoritario entre los períodos ACTIVOS de los
+  // consorcios cargados (mismo criterio que resolveMajorityMonth, pero client-side).
+  const currentPeriodLabel = (() => {
+    const freq = new Map<string, { count: number; month: number; year: number }>();
+    for (const c of consortiums) {
+      const active = c.periods.find((p) => p.status === "ACTIVE");
+      if (!active) continue;
+      const key = `${active.year}-${active.month}`;
+      const cur = freq.get(key);
+      if (cur) cur.count += 1;
+      else freq.set(key, { count: 1, month: active.month, year: active.year });
+    }
+    let best: { count: number; month: number; year: number } | null = null;
+    for (const v of freq.values()) if (!best || v.count > best.count) best = v;
+    return best ? `${MONTH_NAMES[best.month - 1]} ${best.year}` : null;
+  })();
+
   const periodIndex = periods.findIndex((p) => p.id === selectedPeriod?.id);
   const canGoPrev = periodIndex < periods.length - 1;
   const canGoNext = periodIndex > 0;
@@ -1303,23 +1320,33 @@ export default function ConsortiumsPage() {
       {/* ── Columna 3: Contenido principal ── */}
       <div className={styles.contentCol}>
 
-        <header className={styles.header}>
-          <div>
-            <p className={styles.eyebrow}>Gestion de consorcios</p>
-            <h1>Edificios</h1>
-          </div>
-          <div className={styles.headerActions}>
-            <button type="button" className={styles.consortiumBtn} onClick={() => { setShowConsortiumModal(true); setConsortiumError(null); setConsortiumSuccess(null); }}>
-              + Nuevo consorcio
-            </button>
-            <button type="button" className={styles.providerBtn} onClick={() => { setShowProviderModal(true); setProviderError(null); setProviderSuccess(null); }}>
-              + Nuevo proveedor
-            </button>
-            <button type="button" className={styles.ghostBtn} onClick={() => router.push("/admin")}>
-              ← Volver al panel
-            </button>
-          </div>
-        </header>
+        {/* Barra superior (título + período + acciones globales): solo en la vista
+            general. Dentro de un consorcio no aporta — el detalle tiene su propio
+            header (volver, período, cargar boleta, configuración). */}
+        {!selectedId && (
+          <header className={styles.header}>
+            <div>
+              <p className={styles.eyebrow}>Gestion de consorcios</p>
+              <div className={styles.titleRow}>
+                <h1>Edificios</h1>
+                {currentPeriodLabel && (
+                  <span className={styles.currentPeriodBadge}>Período actual: {currentPeriodLabel}</span>
+                )}
+              </div>
+            </div>
+            <div className={styles.headerActions}>
+              <button type="button" className={styles.consortiumBtn} onClick={() => { setShowConsortiumModal(true); setConsortiumError(null); setConsortiumSuccess(null); }}>
+                + Nuevo consorcio
+              </button>
+              <button type="button" className={styles.providerBtn} onClick={() => { setShowProviderModal(true); setProviderError(null); setProviderSuccess(null); }}>
+                + Nuevo proveedor
+              </button>
+              <button type="button" className={styles.ghostBtn} onClick={() => router.push("/admin")}>
+                ← Volver al panel
+              </button>
+            </div>
+          </header>
+        )}
 
         <main className={styles.main}>
           {!selectedId && pendingRestore && (
@@ -1412,7 +1439,7 @@ export default function ConsortiumsPage() {
                 className={styles.backToGrid}
                 onClick={handleBackToConsortiums}
               >
-                ← Volver a consorcios
+                ← Volver a Consorcios
               </button>
               <div className={styles.detailHeader}>
                 <div>
