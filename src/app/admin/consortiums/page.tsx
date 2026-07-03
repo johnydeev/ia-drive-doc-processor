@@ -899,6 +899,12 @@ export default function ConsortiumsPage() {
   // Mantener el ref sincronizado para el efecto de restauración por URL.
   handleSelectConsortiumRef.current = handleSelectConsortium;
 
+  // Volver a la vista general de tarjetas (deselecciona + limpia la URL del deep-link).
+  const handleBackToConsortiums = useCallback(() => {
+    setSelectedId(null); setSelectedConsortium(null); setPendingRestore(false);
+    window.history.replaceState(null, "", window.location.pathname);
+  }, []);
+
   const handleSelectPeriod = useCallback((p: Period) => {
     setSelectedPeriod(p);
     if (selectedId) void fetchInvoices(selectedId, p.id);
@@ -1177,9 +1183,12 @@ export default function ConsortiumsPage() {
             {!navCollapsed && <span className={styles.navSidebarItemLabel}>{busyAction === "sync" ? "Sincronizando..." : "Sincronizar directorio"}</span>}
           </button>
           {isClient && (
-            <button type="button" className={styles.navSidebarItem} onClick={() => { handleSyncPayments(); setNavMobileOpen(false); }} disabled={busyAction !== null} title="Lee la hoja PAGOS del Sheets y actualiza los pagos en la base">
+            // Desactivado temporalmente (pedido del owner): visible pero inactivo mientras el
+            // cliente explora la vista. El onClick queda cableado (nunca dispara por `disabled`);
+            // reactivar = cambiar `disabled` por `disabled={busyAction !== null}`.
+            <button type="button" className={styles.navSidebarItem} onClick={() => { handleSyncPayments(); setNavMobileOpen(false); }} disabled title="Sincronización de pagos desactivada temporalmente">
               <span className={styles.navSidebarItemIcon}>💵</span>
-              {!navCollapsed && <span className={styles.navSidebarItemLabel}>{busyAction === "syncPayments" ? "Sincronizando..." : "Sincronizar pagos"}</span>}
+              {!navCollapsed && <span className={styles.navSidebarItemLabel}>Sincronizar pagos</span>}
             </button>
           )}
           {isClient && (
@@ -1194,15 +1203,19 @@ export default function ConsortiumsPage() {
               {!navCollapsed && <span className={styles.navSidebarItemLabel}>{busyAction === "unprotectSheet" ? "Desprotegiendo..." : "Desproteger hoja"}</span>}
             </button>
           )}
-          <button type="button" className={styles.navSidebarItem} disabled={!consortiumsEnabled} title={!consortiumsEnabled ? "Función Premium" : undefined}>
-            <span className={styles.navSidebarItemIcon}>🏢</span>
-            {!navCollapsed && (
-              <span className={styles.navSidebarItemLabel}>
-                Consorcios
-                {!consortiumsEnabled && <span className={styles.premiumBadge}>Premium</span>}
-              </span>
-            )}
-          </button>
+          {/* Solo dentro de un consorcio: en la vista general (grid) es redundante — ya estamos ahí.
+              Al clickear vuelve a la vista general de tarjetas. */}
+          {selectedId && (
+            <button type="button" className={styles.navSidebarItem} onClick={() => { handleBackToConsortiums(); setNavMobileOpen(false); }} disabled={!consortiumsEnabled} title={!consortiumsEnabled ? "Función Premium" : "Volver a la vista general de consorcios"}>
+              <span className={styles.navSidebarItemIcon}>🏢</span>
+              {!navCollapsed && (
+                <span className={styles.navSidebarItemLabel}>
+                  Consorcios
+                  {!consortiumsEnabled && <span className={styles.premiumBadge}>Premium</span>}
+                </span>
+              )}
+            </button>
+          )}
           {isClient && (
             <button type="button" className={styles.navSidebarItem} onClick={() => { handleCloseAllPreview(); setNavMobileOpen(false); }} disabled={closeAllLoading || busyAction !== null}>
               <span className={styles.navSidebarItemIcon}>📅</span>
@@ -1397,10 +1410,7 @@ export default function ConsortiumsPage() {
               <button
                 type="button"
                 className={styles.backToGrid}
-                onClick={() => {
-                  setSelectedId(null); setSelectedConsortium(null); setPendingRestore(false);
-                  window.history.replaceState(null, "", window.location.pathname);
-                }}
+                onClick={handleBackToConsortiums}
               >
                 ← Volver a consorcios
               </button>
