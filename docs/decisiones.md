@@ -4,6 +4,62 @@ Registro de decisiones tomadas ante problemas reales encontrados en producción.
 
 ---
 
+## 2026-07-02 — Vista general de consorcios: tarjetas con deuda (período + total)
+
+**Problema / pedido:** la vista `/admin/consortiums` tenía una lista lateral angosta de los 47
+consorcios (nombre + período + total histórico de boletas). El owner quería verlos como **tarjetas**
+con más info de un vistazo: cantidad de boletas y **deuda** (saldo pendiente) del consorcio.
+
+**Decisión (UI):** se elimina la columna-lista lateral y los consorcios se muestran como un **grid de
+tarjetas** en el área principal (con buscador + contador). Cada tarjeta: nombre, período activo,
+boletas del período, **Deuda mes** y **Deuda total**. Al hacer click se abre el detalle de siempre;
+un botón "← Volver a consorcios" regresa al grid. Estilos con los tokens existentes (dark/light).
+
+**Decisión clave (deuda y cierre de período):** la deuda por boleta se calcula como
+`isPaid ? 0 : coalesce(remainingBalance, amount, 0)` (las pagas no suman). Al preguntarse qué pasa al
+**cerrar un período** (`closePeriodAndCreateNext`: el período ACTIVO pasa a CLOSED y se crea uno nuevo
+ACTIVO **vacío**; las boletas impagas quedan en el período cerrado, **sin arrastre**), se decidió con
+el owner mostrar **dos deudas** en la tarjeta:
+- **Deuda mes** = deuda del período ACTIVO. Al cerrar, vuelve a $0 (período nuevo vacío).
+- **Deuda total** = deuda impaga de TODOS los períodos (activo + cerrados). Al cerrar un período, la
+  deuda impaga **sigue contando** acá → refleja lo que realmente debe el consorcio.
+
+**Alternativas descartadas:** mostrar solo la deuda del período activo (se perdía de vista la deuda
+arrastrada de períodos cerrados); mostrar solo la total (se perdía el foco del mes en curso).
+
+**Backend:** `ConsortiumRepository.listByClient` agrega, además de `periods` + `_count.invoices`, tres
+campos por consorcio vía **2 queries raw** (`$queryRaw` + `Prisma.join` para el `IN`): (1) período
+activo → cantidad de boletas + deuda del mes (filtra por los ids de período ACTIVE); (2) total →
+deuda impaga de todas las boletas del consorcio (filtra por `clientId`, agrupa por `consortiumId`).
+El endpoint `GET /api/client/consortiums` no cambió (pasa el resultado tal cual). El `Decimal` de
+Prisma se parsea con `Number(String(...))` (el driver puede devolver bigint/Decimal/string).
+
+**Impacto:** `src/repositories/consortium.repository.ts` (agregación), `src/app/admin/consortiums/page.tsx`
+(grid de tarjetas + buscador + botón volver, se saca la lista lateral), `page.module.css` (estilos de
+tarjetas). Solo lectura, sin migración. Verificado contra la DB real (MorinigoAdm, 47 consorcios):
+`deudaTotal ≥ deudaMes` en todos, y los saldos coinciden con los del detalle por consorcio. typecheck
++ lint (0 errores) OK. **Nota:** el contador de boletas de la tarjeta es del **período activo** (no
+el total histórico que mostraba la lista vieja), para ser coherente con "Deuda mes".
+
+**Deep-link del consorcio seleccionado (URL híbrida) + loader.** Antes, recargar (F5) estando en un
+consorcio te devolvía al grid (la selección vivía solo en estado React). Se persiste ahora en la URL
+como query param, **sin endpoint nuevo** (los endpoints por-id ya existen). Formato **híbrido**:
+`?c=<slug-del-nombre>-<id>` (ej. `?c=pueyrredon-2418-cmmuvg0hl0000kxl4ks5nrgxn`). El slug es cosmético
+(legible/compartible); el matching usa el **id (cuid) embebido al final** — el cuid no tiene guiones,
+así que se extrae con `lastIndexOf("-")`. Decisión clave: se eligió híbrido sobre nombre-puro porque
+`canonicalName` **puede cambiar** al re-sincronizar el ALTA → un link nombre-puro guardado antes del
+renombre quedaría roto de forma **permanente** (recargar no lo recupera, el slug viejo ya no matchea);
+con el id embebido el link sigue andando aunque se renombre. Rendimiento/escala: **indistinto** —
+el match es un `.find` client-side sobre la lista ya cargada, y `canonicalName` está indexado por el
+`@@unique([clientId, canonicalName])` si alguna vez fuera server-side. Implementación (solo frontend,
+`window.history.replaceState`, sin navegación ni Suspense de `useSearchParams`): al seleccionar se
+setea la URL; al montar se lee `?c=` y, tras cargar la lista, se restaura por id (una sola vez, ref
+`didRestoreRef`); si el id no existe (consorcio borrado) limpia la URL y cae al grid. **Loader**
+(`.restoreLoader` con spinner) mientras se resuelve la restauración, para no ver el grid parpadear
+antes del detalle. Helpers puros `slugifyName`/`consortiumUrlKey`/`idFromUrlKey` en `page.tsx`.
+
+---
+
 ## 2026-07-02 — CUIT del membrete en imagen: fallback de visión Gemini reforzado
 
 **Problema:** con el matching de proveedor ahora **solo por CUIT** (entrada anterior), las boletas

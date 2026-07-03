@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+### Feature
+- **Vista general de consorcios en tarjetas (2026-07-02)**. `/admin/consortiums` reemplaza la lista
+  lateral por un grid de tarjetas (con buscador). Cada tarjeta muestra nombre, período activo,
+  boletas del período, **Deuda mes** (período activo) y **Deuda total** (impaga de todos los
+  períodos). Se muestran las dos deudas porque al cerrar un período la deuda del mes vuelve a $0
+  (período nuevo vacío) pero la impaga arrastrada sigue contando en el total. Backend:
+  `ConsortiumRepository.listByClient` agrega los stats por consorcio con 2 queries raw (deuda =
+  `isPaid ? 0 : coalesce(remainingBalance, amount, 0)`). Incluye **deep-link** del consorcio
+  seleccionado en la URL (`?c=<slug>-<id>`, híbrido: nombre legible + id inmutable que sobrevive a
+  renombres) → F5 restaura el consorcio (con loader) en vez de volver al grid; sin endpoint nuevo.
+  Solo lectura, sin migración. Ver decisiones.md.
+
 ### Changed
 - **Visión Gemini reforzada para el CUIT del membrete en imagen (2026-07-02)**. Complementa el
   matching solo-CUIT: cuando falta el CUIT del proveedor (o del consorcio) porque está en el

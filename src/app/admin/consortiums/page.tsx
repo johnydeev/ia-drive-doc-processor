@@ -20,7 +20,7 @@ const TIPOS_GASTO = [
 type Period      = { id: string; year: number; month: number; status: "ACTIVE" | "CLOSED"; };
 type Coeficiente = { id: string; name: string; value: number; };
 type Rubro       = { id: string; name: string; };
-type Consortium  = { id: string; canonicalName: string; rawName: string; cuit: string | null; cutoffDay: number; matchNames: string | null; bank: string | null; statementsFolderUrl: string | null; periods: Period[]; _count: { invoices: number }; };
+type Consortium  = { id: string; canonicalName: string; rawName: string; cuit: string | null; cutoffDay: number; matchNames: string | null; bank: string | null; statementsFolderUrl: string | null; periods: Period[]; _count: { invoices: number }; activePeriodInvoiceCount: number; activePeriodDebt: number; totalDebt: number; };
 type Provider    = { id: string; canonicalName: string; cuit: string | null; paymentAlias: string | null; providerType?: "PROVEEDOR" | "EMPLEADO"; };
 type Invoice     = {
   id: string; boletaNumber: string | null; provider: string | null; providerTaxId: string | null;
@@ -87,6 +87,27 @@ function todayInputDate(): string {
 // normCuit: usar la fuente única lib/cuit (los CUITs de DB pueden venir con o sin guiones).
 function normName(v: string | null | undefined): string {
   return (v ?? "").toLowerCase().replace(/[.,\-_]/g, " ").replace(/\s+/g, " ").trim();
+}
+
+// ── Deep-link híbrido: URL legible + id inmutable ────────────────────────────
+// El slug (del nombre) es cosmético; el matching usa el id (cuid, sin guiones)
+// embebido al final → aunque renombres el consorcio, el link viejo sigue andando.
+function slugifyName(name: string | null | undefined): string {
+  return (name ?? "")
+    .toLowerCase()
+    .normalize("NFD").replace(/[̀-ͯ]/g, "") // saca acentos (PUEYRREDÓN → pueyrredon)
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+function consortiumUrlKey(c: { id: string; canonicalName: string; rawName: string }): string {
+  const slug = slugifyName(c.canonicalName || c.rawName);
+  return slug ? `${slug}-${c.id}` : c.id;
+}
+// El id (cuid) es el último segmento tras el último guión (el cuid no tiene guiones).
+function idFromUrlKey(key: string | null | undefined): string {
+  if (!key) return "";
+  const idx = key.lastIndexOf("-");
+  return idx >= 0 ? key.slice(idx + 1) : key;
 }
 function matchProvider(providers: Provider[], extracted: ScannedData): Provider | undefined {
   if (extracted.providerTaxId) {
@@ -425,12 +446,21 @@ export default function ConsortiumsPage() {
   const [listError, setListError] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedConsortium, setSelectedConsortium] = useState<Consortium | null>(null);
+  // Deep-link: al recargar (F5) estando en un consorcio, la URL trae ?c=<id> y se
+  // restaura la selección. `pendingRestore` muestra el loader mientras se resuelve.
+  const [pendingRestore, setPendingRestore] = useState(false);
+  const didRestoreRef = useRef(false);
+  // Ref a handleSelectConsortium (se declara más abajo) para usarlo en el efecto de
+  // restauración sin problemas de orden de declaración.
+  const handleSelectConsortiumRef = useRef<((c: Consortium) => Promise<void>) | null>(null);
   const [periods, setPeriods] = useState<Period[]>([]);
   const [selectedPeriod, setSelectedPeriod] = useState<Period | null>(null);
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [loadingInvoices, setLoadingInvoices] = useState(false);
   const [invoicesError, setInvoicesError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
+  // Búsqueda de la vista general de tarjetas (independiente del `search` de boletas).
+  const [consortiumSearch, setConsortiumSearch] = useState("");
   const [activeTab, setActiveTab] = useState<"boletas" | "pagos">("boletas");
   const [providers, setProviders] = useState<Provider[]>([]);
   const [coeficientes, setCoeficientes] = useState<Coeficiente[]>([]);
@@ -689,6 +719,29 @@ export default function ConsortiumsPage() {
 
   useEffect(() => { void fetchConsortiums(); }, [fetchConsortiums]);
 
+  // Deep-link: leer ?c=<id> al montar → marca que hay que restaurar (loader).
+  useEffect(() => {
+    const cid = new URLSearchParams(window.location.search).get("c");
+    if (cid) setPendingRestore(true);
+  }, []);
+
+  // Restaurar la selección una vez que la lista de consorcios cargó. Si el id de la
+  // URL no existe (consorcio borrado), limpia la URL y cae al grid general.
+  useEffect(() => {
+    if (didRestoreRef.current || !pendingRestore || loadingList) return;
+    didRestoreRef.current = true;
+    // El id (cuid inmutable) va al final de la key ?c=<slug>-<id> → matchea aunque el
+    // nombre haya cambiado desde que se guardó el link.
+    const cid = idFromUrlKey(new URLSearchParams(window.location.search).get("c"));
+    const target = cid ? consortiums.find((c) => c.id === cid) : null;
+    if (target) {
+      void handleSelectConsortiumRef.current?.(target).finally(() => setPendingRestore(false));
+    } else {
+      setPendingRestore(false);
+      window.history.replaceState(null, "", window.location.pathname);
+    }
+  }, [pendingRestore, loadingList, consortiums]);
+
   const fetchProviders = useCallback(async () => {
     try {
       const res = await guardedFetch("/api/client/providers", { cache: "no-store" });
@@ -826,6 +879,9 @@ export default function ConsortiumsPage() {
 
   const handleSelectConsortium = useCallback(async (c: Consortium) => {
     setSelectedId(c.id); setSelectedConsortium(c);
+    // Deep-link híbrido: URL legible (slug del nombre) + id inmutable al final. Sin
+    // navegar. F5 lo restaura por el id, así que un renombre no rompe el link.
+    window.history.replaceState(null, "", `${window.location.pathname}?c=${consortiumUrlKey(c)}`);
     setActiveTab("boletas");
     setInvoices([]); setSearch(""); setCloseSuccess(null); setCloseError(null);
     setEditingMatchNames(false); setMatchNamesMsg(null);
@@ -839,6 +895,9 @@ export default function ConsortiumsPage() {
     const periodId = await fetchPeriodsAndInvoices(c.id);
     if (periodId) void fetchInvoices(c.id, periodId);
   }, [fetchPeriodsAndInvoices, fetchInvoices, fetchCoeficientes, fetchRubros, fetchLspServices]);
+
+  // Mantener el ref sincronizado para el efecto de restauración por URL.
+  handleSelectConsortiumRef.current = handleSelectConsortium;
 
   const handleSelectPeriod = useCallback((p: Period) => {
     setSelectedPeriod(p);
@@ -1206,37 +1265,6 @@ export default function ConsortiumsPage() {
         </button>
       </aside>
 
-      {/* ── Columna 2: Lista de consorcios ── */}
-      <aside className={styles.sidebar}>
-        <div className={styles.sidebarHeader}>
-          <span className={styles.sidebarTitle}>Consorcios</span>
-          <span className={styles.sidebarCount}>{loadingList ? "..." : consortiums.length}</span>
-        </div>
-        {loadingList && <div className={styles.sidebarLoading}>Cargando...</div>}
-        {listError && <div className={styles.sidebarError}>{listError}</div>}
-        <nav className={styles.sidebarNav}>
-          {consortiums.map((c) => {
-            const active = c.periods.find((p) => p.status === "ACTIVE");
-            const isSelected = selectedId === c.id;
-            return (
-              <button key={c.id} type="button"
-                className={`${styles.sidebarItem} ${isSelected ? styles.sidebarItemActive : ""}`}
-                onClick={() => void handleSelectConsortium(c)}>
-                <span className={styles.sidebarItemIcon}>🏢</span>
-                <span className={styles.sidebarItemBody}>
-                  <span className={styles.sidebarItemName}>{c.rawName}</span>
-                  <span className={styles.sidebarItemMeta}>{active ? formatPeriod(active) : "Sin periodo"} · {c._count.invoices} bol.</span>
-                </span>
-                {isSelected && <span className={styles.sidebarItemArrow}>›</span>}
-              </button>
-            );
-          })}
-          {!loadingList && !listError && consortiums.length === 0 && (
-            <p className={styles.sidebarEmpty}>No hay consorcios cargados.</p>
-          )}
-        </nav>
-      </aside>
-
       {/* ── Botón hamburger flotante (solo mobile/tablet ≤1024px) ── */}
       <button
         type="button"
@@ -1281,15 +1309,101 @@ export default function ConsortiumsPage() {
         </header>
 
         <main className={styles.main}>
-          {!selectedId && (
-            <div className={styles.emptyState}>
-              <span className={styles.emptyIcon}>🏢</span>
-              <p>Seleccioná un consorcio para ver sus boletas.</p>
+          {!selectedId && pendingRestore && (
+            <div className={styles.restoreLoader}>
+              <span className={styles.spinner} aria-hidden="true" />
+              <p>Cargando consorcio...</p>
             </div>
+          )}
+
+          {!selectedId && !pendingRestore && (
+            <>
+              <div className={styles.gridToolbar}>
+                <div className={styles.searchRow}>
+                  <input
+                    type="text"
+                    className={styles.searchInput}
+                    placeholder="Buscar consorcio..."
+                    value={consortiumSearch}
+                    onChange={(e) => setConsortiumSearch(e.target.value)}
+                  />
+                  {consortiumSearch && (
+                    <button type="button" className={styles.clearSearch} onClick={() => setConsortiumSearch("")} aria-label="Limpiar búsqueda">✕</button>
+                  )}
+                </div>
+                <span className={styles.gridCount}>
+                  {loadingList ? "..." : `${consortiums.length} consorcio${consortiums.length === 1 ? "" : "s"}`}
+                </span>
+              </div>
+
+              {loadingList && <div className={styles.gridInfo}>Cargando consorcios...</div>}
+              {listError && <div className={styles.sidebarError}>{listError}</div>}
+
+              {!loadingList && !listError && (() => {
+                const q = normName(consortiumSearch);
+                const filtered = q
+                  ? consortiums.filter((c) => normName(c.rawName).includes(q) || normName(c.canonicalName).includes(q))
+                  : consortiums;
+
+                if (consortiums.length === 0) {
+                  return <div className={styles.gridInfo}>No hay consorcios cargados.</div>;
+                }
+                if (filtered.length === 0) {
+                  return <div className={styles.gridInfo}>Ningún consorcio coincide con &quot;{consortiumSearch}&quot;.</div>;
+                }
+
+                return (
+                  <div className={styles.cardGrid}>
+                    {filtered.map((c) => {
+                      const active = c.periods.find((p) => p.status === "ACTIVE");
+                      const hasPeriodDebt = c.activePeriodDebt > 0;
+                      const hasTotalDebt = c.totalDebt > 0;
+                      return (
+                        <button key={c.id} type="button" className={styles.consortiumCard} onClick={() => void handleSelectConsortium(c)}>
+                          <div className={styles.cardTop}>
+                            <span className={styles.cardIcon}>🏢</span>
+                            <span className={styles.cardName}>{c.rawName}</span>
+                          </div>
+                          <span className={styles.cardPeriod}>{active ? formatPeriod(active) : "Sin período activo"}</span>
+                          <div className={styles.cardStats}>
+                            <div className={styles.cardStat}>
+                              <span className={styles.cardStatLabel}>Boletas</span>
+                              <span className={styles.cardStatValue}>{c.activePeriodInvoiceCount}</span>
+                            </div>
+                            <div className={styles.cardStat}>
+                              <span className={styles.cardStatLabel}>Deuda mes</span>
+                              <span className={`${styles.cardStatValue} ${hasPeriodDebt ? styles.cardDebt : styles.cardNoDebt}`}>
+                                {formatAmount(c.activePeriodDebt)}
+                              </span>
+                            </div>
+                          </div>
+                          <div className={styles.cardTotalDebt}>
+                            <span className={styles.cardStatLabel}>Deuda total (todos los períodos)</span>
+                            <span className={`${styles.cardTotalValue} ${hasTotalDebt ? styles.cardDebt : styles.cardNoDebt}`}>
+                              {formatAmount(c.totalDebt)}
+                            </span>
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                );
+              })()}
+            </>
           )}
 
           {selectedId && selectedConsortium && (
             <>
+              <button
+                type="button"
+                className={styles.backToGrid}
+                onClick={() => {
+                  setSelectedId(null); setSelectedConsortium(null); setPendingRestore(false);
+                  window.history.replaceState(null, "", window.location.pathname);
+                }}
+              >
+                ← Volver a consorcios
+              </button>
               <div className={styles.detailHeader}>
                 <div>
                   <div className={styles.detailTitleRow}>

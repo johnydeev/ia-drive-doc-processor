@@ -6,8 +6,40 @@ Actualizado al 02/07/2026 (sesión 37).
 > su propio loop, agendado exactamente a su `intervalMinutes`; (2) **matching de proveedor endurecido
 > a SOLO CUIT** (fix de asignación cruzada — caso ASCENSORES POTENZA); (3) **fallback de visión
 > Gemini reforzado** para leer el CUIT del membrete en imagen (trigger por CUIT faltante, recorte
-> alta DPI, boletas 100% imagen, tolerancia 0). typecheck + lint + `build:jobs` + 170 tests: todo OK.
-> **Cerebras confirmado activo en producción** (ver logs) — ya no está pendiente.
+> alta DPI, boletas 100% imagen, tolerancia 0); (4) **vista general de consorcios en tarjetas** con
+> deuda del período y deuda total. typecheck + lint + `build:jobs` + 170 tests: todo OK. **Cerebras
+> confirmado activo en producción** (ver logs) — ya no está pendiente.
+>
+> **Nota:** (1) y (2)/(3) ya se commitearon y deployaron (imagen `ec6099f` corriendo en prod). (4)
+> —las tarjetas— sigue **sin commitear** (validación local pendiente del owner).
+
+---
+
+## Vista general de consorcios en tarjetas (02/07/2026)
+
+**Estado: implementado, verificado (typecheck + lint OK, query contra DB real). Sin commitear —
+validación local del owner con `npm run dev` antes de commitear.**
+
+**Pedido:** reemplazar la lista lateral angosta de consorcios por **tarjetas** que muestren, a nivel
+general, cantidad de boletas y deuda del consorcio.
+
+**Qué se hizo:**
+- Se elimina la columna-lista lateral; los 47 consorcios se ven como **grid de tarjetas** en el área
+  principal, con buscador + contador. Click → detalle de siempre; botón "← Volver a consorcios".
+- Cada tarjeta: nombre, período activo, **Boletas** (del período), **Deuda mes** (período activo) y
+  **Deuda total** (impaga de todos los períodos). Ámbar si debe, verde si $0.
+- **Cierre de período:** al cerrar, "Deuda mes" vuelve a $0 (período nuevo vacío) pero "Deuda total"
+  sigue reflejando lo arrastrado de períodos cerrados (no hay carry-over automático de saldo). Por eso
+  se muestran las dos.
+- **Deep-link + loader:** el consorcio seleccionado se persiste en la URL (`?c=<slug>-<id>`, híbrido)
+  → F5 te deja en el mismo consorcio (con loader mientras carga), en vez de volver al grid. El id
+  embebido hace que el link no se rompa aunque se renombre el consorcio. Sin endpoint nuevo (solo
+  frontend). Detalle en `docs/decisiones.md`.
+
+**Archivos:** `src/repositories/consortium.repository.ts` (2 agregaciones raw: período activo + total),
+`src/app/admin/consortiums/page.tsx` (grid + deep-link + loader), `src/app/admin/consortiums/page.module.css`.
+Solo lectura, sin migración. Detalle y fórmula de deuda en `docs/decisiones.md` (2026-07-02). Probado
+por el owner en local (`npm run dev`): saldos coinciden con el detalle, F5 restaura el consorcio.
 
 ---
 

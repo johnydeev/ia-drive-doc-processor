@@ -1,4 +1,4 @@
-import { Consortium, Period, PrismaClient } from "@prisma/client";
+import { Consortium, Period, Prisma, PrismaClient } from "@prisma/client";
 import { getPrismaClient } from "@/lib/prisma";
 
 export class ConsortiumRepository {
@@ -96,10 +96,20 @@ export class ConsortiumRepository {
 
   async listByClient(
     clientId: string
-  ): Promise<Array<Consortium & { periods: Period[]; _count: { invoices: number } }>> {
+  ): Promise<
+    Array<
+      Consortium & {
+        periods: Period[];
+        _count: { invoices: number };
+        activePeriodInvoiceCount: number;
+        activePeriodDebt: number;
+        totalDebt: number;
+      }
+    >
+  > {
     const prisma = this.prisma;
 
-    return prisma.consortium.findMany({
+    const consortiums = await prisma.consortium.findMany({
       where: { clientId },
       include: {
         periods: true,
@@ -110,6 +120,65 @@ export class ConsortiumRepository {
       orderBy: {
         canonicalName: "asc",
       },
+    });
+
+    // Fórmula de saldo pendiente por boleta (paga → 0, sino su saldo o el importe).
+    // Deuda = Σ (isPaid ? 0 : coalesce(remainingBalance, amount, 0)).
+    //
+    // Dos agregaciones por consorcio, en 2 queries raw:
+    //  - Período ACTIVO: cantidad de boletas + deuda del mes en curso.
+    //  - TOTAL acumulada: deuda impaga de TODOS los períodos (activo + cerrados) →
+    //    al cerrar un período, la deuda impaga sigue contando acá.
+    const activePeriodIds = consortiums
+      .map((c) => c.periods.find((p) => p.status === "ACTIVE")?.id)
+      .filter((id): id is string => Boolean(id));
+
+    const activeByConsortium = new Map<string, { count: number; debt: number }>();
+    if (activePeriodIds.length > 0) {
+      const rows = await prisma.$queryRaw<
+        Array<{ consortiumId: string; count: bigint; debt: Prisma.Decimal | null }>
+      >`
+        SELECT "consortiumId",
+               COUNT(*)::bigint AS count,
+               COALESCE(SUM(CASE WHEN "isPaid" THEN 0 ELSE COALESCE("remainingBalance", "amount", 0) END), 0) AS debt
+        FROM "Invoice"
+        WHERE "periodId" IN (${Prisma.join(activePeriodIds)})
+        GROUP BY "consortiumId"
+      `;
+      for (const r of rows) {
+        activeByConsortium.set(r.consortiumId, {
+          // $queryRaw puede devolver bigint/Decimal/string según el driver → String() antes de Number().
+          count: Number(String(r.count)),
+          debt: Number(String(r.debt ?? 0)),
+        });
+      }
+    }
+
+    // Deuda TOTAL acumulada (todos los períodos) por consorcio del cliente.
+    const totalDebtByConsortium = new Map<string, number>();
+    if (consortiums.length > 0) {
+      const rows = await prisma.$queryRaw<
+        Array<{ consortiumId: string; debt: Prisma.Decimal | null }>
+      >`
+        SELECT "consortiumId",
+               COALESCE(SUM(CASE WHEN "isPaid" THEN 0 ELSE COALESCE("remainingBalance", "amount", 0) END), 0) AS debt
+        FROM "Invoice"
+        WHERE "clientId" = ${clientId}
+        GROUP BY "consortiumId"
+      `;
+      for (const r of rows) {
+        totalDebtByConsortium.set(r.consortiumId, Number(String(r.debt ?? 0)));
+      }
+    }
+
+    return consortiums.map((c) => {
+      const active = activeByConsortium.get(c.id);
+      return {
+        ...c,
+        activePeriodInvoiceCount: active?.count ?? 0,
+        activePeriodDebt: active?.debt ?? 0,
+        totalDebt: totalDebtByConsortium.get(c.id) ?? 0,
+      };
     });
   }
 
