@@ -1395,7 +1395,6 @@ export default function ConsortiumsPage() {
                 return (
                   <div className={styles.cardGrid}>
                     {filtered.map((c) => {
-                      const active = c.periods.find((p) => p.status === "ACTIVE");
                       const hasPeriodDebt = c.activePeriodDebt > 0;
                       const hasTotalDebt = c.totalDebt > 0;
                       return (
@@ -1404,7 +1403,6 @@ export default function ConsortiumsPage() {
                             <span className={styles.cardIcon}>🏢</span>
                             <span className={styles.cardName}>{c.rawName}</span>
                           </div>
-                          <span className={styles.cardPeriod}>{active ? formatPeriod(active) : "Sin período activo"}</span>
                           <div className={styles.cardStats}>
                             <div className={styles.cardStat}>
                               <span className={styles.cardStatLabel}>Boletas</span>
@@ -1418,7 +1416,7 @@ export default function ConsortiumsPage() {
                             </div>
                           </div>
                           <div className={styles.cardTotalDebt}>
-                            <span className={styles.cardStatLabel}>Deuda total (todos los períodos)</span>
+                            <span className={styles.cardStatLabel}>Deuda total</span>
                             <span className={`${styles.cardTotalValue} ${hasTotalDebt ? styles.cardDebt : styles.cardNoDebt}`}>
                               {formatAmount(c.totalDebt)}
                             </span>
