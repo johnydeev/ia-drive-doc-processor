@@ -124,6 +124,14 @@ export const schedulerLog = {
     log("error", "scheduler", `Error fatal del scheduler: ${error}`);
   },
 
+  /**
+   * Error transitorio y RECUPERABLE (ej. blip de conexión a la DB, P1001). No mata
+   * el proceso: se loguea y se reintenta en el próximo ciclo. `where` ubica dónde ocurrió.
+   */
+  recoverableError(where: string, error: string) {
+    log("warn", "scheduler", `⚠️  Error transitorio en ${where} (se reintenta): ${error}`);
+  },
+
   /** Ciclo de este cliente saltado porque el anterior (de ESTE cliente) aún seguía corriendo. */
   skippedBusy(clientId: string, clientName: string) {
     log("warn", "scheduler", `Ciclo omitido — el anterior de "${clientName}" [${shortId(clientId)}] aún está corriendo`);

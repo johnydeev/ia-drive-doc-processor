@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Fix
+- **Scheduler: un blip transitorio de DB (P1001) crasheaba el proceso (2026-07-04)**. Un error momentáneo
+  de conexión al pooler de Supabase saltaba dentro de `discover()` sin try/catch → unhandled rejection →
+  Node mataba el scheduler (Docker lo reiniciaba). Regresión del refactor del loop por cliente. Fix en 3
+  capas: `discover()` y el `findActiveById` de `tick()` envueltos en try/catch (loguean + reintentan sin
+  crashear), y `process.on("unhandledRejection"/"uncaughtException")` como red de seguridad que loguea sin
+  salir. Nuevo log `schedulerLog.recoverableError`. Sin migración. Ver decisiones.md.
+
 ### Feature
 - **Vista general de consorcios en tarjetas (2026-07-02)**. `/admin/consortiums` reemplaza la lista
   lateral por un grid de tarjetas (con buscador). Cada tarjeta muestra nombre, período activo,

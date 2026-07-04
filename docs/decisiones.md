@@ -4,6 +4,38 @@ Registro de decisiones tomadas ante problemas reales encontrados en producción.
 
 ---
 
+## 2026-07-04 — Scheduler: un blip transitorio de DB (P1001) crasheaba el proceso
+
+**Problema (visto en logs de prod):** el contenedor `scheduler` se reinició una vez
+(`RestartCount=1`, banner "SCHEDULER INICIADO" 2×: 16:25 y 01:00). Stack trace:
+`Can't reach database server ... :6543` (**P1001**) →
+`ClientRepository.listActiveClients` → `discover`. Un blip momentáneo de conexión al pooler de
+Supabase saltó dentro de `discover()`, que **no tenía try/catch** → *unhandled promise rejection* →
+Node **mató el proceso** del scheduler. Docker lo reinició y se recuperó, pero el crash es evitable.
+
+**Causa:** regresión del refactor del scheduler (loop por cliente, 2026-07-02). Dos puntos tocan la
+DB **fuera** de un try/catch: `discover()` (`listActiveClients`) y el inicio de `tick()`
+(`findActiveById`). El worker sí tiene reintentos de DB; el scheduler no tenía nada.
+
+**Decisión (blindaje en 3 capas):**
+1. **`discover()`** envuelto en try/catch: si `listActiveClients` falla, se loguea (recuperable) y se
+   reintenta en el próximo tick de discovery (cada 5 min). No crashea.
+2. **`tick()`**: `findActiveById` movido dentro de try/catch que **reprograma igual** el loop del
+   cliente (con el intervalo global como fallback) → un blip no mata el loop ni el proceso.
+3. **Red de seguridad a nivel proceso**: `process.on("unhandledRejection")` y
+   `process.on("uncaughtException")` que **loguean sin salir** → ninguna excepción suelta que se
+   escape vuelve a tumbar el scheduler (proceso long-running).
+
+Nuevo log `schedulerLog.recoverableError(where, msg)` (nivel warn, "⚠️ Error transitorio en … (se
+reintenta)") — distinto de `fatalError`, porque justamente NO es fatal.
+
+**Impacto:** `src/jobs/scheduler.ts` (try/catch en discover + tick, handlers de proceso),
+`src/lib/logger.ts` (`recoverableError`). Sin migración. Verificado: typecheck + build:jobs + lint (0
+errores) + 170 tests + script de timing OK. Efecto: un P1001 transitorio pasa a ser una línea de log
++ reintento automático, en vez de crash + reinicio de contenedor.
+
+---
+
 ## 2026-07-03 — Heartbeat del worker configurable (menos ruido en logs)
 
 **Problema:** el worker logueaba "Cola vacía — esperando jobs (heartbeat)" **cada 5 min** (constante

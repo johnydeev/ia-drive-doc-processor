@@ -1,6 +1,20 @@
 # Progreso del proyecto — drive-doc-processor
 
-Actualizado al 03/07/2026 (sesión 37).
+Actualizado al 04/07/2026 (sesión 37).
+
+## Fix: crash del scheduler por blip de DB (04/07/2026)
+
+**Estado: implementado, verificado (typecheck + build:jobs + lint + 170 tests OK). Sin commitear.**
+
+Revisando logs de Docker se detectó que el scheduler se había reiniciado 1 vez: un P1001 transitorio
+(no pudo alcanzar el pooler de Supabase) saltó en `discover()` sin try/catch → unhandled rejection →
+crash del proceso (Docker lo reinició, se recuperó). Regresión del refactor del loop por cliente. Se
+blindó en 3 capas: try/catch en `discover()` y en el `findActiveById` de `tick()` (loguean + reintentan),
+y handlers `unhandledRejection`/`uncaughtException` a nivel proceso que loguean sin salir. Archivos:
+`src/jobs/scheduler.ts`, `src/lib/logger.ts` (`recoverableError`). Detalle en `docs/decisiones.md`.
+
+---
+
 
 > **Estado (sesión 37, sin commitear):** (1) refactor del scheduler para que cada cliente corra en
 > su propio loop, agendado exactamente a su `intervalMinutes`; (2) **matching de proveedor endurecido

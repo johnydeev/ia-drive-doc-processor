@@ -177,7 +177,20 @@ const scheduleNext = (clientId: string, delayMs: number): void => {
 
 /** Corre el ciclo de un cliente y se reprograma solo, releyendo su intervalMinutes de la DB. */
 const tick = async (clientId: string): Promise<void> => {
-  const client = await clientRepository.findActiveById(clientId);
+  // findActiveById toca la DB: un blip transitorio (P1001) NO debe crashear el proceso
+  // ni matar el loop del cliente. Si falla, se loguea y se reprograma con el intervalo
+  // global (fallback) para reintentar en el próximo ciclo.
+  let client: ProcessingClient | null;
+  try {
+    client = await clientRepository.findActiveById(clientId);
+  } catch (error) {
+    schedulerLog.recoverableError(
+      `tick(findActiveById) [${clientId.slice(0, 4)}…]`,
+      error instanceof Error ? error.message : "Unknown error"
+    );
+    scheduleNext(clientId, resolveClientIntervalMs(0, globalMinutes));
+    return;
+  }
   if (!client) {
     // Se desactivó/borró entre medio: no se reprograma (discover() ya limpió o limpiará el timer).
     clientTimers.delete(clientId);
@@ -214,7 +227,21 @@ const tick = async (clientId: string): Promise<void> => {
  * de nadie, solo mantenimiento del set de loops activos.
  */
 const discover = async (): Promise<void> => {
-  const clients = await clientRepository.listActiveClients();
+  // listActiveClients toca la DB. Un blip transitorio (P1001 al pooler) NO debe
+  // crashear el scheduler: se loguea y se reintenta en el próximo tick de discovery.
+  // (Este era el origen del crash del 2026-07-04: el error salía sin try/catch → el
+  // proceso moría por unhandled rejection y Docker lo reiniciaba.)
+  let clients: ProcessingClient[];
+  try {
+    clients = await clientRepository.listActiveClients();
+  } catch (error) {
+    schedulerLog.recoverableError(
+      "discover(listActiveClients)",
+      error instanceof Error ? error.message : "Unknown error"
+    );
+    return;
+  }
+
   const activeIds = new Set(clients.map((c) => c.id));
 
   for (const client of clients) {
@@ -231,6 +258,17 @@ const discover = async (): Promise<void> => {
     schedulerLog.clientRemoved(clientId);
   }
 };
+
+// Red de seguridad: cualquier excepción/rechazo suelto que se nos escape NO debe
+// matar el proceso long-running. Se loguea y el scheduler sigue vivo (los timers por
+// cliente y el discovery se reintentan solos). Antes, un P1001 transitorio en discover()
+// tumbaba el proceso entero (ver docs/decisiones.md 2026-07-04).
+process.on("unhandledRejection", (reason) => {
+  schedulerLog.recoverableError("unhandledRejection", reason instanceof Error ? reason.message : String(reason));
+});
+process.on("uncaughtException", (error) => {
+  schedulerLog.recoverableError("uncaughtException", error instanceof Error ? error.message : String(error));
+});
 
 schedulerLog.starting(globalMinutes);
 void discover();
