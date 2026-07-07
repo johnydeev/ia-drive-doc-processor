@@ -21,6 +21,7 @@ import { AiExtractionChain, createAiExtractionChain } from "@/services/aiExtract
 import { isRateLimitError, RateLimitError } from "@/lib/aiErrors";
 import { PdfTextExtractorService } from "@/services/pdfTextExtractor.service";
 import { isMissingAmount, cuitAppearsInText, appendNoAmountTag, markNotBoleta } from "@/lib/documentValidation";
+import { reflowAfipTotals } from "@/lib/afipTotalsReflow";
 import { classifyDocumentType } from "@/lib/documentClassifier";
 import { runPipeline } from "@/jobs/pipeline/runner";
 import { createPipelineContext, type PipelineContext, type StepResult } from "@/jobs/pipeline/context";
@@ -619,7 +620,8 @@ async function textExtractStep(ctx: PipelineContext): Promise<StepResult> {
     m.textChars = text.length;
     m.emitterBlock = pdfExtractor.getLastHasEmitterBlock();
     m.ms.ocr = pdfExtractor.getLastOcrMs();
-    ctx.docText = text;
+    // Reflow AFIP: pega el Importe Total a su rótulo (pdf-parse lo deja flotando).
+    ctx.docText = reflowAfipTotals(text);
     ctx.lspProvider = identifyLSPProvider(text);
     return { kind: "continue" };
   }
@@ -642,7 +644,9 @@ async function textExtractStep(ctx: PipelineContext): Promise<StepResult> {
   const text = lspProvider
     ? await runStep("Re-extracción LSP (página 1+)", () => pdfExtractor.extractTextFromPdf(buffer, lspMaxPages), "textPage1")
     : fullText;
-  ctx.docText = text;
+  // Reflow AFIP: pega el Importe Total a su rótulo (pdf-parse lo deja flotando
+  // varias líneas arriba de un "Importe Total: $" vacío → la IA devolvía null).
+  ctx.docText = reflowAfipTotals(text);
   ctx.lspProvider = lspProvider;
 
   if (resolvedConfig.debugMode) {
