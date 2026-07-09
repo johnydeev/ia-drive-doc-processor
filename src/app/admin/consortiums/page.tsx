@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import styles from "./page.module.css";
 import { useAuthGuard } from "@/lib/useAuthGuard";
 import { cuitDigits as normCuit } from "@/lib/cuit";
+import { AsyncButton } from "@/components/AsyncButton";
 
 const TIPOS_COMPROBANTE = [
   "A", "B", "C", "E", "M", "X",
@@ -868,7 +869,7 @@ export default function ConsortiumsPage() {
       const data = await res.json();
       if (!res.ok || !data.ok) { setFxError(data.error ?? `HTTP ${res.status}`); return; }
       setFxTarget("");
-      void fetchFixedExpenses(selectedId);
+      await fetchFixedExpenses(selectedId);
     } catch (err) {
       setFxError(err instanceof Error ? err.message : "Error al agregar");
     }
@@ -891,7 +892,7 @@ export default function ConsortiumsPage() {
   const handleGenerateObligations = async () => {
     if (!selectedPeriod) return;
     await guardedFetch(`/api/client/periods/${selectedPeriod.id}/obligations`, { method: "POST" });
-    void fetchObligations(selectedPeriod.id);
+    await fetchObligations(selectedPeriod.id);
   };
 
   const handleSetObligationStatus = async (id: string, status: "PENDING" | "SKIPPED") => {
@@ -899,7 +900,7 @@ export default function ConsortiumsPage() {
     await guardedFetch(`/api/client/obligations/${id}`, {
       method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ status }),
     });
-    void fetchObligations(selectedPeriod.id);
+    await fetchObligations(selectedPeriod.id);
   };
 
   const handleSaveMatchNames = async () => {
@@ -1931,9 +1932,9 @@ export default function ConsortiumsPage() {
                         : "Sin faltantes"}
                     </span>
                     {obligations.length === 0 && (
-                      <button type="button" className={styles.addInvoiceBtn} onClick={handleGenerateObligations}>
+                      <AsyncButton type="button" className={styles.addInvoiceBtn} onClick={handleGenerateObligations} pendingLabel="Generando…">
                         Generar obligaciones
-                      </button>
+                      </AsyncButton>
                     )}
                   </div>
                   {obligations.length === 0 ? (
@@ -1969,10 +1970,10 @@ export default function ConsortiumsPage() {
                               </td>
                               <td>
                                 {ob.status === "PENDING" && (
-                                  <button type="button" className={styles.ghostBtn} style={{ padding: "4px 10px", fontSize: 12 }} onClick={() => handleSetObligationStatus(ob.id, "SKIPPED")}>Omitir</button>
+                                  <AsyncButton type="button" className={styles.ghostBtn} style={{ padding: "4px 10px", fontSize: 12 }} onClick={() => handleSetObligationStatus(ob.id, "SKIPPED")}>Omitir</AsyncButton>
                                 )}
                                 {ob.status === "SKIPPED" && (
-                                  <button type="button" className={styles.ghostBtn} style={{ padding: "4px 10px", fontSize: 12 }} onClick={() => handleSetObligationStatus(ob.id, "PENDING")}>Reactivar</button>
+                                  <AsyncButton type="button" className={styles.ghostBtn} style={{ padding: "4px 10px", fontSize: 12 }} onClick={() => handleSetObligationStatus(ob.id, "PENDING")}>Reactivar</AsyncButton>
                                 )}
                               </td>
                             </tr>

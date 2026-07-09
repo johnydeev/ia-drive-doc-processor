@@ -3,6 +3,11 @@
 ## [Unreleased]
 
 ### Added
+- **Componente `AsyncButton` — feedback de carga en botones (Fase 1) (2026-07-09)**. Los botones nuevos de
+  gastos fijos/obligaciones no daban feedback al click → doble click → alta duplicada. Nuevo componente
+  reutilizable que deshabilita + muestra spinner mientras corre el `onClick` async y corta el doble click
+  (guard por ref). Fase 1: aplicado a los 6 botones que faltaban. Fase 2 (pendiente): migrar los que ya
+  tienen `saving` manual. Ver `docs/superpowers/specs/2026-07-09-async-button-feedback-design.md`.
 - **Gastos fijos + obligaciones de pago mensuales (2026-07-05)**. Cada consorcio define sus gastos fijos
   (luz/EDESUR, encargado, telefonía…) vinculados a un `Provider` o `LspService`. Por período se materializan
   **obligaciones** que aparecen "esperando la boleta"; el pipeline las vincula solas cuando llega la boleta

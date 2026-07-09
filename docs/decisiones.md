@@ -4,6 +4,25 @@ Registro de decisiones tomadas ante problemas reales encontrados en producción.
 
 ---
 
+## 2026-07-09 — `AsyncButton` para feedback de carga (en vez de repetir estado `saving`)
+
+**Problema:** el botón "Agregar gasto fijo" no daba feedback → doble click → alta duplicada. El resto del
+panel ya resolvía esto con un estado `saving` por acción (deshabilita + "Guardando…"), pero repetido a
+mano en cada botón (boilerplate).
+
+**Decisión:** componente reutilizable `AsyncButton` (patrón DRY) que encapsula el estado de carga: recibe
+un `onClick` async, se deshabilita + muestra spinner mientras corre, y **corta el doble click** con un
+guard por `ref` (antes de que React re-renderice el `disabled`). En **2 fases**: (1) aplicarlo a los
+botones sin feedback (los nuevos de gastos fijos/obligaciones); (2) migrar incrementalmente los que ya
+tienen `saving` manual, borrando el boilerplate. Se descartó un overlay/toast global (menos preciso, no
+bloquea el botón) y migrar todo de una (refactor grande y riesgoso en un archivo de ~2.900 líneas).
+
+**Impacto (Fase 1):** `src/components/AsyncButton.tsx` (nuevo), `.asyncSpinner` en `globals.css`, y 6
+botones de `consortiums/page.tsx` migrados. Spec: `docs/superpowers/specs/2026-07-09-async-button-feedback-design.md`.
+Verificado: typecheck + lint (0 errores).
+
+---
+
 ## 2026-07-05 — Gastos fijos + obligaciones de pago (2 modelos, materializado por período)
 
 **Problema/pedido:** el administrador no tiene visibilidad de los gastos que **sí o sí** se pagan cada mes en

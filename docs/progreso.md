@@ -2,6 +2,21 @@
 
 Actualizado al 08/07/2026 (sesión 40).
 
+## Feedback de carga en botones (`AsyncButton`) — Fase 1 (2026-07-09)
+
+**Estado: implementado y verificado (typecheck + lint 0 errores). Sin migración. Sin commitear.**
+
+Bug: los botones nuevos de gastos fijos/obligaciones no daban feedback al hacer click → doble click →
+alta duplicada. La mayoría del panel ya tenía loader (estado `saving` por acción); faltaban los nuevos.
+Se introdujo un componente reutilizable **`src/components/AsyncButton.tsx`** que encapsula el patrón
+(deshabilita + spinner + label mientras corre la promesa del `onClick`) y **corta el doble click** con un
+guard por `ref`. **Fase 1:** aplicado a los 6 botones que faltaban (agregar/activar/quitar gasto fijo,
+generar obligaciones, omitir/reactivar). Spinner `.asyncSpinner` en `globals.css`. **Fase 2 (pendiente,
+incremental):** migrar los botones que ya tienen `saving` manual, borrando su boilerplate. Spec:
+`docs/superpowers/specs/2026-07-09-async-button-feedback-design.md`.
+
+---
+
 ## Gastos fijos + obligaciones de pago mensuales (2026-07-05)
 
 **Estado: implementado y verificado (typecheck + lint 0 errores + 204 tests + build:jobs OK). Migración
