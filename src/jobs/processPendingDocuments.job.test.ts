@@ -264,11 +264,44 @@ describe("processDriveFile — caracterización de los 7 caminos de salida", () 
 
     await processDriveFile(makeFile(), asContext(ctx), summary);
 
+    // Consorcio leído del papel pero no en DB → CONSORCIO SIN REGISTRAR.
+    expect(ctx.driveService.renameFile).toHaveBeenCalledWith("file-1", expect.stringContaining("CONSORCIO SIN REGISTRAR"));
     expect(ctx.driveService.moveFileToUnassigned).toHaveBeenCalledWith("file-1", "pending", "unassigned");
     expect(ctx.sheetsService.insertRow).not.toHaveBeenCalled();
     expect(ctx.invoiceRepository.saveProcessedInvoice).not.toHaveBeenCalled();
     expect(summary.unassigned).toBe(1);
     expect(metricsCore().result).toBe("unassigned");
+  });
+
+  it("unassigned (proveedor con CUIT no registrado): renombra PROVEEDOR SIN REGISTRAR", async () => {
+    const ctx = makeContext();
+    ctx.providerRepository.findAllForMatching.mockResolvedValue([]); // consorcio matchea, proveedor no está en DB
+    const summary = createBaseSummary(1);
+
+    await processDriveFile(makeFile(), asContext(ctx), summary);
+
+    expect(ctx.driveService.renameFile).toHaveBeenCalledWith("file-1", expect.stringContaining("PROVEEDOR SIN REGISTRAR"));
+    expect(ctx.driveService.moveFileToUnassigned).toHaveBeenCalledWith("file-1", "pending", "unassigned");
+    expect(metricsCore().result).toBe("unassigned");
+    expect(metricsCore().reason).toBe("provider_not_registered");
+  });
+
+  it("unassigned (sin CUIT de proveedor): renombra SIN PROVEEDOR", async () => {
+    const ctx = makeContext();
+    ctx.providerRepository.findAllForMatching.mockResolvedValue([]);
+    // El texto tampoco trae CUIT de proveedor (cuitSanitizeStep re-agrega los del
+    // texto): solo el del consorcio → no hay CUIT de proveedor identificable.
+    ctx.pdfExtractor.extractTextFromPdf.mockResolvedValue("documento importe total a pagar consorcio 30-11111111-1");
+    ctx.aiChain.run.mockImplementation(async (_t, cb) => {
+      cb?.("gemini", true);
+      return { data: okExtraction({ providerTaxId: null, allTaxIds: ["30-11111111-1"] }), usage: null, provider: "gemini" };
+    });
+    const summary = createBaseSummary(1);
+
+    await processDriveFile(makeFile(), asContext(ctx), summary);
+
+    expect(ctx.driveService.renameFile).toHaveBeenCalledWith("file-1", expect.stringContaining("SIN PROVEEDOR"));
+    expect(metricsCore().reason).toBe("provider_not_found");
   });
 
   it("no_amount: renombra SIN MONTO y mueve a Revisión", async () => {
@@ -297,6 +330,7 @@ describe("processDriveFile — caracterización de los 7 caminos de salida", () 
 
     await processDriveFile(makeFile(), asContext(ctx), summary);
 
+    expect(ctx.driveService.renameFile).toHaveBeenCalledWith("file-1", expect.stringContaining("SIN PERÍODO"));
     expect(ctx.driveService.moveFileToFolder).toHaveBeenCalledWith("file-1", "pending", "failed");
     expect(ctx.sheetsService.insertRow).not.toHaveBeenCalled();
     expect(ctx.invoiceRepository.saveProcessedInvoice).not.toHaveBeenCalled();

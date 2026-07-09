@@ -20,7 +20,7 @@ import { GoogleSheetsService, SheetsRowMapping } from "@/services/googleSheets.s
 import { AiExtractionChain, createAiExtractionChain } from "@/services/aiExtraction";
 import { isRateLimitError, RateLimitError } from "@/lib/aiErrors";
 import { PdfTextExtractorService } from "@/services/pdfTextExtractor.service";
-import { isMissingAmount, cuitAppearsInText, appendNoAmountTag, markNotBoleta } from "@/lib/documentValidation";
+import { isMissingAmount, cuitAppearsInText, appendNoAmountTag, appendTag, markNotBoleta } from "@/lib/documentValidation";
 import { reflowAfipTotals } from "@/lib/afipTotalsReflow";
 import { classifyDocumentType } from "@/lib/documentClassifier";
 import { runPipeline } from "@/jobs/pipeline/runner";
@@ -401,10 +401,12 @@ async function resolveAssignment(
         canonicalName,
         allConsortiums.map((c) => c.canonicalName)
       );
+      // Se leyó un consorcio del papel pero no matchea ninguno en DB → falta darlo
+      // de alta (CONSORCIO SIN REGISTRAR), distinto de no poder extraerlo (SIN CONSORCIO).
       return {
         ...base,
         unassignedReason: `Consorcio no encontrado: "${rawConsortium}" → norm: "${canonicalName}"`,
-        reasonCategory: "consortium_not_found",
+        reasonCategory: "consortium_not_registered",
       };
     }
     return { ...base, unassignedReason: "No se pudo extraer el consorcio del PDF ni matchear por CUIT", reasonCategory: "consortium_not_found" };
@@ -458,11 +460,18 @@ async function resolveAssignment(
 
   if (!providerMatch) {
     pipelineLog.providerNotFound(clientId, rawCuit, rawName, normOcrCuit, normOcrName);
+    // ¿Había un CUIT de proveedor en el papel (distinto del consorcio) que no está
+    // en DB? → PROVEEDOR SIN REGISTRAR (hay que darlo de alta). Si no hay CUIT de
+    // proveedor extraíble → SIN PROVEEDOR (falló la extracción/identificación).
+    const providerCuitCandidates = new Set<string>();
+    for (const c of allTaxIds) if (c.length === 11 && c !== consortiumCuitNorm) providerCuitCandidates.add(c);
+    if (normOcrCuit.length === 11 && normOcrCuit !== consortiumCuitNorm) providerCuitCandidates.add(normOcrCuit);
+    const hasProviderCuit = providerCuitCandidates.size > 0;
     return {
       ...base,
       unassigned: true,
       unassignedReason: `Proveedor no identificado. OCR taxId="${rawCuit}" provider="${rawName}"`,
-      reasonCategory: "provider_not_found",
+      reasonCategory: hasProviderCuit ? "provider_not_registered" : "provider_not_found",
     };
   }
 
@@ -1056,6 +1065,18 @@ async function canonizeStep(ctx: PipelineContext): Promise<StepResult> {
   return { kind: "continue" };
 }
 
+/**
+ * Etiqueta de sufijo por motivo de "sin asignar", para que quien abra la carpeta
+ * Sin Asignar vea el motivo (y la acción) de un vistazo. Mismo estilo que SIN MONTO.
+ */
+const UNASSIGNED_TAG_BY_CATEGORY: Record<string, string> = {
+  provider_not_found: "SIN PROVEEDOR",
+  provider_not_registered: "PROVEEDOR SIN REGISTRAR",
+  consortium_not_found: "SIN CONSORCIO",
+  consortium_not_registered: "CONSORCIO SIN REGISTRAR",
+  lsp_clientnumber_not_registered: "LSP SIN REGISTRAR",
+};
+
 /** 10. Gate "sin asignar": no matcheó consorcio/proveedor → Sin Asignar. */
 async function unassignedGate(ctx: PipelineContext): Promise<StepResult> {
   const { file } = ctx;
@@ -1071,6 +1092,10 @@ async function unassignedGate(ctx: PipelineContext): Promise<StepResult> {
     m.reasonText = assignment.unassignedReason;
     pipelineLog.movedToUnassigned(cid, file.id, assignment.unassignedReason ?? "razón desconocida");
     if (resolvedConfig.driveUnassignedFolderId && finalSourceFolderId) {
+      const tag = assignment.reasonCategory ? UNASSIGNED_TAG_BY_CATEGORY[assignment.reasonCategory] : undefined;
+      if (tag) {
+        await ctx.runStep(`Renombrar (${tag})`, () => driveService.renameFile(file.id, appendTag(file.name, tag)), "move");
+      }
       await ctx.runStep(
         "Mover a Sin Asignar",
         () => driveService.moveFileToUnassigned(file.id, finalSourceFolderId, resolvedConfig.driveUnassignedFolderId!),
@@ -1103,6 +1128,7 @@ async function noPeriodGate(ctx: PipelineContext): Promise<StepResult> {
     m.reason = "no_active_period";
     pipelineLog.stepStart(cid, `⚠️ Consorcio "${assignment.canonicalConsortium ?? "?"}" sin período activo → Revisión`);
     if (resolvedConfig.driveFailedFolderId && finalSourceFolderId) {
+      await ctx.runStep("Renombrar (SIN PERÍODO)", () => driveService.renameFile(file.id, appendTag(file.name, "SIN PERÍODO")), "move");
       await ctx.runStep(
         "Mover a Revisión (sin período activo)",
         () => driveService.moveFileToFolder(file.id, finalSourceFolderId, resolvedConfig.driveFailedFolderId!),

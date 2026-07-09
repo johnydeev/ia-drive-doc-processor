@@ -24,11 +24,46 @@ export function cuitAppearsInText(cuit: string | null | undefined, text: string)
   return cuitDigits(text).includes(c);
 }
 
-/** Agrega " - SIN MONTO" antes de la extensión del nombre actual del archivo. */
-export function appendNoAmountTag(fileName: string): string {
+/**
+ * Etiquetas de sufijo conocidas del pipeline (motivo por el que un archivo quedó
+ * sin procesar). Se listan acá para poder limpiarlas de forma idempotente al
+ * reprocesar (que el nombre no las apile: "x - SIN MONTO - SIN MONTO.pdf").
+ */
+export const KNOWN_SUFFIX_TAGS = [
+  "SIN MONTO",
+  "SIN PROVEEDOR",
+  "PROVEEDOR SIN REGISTRAR",
+  "SIN CONSORCIO",
+  "CONSORCIO SIN REGISTRAR",
+  "SIN PERÍODO",
+  "LSP SIN REGISTRAR",
+] as const;
+
+function stripKnownSuffixTags(base: string): string {
+  const alt = KNOWN_SUFFIX_TAGS.map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
+  const re = new RegExp(`\\s*-\\s*(?:${alt})\\s*$`, "i");
+  let out = base;
+  while (re.test(out)) out = out.replace(re, "");
+  return out;
+}
+
+/**
+ * Agrega " - <tag>" antes de la extensión, de forma IDEMPOTENTE: primero quita
+ * cualquier etiqueta conocida ya presente (la misma u otra) para que el nombre no
+ * las apile al reprocesar. Ej: "x - SIN MONTO.pdf" + "SIN PROVEEDOR" →
+ * "x - SIN PROVEEDOR.pdf".
+ */
+export function appendTag(fileName: string, tag: string): string {
   const dot = fileName.lastIndexOf(".");
-  if (dot <= 0) return `${fileName} - SIN MONTO`;
-  return `${fileName.slice(0, dot)} - SIN MONTO${fileName.slice(dot)}`;
+  const hasExt = dot > 0;
+  const nameBase = hasExt ? fileName.slice(0, dot) : fileName;
+  const ext = hasExt ? fileName.slice(dot) : "";
+  return `${stripKnownSuffixTags(nameBase)} - ${tag}${ext}`;
+}
+
+/** Agrega " - SIN MONTO" antes de la extensión (idempotente vía appendTag). */
+export function appendNoAmountTag(fileName: string): string {
+  return appendTag(fileName, "SIN MONTO");
 }
 
 /** Antepone el prefijo "[NO BOLETA] " al nombre del archivo (triage de no-boletas). */
