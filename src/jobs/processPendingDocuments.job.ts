@@ -69,6 +69,7 @@ type GeminiModule = typeof import("@/services/geminiExtractor.service");
 // tests se inyectan mocks para ejercitar el paso sin tocar Drive real.
 type ResolveStatementsFolders = typeof import("@/services/statementsFolders.service")["resolveStatementsFolders"];
 type BuildInvoiceFileName = typeof import("@/lib/statementsNaming")["buildInvoiceFileName"];
+type LinkInvoiceToObligation = typeof import("@/services/obligation.service")["linkInvoiceToObligation"];
 
 export type ProcessingContext = {
   resolvedConfig: ProcessJobConfig;
@@ -91,6 +92,7 @@ export type ProcessingContext = {
   // Seams opcionales (ver arriba). Default al import dinámico real en prod.
   resolveStatementsFolders?: ResolveStatementsFolders;
   buildInvoiceFileName?: BuildInvoiceFileName;
+  linkInvoiceToObligation?: LinkInvoiceToObligation;
 };
 
 export const DEFAULT_MAPPING: SheetsRowMapping = {
@@ -1252,7 +1254,7 @@ async function persistStep(ctx: PipelineContext): Promise<StepResult> {
   const { sourceFileUrl: _url, isDuplicate: _dup, ...extractionFields } = extracted;
 
   if (!isDuplicate) {
-    await ctx.runStep(
+    const saved = await ctx.runStep(
       "Guardar invoice",
       () => invoiceRepository.saveProcessedInvoice({
         clientId: cid, documentHash: fileHash, fileId: file.id,
@@ -1268,6 +1270,23 @@ async function persistStep(ctx: PipelineContext): Promise<StepResult> {
       "save"
     );
     pipelineLog.invoiceSaved(cid, isDuplicate);
+
+    // Vincula la boleta a su obligación de gasto fijo del período (solo DB, best-effort).
+    if (saved) {
+      try {
+        const linkInvoiceToObligation =
+          ctx.deps.linkInvoiceToObligation ??
+          (await import("@/services/obligation.service")).linkInvoiceToObligation;
+        await linkInvoiceToObligation({
+          id: saved.id,
+          periodId: saved.periodId,
+          providerId: saved.providerId,
+          lspServiceId: saved.lspServiceId,
+        });
+      } catch (obErr) {
+        pipelineLog.stepStart(cid, `⚠️ vínculo de obligación falló: ${obErr instanceof Error ? obErr.message : obErr}`);
+      }
+    }
   } else {
     pipelineLog.stepStart(cid, "📋 Duplicado — no se guarda en DB");
   }

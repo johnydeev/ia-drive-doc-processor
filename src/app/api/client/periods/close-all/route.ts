@@ -1,6 +1,10 @@
 import { NextResponse } from "next/server";
 import { requireClientSession } from "@/lib/clientAuth";
 import { getPrismaClient } from "@/lib/prisma";
+import {
+  closeObligationsForPeriod,
+  generateObligationsForPeriod,
+} from "@/services/obligation.service";
 
 export async function POST(request: Request) {
   const auth = requireClientSession(request);
@@ -52,13 +56,13 @@ export async function POST(request: Request) {
       }
 
       try {
-        await prisma.$transaction(async (tx) => {
+        const newPeriod = await prisma.$transaction(async (tx) => {
           await tx.period.update({
             where: { id: p.id },
             data: { status: "CLOSED", closedAt: new Date() },
           });
 
-          await tx.period.create({
+          return tx.period.create({
             data: {
               clientId: p.clientId,
               consortiumId: p.consortiumId,
@@ -71,6 +75,22 @@ export async function POST(request: Request) {
 
         closed++;
         created++;
+
+        // Obligaciones de gastos fijos (best-effort): las pendientes del período que
+        // se cierra pasan a "No recibida" (con aviso), y el período nuevo genera las suyas.
+        try {
+          const obRes = await closeObligationsForPeriod(p.id, prisma);
+          if (obRes.notReceived > 0) {
+            warnings.push(
+              `${p.consortium.canonicalName}: faltaron ${obRes.notReceived} boleta(s) de gastos fijos (${obRes.labels.join(", ")}).`
+            );
+          }
+          await generateObligationsForPeriod(newPeriod.id, prisma);
+        } catch (obErr) {
+          warnings.push(
+            `Obligaciones de ${p.consortium.canonicalName}: ${obErr instanceof Error ? obErr.message : "error"}`
+          );
+        }
       } catch (err) {
         warnings.push(
           `Error al cerrar período de ${p.consortium.canonicalName}: ${err instanceof Error ? err.message : "Unknown"}`

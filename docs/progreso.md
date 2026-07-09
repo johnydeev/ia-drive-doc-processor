@@ -1,6 +1,118 @@
 # Progreso del proyecto — drive-doc-processor
 
-Actualizado al 04/07/2026 (sesión 37).
+Actualizado al 08/07/2026 (sesión 40).
+
+## Gastos fijos + obligaciones de pago mensuales (2026-07-05)
+
+**Estado: implementado y verificado (typecheck + lint 0 errores + 204 tests + build:jobs OK). Migración
+`20260705000200_add_fixed_expenses` YA aplicada por el owner (`migrate deploy` + `generate`). Sin commitear.**
+
+Feature nueva: cada consorcio define sus **gastos fijos** (luz/EDESUR, encargado, telefonía…) vinculados a un
+`Provider` o `LspService` ya cargado. Por período se materializan **obligaciones** que aparecen "esperando la
+boleta"; cuando la boleta llega, el pipeline la vincula sola (`RECEIVED`); al cerrar el período las que faltan
+pasan a `NOT_RECEIVED` con aviso. Solo panel/DB (no toca Sheets). Spec/plan:
+`docs/superpowers/{specs,plans}/2026-07-05-gastos-fijos-obligaciones*`; decisiones en `docs/decisiones.md`.
+
+**Qué se hizo (13 tareas):**
+- **Modelo:** enum `ObligationStatus` + tablas `FixedExpense` (definición por consorcio, apunta a provider/lsp) y
+  `ExpenseObligation` (instancia por período: `status` + `invoiceId?`). Migración `20260705000200_add_fixed_expenses`.
+- **Lógica pura (TDD):** `src/lib/fixedExpense.ts` (`validateFixedExpenseTarget`, `obligationMatchesInvoice`, 9 tests).
+- **Servicio:** `src/services/obligation.service.ts` — `generateObligationsForPeriod` (idempotente + vínculo
+  retroactivo), `linkInvoiceToObligation`, `closeObligationsForPeriod` (2 tests).
+- **Integración:** generación al crear período (`consortium.repository`) y en `close-all`; cierre → `NOT_RECEIVED`
+  + aviso; vínculo en el pipeline (`persistStep`, seam `linkInvoiceToObligation`; `saveProcessedInvoice` ahora
+  devuelve la Invoice); revertir a `PENDING` al borrar/reprocesar la boleta (`invoiceDeletion`).
+- **API:** CRUD de gastos fijos (`/consortiums/[id]/fixed-expenses`), obligaciones por período
+  (`/periods/[id]/obligations` GET+POST) y `PATCH /obligations/[id]` (omitir/reactivar).
+- **UI:** sección colapsable "Gastos fijos" en el consorcio + **pestaña "Obligaciones"** con badge de faltantes,
+  botón "Generar obligaciones", y aviso de faltantes en el modal de Cerrar Periodo General.
+
+**Pendiente de verificación manual (owner):** cargar gastos fijos por UI, generar obligaciones de un período,
+procesar una boleta que matchee (→ Recibida) y cerrar un período (→ aviso de faltantes).
+
+---
+
+## Feature: etiquetas de motivo en el nombre para casos sin asignar (08/07/2026)
+
+**Estado: implementado y verificado (192 tests + typecheck + lint 0 errores + build:jobs OK). Sin
+migración. Sin commitear (lo hace el owner → deploy automático).**
+
+Extiende el patrón de `SIN MONTO` al resto de los casos: cuando una boleta no se procesa, el archivo se
+**renombra con el motivo** (antes iba a Sin Asignar sin marca). 6 etiquetas mapeadas desde el
+`reasonCategory` que el pipeline ya calculaba: `SIN PROVEEDOR`, `PROVEEDOR SIN REGISTRAR`,
+`SIN CONSORCIO`, `CONSORCIO SIN REGISTRAR`, `SIN PERÍODO`, `LSP SIN REGISTRAR`.
+
+Se refinó `reasonCategory` para separar **`*_not_found`** (no se pudo extraer el identificador) de
+**`*_not_registered`** (identificador presente en el papel pero ausente en DB → hay que darlo de alta).
+Nuevo helper puro `appendTag()` **idempotente**: al reprocesar limpia la etiqueta previa en vez de
+apilarla (`appendNoAmountTag` ahora delega en él → `SIN MONTO` también idempotente). Ver
+`docs/decisiones.md` (2026-07-08).
+
+**Pendiente:** que el owner commitee (se reprocesa/etiqueta solo en el próximo barrido tras el deploy).
+
+## Fix: boletas AFIP con monto caían a "SIN MONTO" — reflow de totales (07/07/2026)
+
+**Estado: implementado y verificado (20 tests + typecheck + lint 0 errores + build:jobs OK). Sin
+migración. Sin commitear (lo hace el owner → deploy automático).**
+
+13 facturas electrónicas AFIP ("Comprobante en línea") con monto terminaban en Revisión con el tag
+`SIN MONTO`. Diagnóstico (systematic-debugging, con evidencia de logs Docker + texto real de los PDFs):
+
+- **Causa raíz capa 1:** `pdf-parse` extrae la columna de importes **separada** de sus rótulos; el
+  número del total flota varias líneas arriba de un `Importe Total: $` vacío.
+- **Causa raíz capa 2:** el modelo primario actual es **Cerebras `gpt-oss-120b`** (gratis, primero en
+  la cadena; no Gemini como dice CLAUDE.md) y no reasocia el número con el rótulo → `amount: null`. La
+  cadena solo escala de proveedor ante excepción, no ante null → nunca llega a Gemini.
+
+**Fix (elegido por el owner):** reflow determinista del texto ANTES de la IA. Nuevo helper puro
+`src/lib/afipTotalsReflow.ts` (`reflowAfipTotals`) que pega el Importe Total a su rótulo (regla: número
+inmediatamente anterior a `Subtotal: $`). Aplicado en `textExtractStep` (ambas ramas PDF). Model-agnóstico,
+no toca el camino feliz. Verificado contra los 13 PDFs reales: los 13 recuperan el total. Ver
+`docs/decisiones.md` (2026-07-07).
+
+**Pendiente de acción del owner:** mover las 13 boletas de Revisión → Pendientes para reprocesar tras el
+deploy.
+
+**Deuda detectada (drift de docs):** CLAUDE.md dice cadena "Gemini → OpenAI"; producción corre
+`Cerebras → Groq → Gemini → OpenAI → Claude`. Actualizar CLAUDE.md en una próxima pasada. Mejora futura
+posible: extracción posicional con `pdfjs-dist` (arreglo general del reading-order, mayor alcance).
+
+## Pagos: tipo explícito (Total/Libre/Cuota) + fix fecha −1 día (05/07/2026)
+
+**Estado: implementado y verificado (typecheck + lint 0 errores + 177 tests + build:jobs OK). Migración
+`20260705000100_add_payment_type` YA aplicada por el owner (`migrate deploy` + `generate`). Sin commitear.**
+
+Probando por primera vez la feature de pagos, el owner detectó dos bugs y pidió un cambio de UX:
+1. **Fecha −1 día (solo visualización):** un pago con fecha "hoy" (día 5) se mostraba el día 4. Las
+   fechas son *date-only* guardadas a medianoche UTC; `formatDate` las mostraba en hora AR (UTC-3) →
+   día anterior. Fix: formatear *date-only* en UTC + `todayInputDate()` en fecha local. Datos intactos.
+2. **Total vs Libre:** el pago total inline se guardaba como "Libre". Se introdujo el campo explícito
+   `paymentType` (enum `TOTAL/LIBRE/CUOTA`) en `Payment` en vez de derivarlo por monto (ambiguo). Cada
+   camino de UI declara su intención: inline → TOTAL, modal "Pago libre" → LIBRE, cuotas → CUOTA. Helper
+   puro `resolvePaymentType` con salvaguarda (un TOTAL que no saldó → LIBRE). El historial ya distingue
+   "Total".
+3. **Sugerencia inline:** el input "IMPORTE PAGO" **sugiere** el saldo completo con un `datalist` (se
+   carga solo al elegir la sugerencia, no al hacer foco) y valida que el pago inline coincida con el saldo
+   (inline = pago total; los parciales van por el modal → "Pago libre"). El contador "N pago(s) sin
+   guardar" y el guardado solo cuentan filas con pago real (`isRowPayable`), así una fila con el input
+   vacío no se registra.
+4. **Encabezados de pagos en la hoja Datos:** las columnas de pagos (O–U: BANCO, SALDO PENDIENTE, MONTO
+   PAGADO, CANT CUOTAS, FECHA PAGO, URL COMPROBANTE, MEDIO PAGO) no tenían encabezado en hojas viejas
+   porque `ensureHeaderRow` era todo-o-nada (si la fila 1 tenía A–N, no tocaba nada). Ahora **completa
+   solo las celdas vacías** sin pisar labels existentes (`GoogleSheetsService.ensureHeaders`, se auto-cura
+   en el próximo append). Para completarlo ya en una hoja existente:
+   `npx tsx scripts/ensure-sheet-headers.ts <cliente>`.
+
+**Archivos:** `prisma/schema.prisma` + migración `20260705000100_add_payment_type` (enum + columna +
+backfill); `src/repositories/payment.repository.ts` (`resolvePaymentType`); `src/repositories/paymentType.test.ts`
+(7 tests); `src/app/api/client/invoices/[id]/payments/route.ts`; `src/app/admin/consortiums/page.tsx`.
+Detalle en `docs/decisiones.md` (2026-07-05).
+
+**Pendiente (próxima sesión):** el spec de **gastos fijos mensuales por consorcio + obligaciones de
+pago mes a mes** (incluye el aviso al administrador de qué cuota va este mes vs. cuál se pagó el mes
+anterior). El inventario de lo que ya existe vs. lo que falta quedó relevado en esta sesión.
+
+---
 
 ## Fix: crash del scheduler por blip de DB (04/07/2026)
 

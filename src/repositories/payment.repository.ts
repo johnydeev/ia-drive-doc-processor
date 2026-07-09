@@ -1,4 +1,4 @@
-import { Payment, Invoice, Prisma, PrismaClient } from "@prisma/client";
+import { Payment, Invoice, Prisma, PrismaClient, PaymentType } from "@prisma/client";
 import { getPrismaClient } from "@/lib/prisma";
 
 export interface CreatePaymentInput {
@@ -8,10 +8,38 @@ export interface CreatePaymentInput {
   paymentDate: Date;
   installmentNumber?: number;
   totalInstallments?: number;
+  /**
+   * Intención del pago para el modo NO-cuotas (inline "Total" vs modal "Pago libre").
+   * Se ignora en modo cuotas (siempre CUOTA). Ver resolvePaymentType.
+   */
+  paymentType?: "TOTAL" | "LIBRE";
   driveFileId?: string | null;
   driveFileUrl?: string | null;
   paymentMethod?: string | null;
   observation?: string;
+}
+
+/**
+ * Clasifica el tipo de pago (TOTAL / LIBRE / CUOTA) según el modo y el intento del caller.
+ *
+ * Reglas de negocio:
+ * - Con cuotas → siempre CUOTA (el intento del caller no aplica).
+ * - Sin cuotas → gana el tipo pedido por el caller (inline = TOTAL, modal libre = LIBRE);
+ *   si no vino, se deriva: un pago único que salda la boleta es TOTAL, el resto LIBRE.
+ * - Salvaguarda: un TOTAL que NO saldó la boleta es en realidad un parcial → LIBRE.
+ *   (Total = paga todo; si dejó saldo no puede ser total.)
+ */
+export function resolvePaymentType(args: {
+  hasInstallments: boolean;
+  requested?: "TOTAL" | "LIBRE";
+  isPaid: boolean;
+  isFirstPayment: boolean;
+}): PaymentType {
+  if (args.hasInstallments) return PaymentType.CUOTA;
+  const base =
+    args.requested ?? (args.isPaid && args.isFirstPayment ? "TOTAL" : "LIBRE");
+  if (base === "TOTAL" && !args.isPaid) return PaymentType.LIBRE;
+  return base === "TOTAL" ? PaymentType.TOTAL : PaymentType.LIBRE;
 }
 
 export class PaymentRepository {
@@ -131,6 +159,13 @@ export class PaymentRepository {
 
       const isPaid = newRemaining.equals(0);
 
+      const paymentType = resolvePaymentType({
+        hasInstallments: totalInstallments !== null,
+        requested: input.paymentType,
+        isPaid,
+        isFirstPayment,
+      });
+
       // 9. Crear payment + actualizar invoice
       const payment = await tx.payment.create({
         data: {
@@ -140,6 +175,7 @@ export class PaymentRepository {
           paymentDate: input.paymentDate,
           installmentNumber,
           totalInstallments,
+          paymentType,
           driveFileId: input.driveFileId ?? null,
           driveFileUrl: input.driveFileUrl ?? null,
           paymentMethod: input.paymentMethod ?? null,

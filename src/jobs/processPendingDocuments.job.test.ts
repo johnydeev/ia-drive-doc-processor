@@ -221,6 +221,24 @@ describe("processDriveFile — caracterización de los 7 caminos de salida", () 
     expect(metricsCore().result).toBe("ok");
   });
 
+  it("ok: vincula la boleta a su obligación de gasto fijo tras persistir", async () => {
+    const ctx = makeContext();
+    // El save ahora devuelve la invoice (para poder vincular la obligación).
+    ctx.invoiceRepository.saveProcessedInvoice.mockResolvedValue({
+      id: "inv-1", periodId: "per-1", providerId: "prov-1", lspServiceId: null,
+    });
+    const linkSpy = vi.fn().mockResolvedValue(true);
+    (ctx as unknown as { linkInvoiceToObligation: unknown }).linkInvoiceToObligation = linkSpy;
+    const summary = createBaseSummary(1);
+
+    await processDriveFile(makeFile(), asContext(ctx), summary);
+
+    expect(linkSpy).toHaveBeenCalledTimes(1);
+    expect(linkSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "inv-1", periodId: "per-1", providerId: "prov-1" })
+    );
+  });
+
   it("duplicate (hash): no escribe en Sheets ni DB, mueve a Duplicados", async () => {
     const ctx = makeContext();
     ctx.invoiceRepository.findDuplicateByHash.mockResolvedValue({ id: "inv-prev" });

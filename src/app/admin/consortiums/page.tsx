@@ -75,14 +75,22 @@ function parseAmountInput(raw: string): number {
 function formatDate(iso: string | null | undefined) {
   if (!iso) return "—";
   const d = new Date(iso);
-  return isNaN(d.getTime()) ? "—" : d.toLocaleDateString("es-AR");
+  // Las fechas son "date-only" guardadas a medianoche UTC (issueDate, dueDate,
+  // paymentDate). Se formatean en UTC para no restar el offset de AR (UTC-3),
+  // que mostraría el día anterior.
+  return isNaN(d.getTime()) ? "—" : d.toLocaleDateString("es-AR", { timeZone: "UTC" });
 }
 function toInputDate(iso: string | null | undefined): string {
   if (!iso) return "";
   return iso.slice(0, 10);
 }
 function todayInputDate(): string {
-  return new Date().toISOString().slice(0, 10);
+  // Fecha local (no UTC): en la madrugada AR, toISOString() devolvería el día anterior.
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
 }
 // normCuit: usar la fuente única lib/cuit (los CUITs de DB pueden venir con o sin guiones).
 function normName(v: string | null | undefined): string {
@@ -163,8 +171,24 @@ type ThemeMode = "dark" | "light";
 type CloseAllPreview = {
   majorityMonth: string | null;
   nextMonth: string | null;
-  toClose: { id: string; canonicalName: string; currentPeriod: string }[];
+  toClose: { id: string; canonicalName: string; currentPeriod: string; pendingObligations?: number }[];
   toSkip: { id: string; canonicalName: string; currentPeriod: string }[];
+};
+
+type FixedExpenseRow = {
+  id: string; providerId: string | null; lspServiceId: string | null;
+  description: string | null; active: boolean;
+};
+
+type ObligationRow = {
+  id: string;
+  status: "PENDING" | "RECEIVED" | "SKIPPED" | "NOT_RECEIVED";
+  fixedExpense: {
+    description: string | null;
+    provider: { canonicalName: string } | null;
+    lspService: { providerName: string; clientNumber: string } | null;
+  };
+  invoice: { id: string; isPaid: boolean; sourceFileUrl: string | null } | null;
 };
 
 export default function ConsortiumsPage() {
@@ -461,7 +485,7 @@ export default function ConsortiumsPage() {
   const [search, setSearch] = useState("");
   // Búsqueda de la vista general de tarjetas (independiente del `search` de boletas).
   const [consortiumSearch, setConsortiumSearch] = useState("");
-  const [activeTab, setActiveTab] = useState<"boletas" | "pagos">("boletas");
+  const [activeTab, setActiveTab] = useState<"boletas" | "pagos" | "obligaciones">("boletas");
   const [providers, setProviders] = useState<Provider[]>([]);
   const [coeficientes, setCoeficientes] = useState<Coeficiente[]>([]);
   const [rubros, setRubros] = useState<Rubro[]>([]);
@@ -508,6 +532,13 @@ export default function ConsortiumsPage() {
   const [matchNamesMsg, setMatchNamesMsg] = useState<string | null>(null);
   const [showConfigModal, setShowConfigModal] = useState(false);
 
+  // Gastos fijos + obligaciones del período
+  const [fixedExpenses, setFixedExpenses] = useState<FixedExpenseRow[]>([]);
+  const [fxCollapsed, setFxCollapsed] = useState(true);
+  const [fxTarget, setFxTarget] = useState("");
+  const [fxError, setFxError] = useState<string | null>(null);
+  const [obligations, setObligations] = useState<ObligationRow[]>([]);
+
   // LspServices
   const [lspServices, setLspServices] = useState<LspService[]>([]);
   const [lspForm, setLspForm] = useState({ provider: "", clientNumber: "", description: "" });
@@ -534,6 +565,7 @@ export default function ConsortiumsPage() {
   type PaymentRecord = {
     id: string; amount: string | number; paymentDate: string;
     installmentNumber: number | null; totalInstallments: number | null;
+    paymentType: "TOTAL" | "LIBRE" | "CUOTA" | null;
     paymentMethod: string | null; driveFileUrl: string | null; observation: string | null;
   };
 
@@ -665,6 +697,11 @@ export default function ConsortiumsPage() {
       formData.append("paymentDate", payForm.paymentDate);
       if (installmentsToSend && isFirstPayment) {
         formData.append("totalInstallments", String(installmentsToSend));
+      }
+      // El modal cubre cuotas y "Pago libre" (parcial). El modo cuotas lo clasifica
+      // el backend como CUOTA; el libre se marca explícito como LIBRE.
+      if (effectiveMode !== "cuotas") {
+        formData.append("paymentType", "LIBRE");
       }
       if (payForm.paymentMethod) formData.append("paymentMethod", payForm.paymentMethod);
       if (payForm.observation) formData.append("observation", payForm.observation);
@@ -803,6 +840,68 @@ export default function ConsortiumsPage() {
     } catch { /* silent */ }
   }, [guardedFetch]);
 
+  const fetchFixedExpenses = useCallback(async (consortiumId: string) => {
+    try {
+      const res = await guardedFetch(`/api/client/consortiums/${consortiumId}/fixed-expenses`);
+      const data = await res.json();
+      if (data.ok) setFixedExpenses(data.fixedExpenses ?? []);
+    } catch { /* silent */ }
+  }, [guardedFetch]);
+
+  const fetchObligations = useCallback(async (periodId: string) => {
+    try {
+      const res = await guardedFetch(`/api/client/periods/${periodId}/obligations`, { cache: "no-store" });
+      const data = await res.json();
+      if (data.ok) setObligations(data.obligations ?? []);
+    } catch { /* silent */ }
+  }, [guardedFetch]);
+
+  const handleAddFixedExpense = async () => {
+    if (!selectedId || !fxTarget) return;
+    setFxError(null);
+    const [kind, targetId] = fxTarget.split(":");
+    const body = kind === "provider" ? { providerId: targetId } : { lspServiceId: targetId };
+    try {
+      const res = await guardedFetch(`/api/client/consortiums/${selectedId}/fixed-expenses`, {
+        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.ok) { setFxError(data.error ?? `HTTP ${res.status}`); return; }
+      setFxTarget("");
+      void fetchFixedExpenses(selectedId);
+    } catch (err) {
+      setFxError(err instanceof Error ? err.message : "Error al agregar");
+    }
+  };
+
+  const handleToggleFixedExpense = async (fx: FixedExpenseRow) => {
+    if (!selectedId) return;
+    await guardedFetch(`/api/client/consortiums/${selectedId}/fixed-expenses/${fx.id}`, {
+      method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ active: !fx.active }),
+    });
+    void fetchFixedExpenses(selectedId);
+  };
+
+  const handleDeleteFixedExpense = async (id: string) => {
+    if (!selectedId) return;
+    await guardedFetch(`/api/client/consortiums/${selectedId}/fixed-expenses/${id}`, { method: "DELETE" });
+    void fetchFixedExpenses(selectedId);
+  };
+
+  const handleGenerateObligations = async () => {
+    if (!selectedPeriod) return;
+    await guardedFetch(`/api/client/periods/${selectedPeriod.id}/obligations`, { method: "POST" });
+    void fetchObligations(selectedPeriod.id);
+  };
+
+  const handleSetObligationStatus = async (id: string, status: "PENDING" | "SKIPPED") => {
+    if (!selectedPeriod) return;
+    await guardedFetch(`/api/client/obligations/${id}`, {
+      method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ status }),
+    });
+    void fetchObligations(selectedPeriod.id);
+  };
+
   const handleSaveMatchNames = async () => {
     if (!selectedId) return;
     setSavingMatchNames(true); setMatchNamesMsg(null);
@@ -889,12 +988,14 @@ export default function ConsortiumsPage() {
     setLspServices([]); setLspError(null); setLspForm({ provider: "", clientNumber: "", description: "" });
     setConfirmDeleteLspId(null);
     setConfirmDeleteInvoiceId(null);
+    setFixedExpenses([]); setObligations([]); setFxCollapsed(true); setFxTarget(""); setFxError(null);
     void fetchCoeficientes(c.id);
     void fetchRubros(c.id);
     void fetchLspServices(c.id);
+    void fetchFixedExpenses(c.id);
     const periodId = await fetchPeriodsAndInvoices(c.id);
-    if (periodId) void fetchInvoices(c.id, periodId);
-  }, [fetchPeriodsAndInvoices, fetchInvoices, fetchCoeficientes, fetchRubros, fetchLspServices]);
+    if (periodId) { void fetchInvoices(c.id, periodId); void fetchObligations(periodId); }
+  }, [fetchPeriodsAndInvoices, fetchInvoices, fetchCoeficientes, fetchRubros, fetchLspServices, fetchFixedExpenses, fetchObligations]);
 
   // Mantener el ref sincronizado para el efecto de restauración por URL.
   handleSelectConsortiumRef.current = handleSelectConsortium;
@@ -1574,6 +1675,80 @@ export default function ConsortiumsPage() {
                 )}
               </div>
 
+              {/* ── Gastos fijos section (colapsable) ── */}
+              <div className={styles.lspSection}>
+                <button
+                  type="button"
+                  className={styles.lspToggle}
+                  onClick={() => setFxCollapsed((c) => !c)}
+                  aria-expanded={!fxCollapsed}
+                  aria-controls="fx-content"
+                >
+                  <span className={styles.lspToggleChevron} aria-hidden="true">{fxCollapsed ? "▸" : "▾"}</span>
+                  <span className={styles.lspTitle}>Gastos fijos</span>
+                  {fixedExpenses.length > 0 && (
+                    <span className={styles.lspToggleCount}>{fixedExpenses.length}</span>
+                  )}
+                </button>
+                {!fxCollapsed && (
+                <div id="fx-content" className={styles.lspContent}>
+                  {fixedExpenses.length > 0 ? (
+                    <div className={styles.lspTableWrap}>
+                      <table className={styles.lspTable}>
+                        <thead>
+                          <tr><th>Gasto fijo</th><th>Estado</th><th>Acciones</th></tr>
+                        </thead>
+                        <tbody>
+                          {fixedExpenses.map((fx) => {
+                            const lsp = lspServices.find((l) => l.id === fx.lspServiceId);
+                            const prov = providers.find((p) => p.id === fx.providerId);
+                            const label = lsp
+                              ? `${LSP_PROVIDERS.find((p) => p.value === lsp.providerName)?.label ?? lsp.providerName} (${lsp.clientNumber})`
+                              : prov?.canonicalName ?? fx.description ?? "—";
+                            return (
+                              <tr key={fx.id}>
+                                <td>{label}</td>
+                                <td>{fx.active ? "Activo" : "Inactivo"}</td>
+                                <td>
+                                  <button type="button" className={styles.ghostBtn} style={{ padding: "4px 10px", fontSize: 12 }} onClick={() => handleToggleFixedExpense(fx)}>
+                                    {fx.active ? "Desactivar" : "Activar"}
+                                  </button>{" "}
+                                  <button type="button" className={styles.lspDeleteBtn} onClick={() => handleDeleteFixedExpense(fx.id)}>Quitar</button>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  ) : (
+                    <p className={styles.lspEmpty}>No hay gastos fijos cargados para este consorcio.</p>
+                  )}
+                  <div className={styles.lspAddForm}>
+                    <select className={styles.formSelect} value={fxTarget} onChange={(e) => setFxTarget(e.target.value)}>
+                      <option value="">Elegir proveedor o servicio...</option>
+                      {providers.length > 0 && (
+                        <optgroup label="Proveedores">
+                          {providers.map((p) => <option key={`p-${p.id}`} value={`provider:${p.id}`}>{p.canonicalName}</option>)}
+                        </optgroup>
+                      )}
+                      {lspServices.length > 0 && (
+                        <optgroup label="Servicios (LSP)">
+                          {lspServices.map((l) => (
+                            <option key={`l-${l.id}`} value={`lsp:${l.id}`}>
+                              {LSP_PROVIDERS.find((p) => p.value === l.providerName)?.label ?? l.providerName} ({l.clientNumber})
+                            </option>
+                          ))}
+                        </optgroup>
+                      )}
+                    </select>
+                    <button type="button" className={styles.addInvoiceBtn} onClick={handleAddFixedExpense} disabled={!fxTarget}>Agregar</button>
+                  </div>
+                  {fxError && <p className={styles.errorMsg}>{fxError}</p>}
+                </div>
+                )}
+              </div>
+
               {closeSuccess && <p className={styles.infoMsg}>{closeSuccess}</p>}
               {closeError && <p className={styles.errorMsg}>{closeError}</p>}
               {invoicesError && <p className={styles.errorMsg}>{invoicesError}</p>}
@@ -1592,6 +1767,18 @@ export default function ConsortiumsPage() {
                   onClick={() => setActiveTab("pagos")}
                 >
                   Pagos
+                </button>
+                <button
+                  type="button"
+                  className={activeTab === "obligaciones" ? styles.tabActive : styles.tab}
+                  onClick={() => setActiveTab("obligaciones")}
+                >
+                  Obligaciones
+                  {obligations.filter((o) => o.status === "PENDING").length > 0 && (
+                    <span className={styles.statWarn} style={{ marginLeft: 6, fontWeight: 700 }}>
+                      {obligations.filter((o) => o.status === "PENDING").length}
+                    </span>
+                  )}
                 </button>
               </div>
 
@@ -1733,6 +1920,68 @@ export default function ConsortiumsPage() {
                     }
                   }}
                 />
+              )}
+
+              {activeTab === "obligaciones" && (
+                <div className={styles.tableWrap}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", margin: "8px 0" }}>
+                    <span>
+                      {obligations.filter((o) => o.status === "PENDING").length > 0
+                        ? `Faltan ${obligations.filter((o) => o.status === "PENDING").length} boleta(s) de gastos fijos`
+                        : "Sin faltantes"}
+                    </span>
+                    {obligations.length === 0 && (
+                      <button type="button" className={styles.addInvoiceBtn} onClick={handleGenerateObligations}>
+                        Generar obligaciones
+                      </button>
+                    )}
+                  </div>
+                  {obligations.length === 0 ? (
+                    <div className={styles.tableEmpty}>No hay obligaciones generadas para este período.</div>
+                  ) : (
+                    <table className={styles.table}>
+                      <thead>
+                        <tr><th>GASTO FIJO</th><th>ESTADO</th><th>BOLETA / PAGO</th><th>ACCIONES</th></tr>
+                      </thead>
+                      <tbody>
+                        {obligations.map((ob) => {
+                          const label = ob.fixedExpense.lspService
+                            ? `${ob.fixedExpense.lspService.providerName} (${ob.fixedExpense.lspService.clientNumber})`
+                            : ob.fixedExpense.provider?.canonicalName ?? ob.fixedExpense.description ?? "—";
+                          const badge =
+                            ob.status === "RECEIVED" ? <span className={styles.badgeOk}>Recibida</span>
+                            : ob.status === "PENDING" ? <span className={styles.badgeWarning}>Pendiente</span>
+                            : ob.status === "NOT_RECEIVED" ? <span className={styles.badgeDuplicate}>No recibida</span>
+                            : <span className={styles.badgeManual}>Omitida</span>;
+                          return (
+                            <tr key={ob.id}>
+                              <td>{label}</td>
+                              <td>{badge}</td>
+                              <td>
+                                {ob.invoice ? (
+                                  <>
+                                    {ob.invoice.isPaid ? "Pagada" : "Impaga"}{" · "}
+                                    {ob.invoice.sourceFileUrl
+                                      ? <a href={ob.invoice.sourceFileUrl} target="_blank" rel="noopener noreferrer" className={styles.fileLink}>Ver PDF</a>
+                                      : "—"}
+                                  </>
+                                ) : "—"}
+                              </td>
+                              <td>
+                                {ob.status === "PENDING" && (
+                                  <button type="button" className={styles.ghostBtn} style={{ padding: "4px 10px", fontSize: 12 }} onClick={() => handleSetObligationStatus(ob.id, "SKIPPED")}>Omitir</button>
+                                )}
+                                {ob.status === "SKIPPED" && (
+                                  <button type="button" className={styles.ghostBtn} style={{ padding: "4px 10px", fontSize: 12 }} onClick={() => handleSetObligationStatus(ob.id, "PENDING")}>Reactivar</button>
+                                )}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  )}
+                </div>
               )}
             </>
           )}
@@ -2064,6 +2313,15 @@ export default function ConsortiumsPage() {
                       Se cerrarán <strong>{closeAllPreview.toClose.length}</strong> consorcio(s).
                       <br />Período: <strong>{closeAllPreview.majorityMonth}</strong> → <strong>{closeAllPreview.nextMonth}</strong>
                     </p>
+                    {(() => {
+                      const totalPend = closeAllPreview.toClose.reduce((s, c) => s + (c.pendingObligations ?? 0), 0);
+                      const affected = closeAllPreview.toClose.filter((c) => (c.pendingObligations ?? 0) > 0).length;
+                      return totalPend > 0 ? (
+                        <p style={{ fontSize: "13px", color: "#ffb872", marginBottom: "6px" }}>
+                          ⚠️ Faltan {totalPend} boleta(s) de gastos fijos en {affected} consorcio(s).
+                        </p>
+                      ) : null;
+                    })()}
                     {closeAllPreview.toSkip.length > 0 && (
                       <>
                         <p style={{ fontSize: "13px", color: "#ffb872", marginBottom: "6px" }}>
@@ -2388,9 +2646,11 @@ export default function ConsortiumsPage() {
                     {viewPaymentsList.map((p) => (
                       <tr key={p.id}>
                         <td>
-                          {p.totalInstallments
+                          {p.paymentType === "CUOTA" || p.totalInstallments
                             ? <span className={styles.badgeOk}>Cuota {p.installmentNumber}/{p.totalInstallments}</span>
-                            : <span className={styles.badgeManual}>Libre</span>}
+                            : p.paymentType === "TOTAL"
+                              ? <span className={styles.badgeOk}>Total</span>
+                              : <span className={styles.badgeManual}>Libre</span>}
                         </td>
                         <td>{formatDate(p.paymentDate)}</td>
                         <td className={styles.tdAmount}>{formatAmount(Number(p.amount))}</td>
@@ -2498,14 +2758,26 @@ function PagosView({ invoices, onPagoGuardado, onPagar, onVerPagos, onEliminarUl
     });
   };
 
+  // Una fila "cuenta" para guardar solo si tiene un pago real cargado: monto > 0
+  // (o, para empleado —cuyo monto es automático—, si eligió medio o adjuntó comprobante).
+  // Así una fila cuyo input quedó vacío no infla el contador ni se intenta guardar.
+  const isRowPayable = (inv: Invoice, p: PendingPaymentInput): boolean =>
+    inv.providerType === "EMPLEADO"
+      ? Boolean(p.paymentMethod || p.file)
+      : parseAmountInput(p.amount) > 0;
+
+  const payableEntries = Object.entries(pendingPayments).filter(([invoiceId, p]) => {
+    const inv = visibleInvoices.find((i) => i.id === invoiceId);
+    return inv ? isRowPayable(inv, p) : false;
+  });
+
   const handleGuardarPagos = async () => {
     setError(null);
 
-    // Solo procesamos filas con "intención de pago" (alguno de los campos
-    // tocados). Las que no tienen nada se ignoran silenciosamente.
-    const dirtyEntries = Object.entries(pendingPayments).filter(([, p]) =>
-      Boolean(p.paymentDate || p.amount || p.paymentMethod || p.file)
-    );
+    // Solo procesamos filas con un pago real cargado (monto > 0, o empleado con
+    // medio/comprobante). Las que quedaron con la fecha por defecto y el input
+    // vacío se ignoran — no cuentan como pago.
+    const dirtyEntries = payableEntries;
 
     if (dirtyEntries.length === 0) return;
 
@@ -2522,9 +2794,18 @@ function PagosView({ invoices, onPagoGuardado, onPagar, onVerPagos, onEliminarUl
 
       if (!pago.paymentDate) missing.push("fecha de pago");
 
+      // Inline = pago TOTAL: el importe debe coincidir con el saldo completo.
+      // Para un pago parcial se usa el modal ("Cuotas" → "Pago libre").
       if (inv.providerType !== "EMPLEADO") {
         const parsed = parseAmountInput(pago.amount);
-        if (!Number.isFinite(parsed) || parsed <= 0) missing.push("importe");
+        const saldo = inv.remainingBalance ?? inv.amount ?? 0;
+        if (!Number.isFinite(parsed) || parsed <= 0) {
+          missing.push("importe");
+        } else if (Math.abs(parsed - saldo) > 0.5) {
+          errors.push(
+            `${label}: el pago inline es total y debe ser el saldo (${formatAmount(saldo)}). Para un pago parcial usá "Cuotas" → "Pago libre".`
+          );
+        }
       }
 
       if (!pago.paymentMethod) missing.push("medio de pago");
@@ -2546,13 +2827,9 @@ function PagosView({ invoices, onPagoGuardado, onPagar, onVerPagos, onEliminarUl
 
         const totalAmount = inv.amount ?? 0;
         const remainingAmount = inv.remainingBalance ?? totalAmount;
-        const parsedInput = parseAmountInput(pago.amount);
 
-        const amount = inv.providerType === "EMPLEADO"
-          ? totalAmount
-          : Number.isFinite(parsedInput) && parsedInput > 0
-            ? parsedInput
-            : remainingAmount;
+        // Inline = pago TOTAL: siempre paga el saldo completo (para empleado, el total).
+        const amount = inv.providerType === "EMPLEADO" ? totalAmount : remainingAmount;
 
         if (!amount || amount <= 0) continue;
 
@@ -2564,6 +2841,7 @@ function PagosView({ invoices, onPagoGuardado, onPagar, onVerPagos, onEliminarUl
           const fd = new FormData();
           fd.append("amount", String(amount));
           fd.append("paymentDate", pago.paymentDate);
+          fd.append("paymentType", "TOTAL");
           if (pago.paymentMethod) fd.append("paymentMethod", pago.paymentMethod);
           fd.append("receipt", pago.file);
           res = await fetch(`/api/client/invoices/${invoiceId}/payments`, {
@@ -2577,6 +2855,7 @@ function PagosView({ invoices, onPagoGuardado, onPagar, onVerPagos, onEliminarUl
             body: JSON.stringify({
               amount,
               paymentDate: pago.paymentDate,
+              paymentType: "TOTAL",
               paymentMethod: pago.paymentMethod || null,
             }),
           });
@@ -2593,15 +2872,12 @@ function PagosView({ invoices, onPagoGuardado, onPagar, onVerPagos, onEliminarUl
     }
   };
 
-  const pendingCount = Object.keys(pendingPayments).length;
-  const totalPendiente = Object.entries(pendingPayments).reduce((sum, [invoiceId, p]) => {
+  const pendingCount = payableEntries.length;
+  const totalPendiente = payableEntries.reduce((sum, [invoiceId, p]) => {
     const inv = visibleInvoices.find((i) => i.id === invoiceId);
     if (!inv) return sum;
     if (inv.providerType === "EMPLEADO") return sum + toNum(inv.amount);
-    const parsed = parseAmountInput(p.amount);
-    if (Number.isFinite(parsed) && parsed > 0) return sum + parsed;
-    const remaining = inv.remainingBalance === null ? toNum(inv.amount) : toNum(inv.remainingBalance);
-    return sum + remaining;
+    return sum + parseAmountInput(p.amount);
   }, 0);
 
   return (
@@ -2688,14 +2964,23 @@ function PagosView({ invoices, onPagoGuardado, onPagar, onVerPagos, onEliminarUl
                       ) : isEmpleado ? (
                         <span>{formatAmount(totalAmount)}</span>
                       ) : (
-                        <input
-                          type="text"
-                          inputMode="decimal"
-                          className={styles.formInput}
-                          placeholder={formatAmountPlain(saldo)}
-                          value={pending?.amount ?? ""}
-                          onChange={(e) => updatePending(inv.id, "amount", e.target.value)}
-                        />
+                        <>
+                          <input
+                            type="text"
+                            inputMode="decimal"
+                            list={`sug-saldo-${inv.id}`}
+                            className={styles.formInput}
+                            placeholder={formatAmountPlain(saldo)}
+                            value={pending?.amount ?? ""}
+                            title="Pago total: elegí el saldo sugerido. Para un pago parcial usá 'Cuotas' → 'Pago libre'."
+                            onChange={(e) => updatePending(inv.id, "amount", e.target.value)}
+                          />
+                          {/* Sugerencia nativa: el saldo completo. Solo se carga al elegirla
+                              (no al hacer foco), y no crea una fila pendiente por sí sola. */}
+                          <datalist id={`sug-saldo-${inv.id}`}>
+                            <option value={formatAmountPlain(saldo)}>Pago total (saldo)</option>
+                          </datalist>
+                        </>
                       )}
                     </td>
 

@@ -144,6 +144,12 @@ export async function deleteOneInvoice(
   // DB (Invoice + Receipt) en transacción.
   await prisma.$transaction(async (tx) => {
     if (invoice.receipt) await tx.receipt.delete({ where: { id: invoice.receipt.id } });
+    // La obligación de gasto fijo vinculada vuelve a PENDING (si la boleta se
+    // reprocesa, se re-vincula sola en el pipeline).
+    await tx.expenseObligation.updateMany({
+      where: { invoiceId },
+      data: { status: "PENDING", invoiceId: null },
+    });
     await tx.invoice.delete({ where: { id: invoiceId } });
   });
 

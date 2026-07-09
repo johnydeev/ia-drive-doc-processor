@@ -4,6 +4,190 @@ Registro de decisiones tomadas ante problemas reales encontrados en producción.
 
 ---
 
+## 2026-07-05 — Gastos fijos + obligaciones de pago (2 modelos, materializado por período)
+
+**Problema/pedido:** el administrador no tiene visibilidad de los gastos que **sí o sí** se pagan cada mes en
+cada consorcio (luz, encargado, telefonía). El sistema solo registraba la boleta cuando llegaba; no había forma
+de saber, al inicio del período, qué se espera ni de detectar que **faltó** una boleta.
+
+**Decisión (ver spec/plan `2026-07-05-gastos-fijos-obligaciones`):**
+- **Dos modelos** en vez de uno: `FixedExpense` (definición recurrente por consorcio, apunta a un `Provider` o un
+  `LspService` ya cargado) y `ExpenseObligation` (instancia por período, con `status` y `invoiceId?`). La
+  definición se reusa cada mes; la obligación es la instancia materializada.
+- **Materializado, no calculado al vuelo:** permite marcar/omitir a mano y llevar historial de cumplimiento.
+- **Vinculado a Provider/LspService** (no texto libre): así la boleta entrante se asocia sola por el matching que
+  ya usa el pipeline (`obligationMatchesInvoice`: LSP por `lspServiceId`, proveedor por `providerId`).
+- **Sin monto esperado:** la obligación solo espera la boleta (el monto lo trae la boleta).
+- **Solo panel/DB, no Sheets:** la hoja sigue teniendo solo boletas reales.
+- **Estado = "llegó la boleta"** (Pendiente/Recibida/No recibida/Omitida); el pago se lee de la `Invoice`
+  vinculada (una obligación puede estar Recibida e impaga).
+- **Generación automática** al abrir el período (creación manual + `close-all`) + botón para períodos ya abiertos.
+- **Al cerrar:** las `PENDING` pasan a `NOT_RECEIVED` con aviso; no se arrastran (el mes nuevo genera las suyas).
+
+**Alternativas descartadas:** un solo modelo con `periodId` (mezcla definición e instancia); cálculo al vuelo (sin
+omitir/historial); etiquetas de texto libre (sin matching automático); monto esperado; placeholders en Sheets.
+
+**Impacto:** enum `ObligationStatus` + tablas `FixedExpense`/`ExpenseObligation` (migración
+`20260705000200_add_fixed_expenses`); `src/lib/fixedExpense.ts` (+9 tests); `src/services/obligation.service.ts`
+(+2 tests); `consortium.repository`, `close-all` (route + preview), `processPendingDocuments.job` (seam +
+`persistStep`), `invoice.repository` (`saveProcessedInvoice` devuelve la Invoice), `invoiceDeletion`; endpoints
+`fixed-expenses`/`obligations`; UI (`consortiums/page.tsx`: sección Gastos fijos + pestaña Obligaciones).
+Verificado: typecheck + lint (0 errores) + 204 tests + build:jobs OK.
+
+---
+
+## 2026-07-08 — Etiquetas de motivo en el nombre para casos sin asignar
+
+**Problema/pedido:** cuando una boleta no se procesa (no matchea proveedor, consorcio, etc.) va a la
+carpeta Sin Asignar **sin ninguna marca**: el operador tiene que abrir cada PDF para saber por qué. Ya
+existía `SIN MONTO` (renombrado en `missingAmountGate`); se pidió el mismo tratamiento para el resto.
+
+**Decisión:** renombrar el archivo con una etiqueta de sufijo según `reasonCategory` (que el pipeline
+ya calculaba pero no reflejaba en el nombre). 6 etiquetas:
+
+| Etiqueta | `reasonCategory` | Acción que sugiere |
+|---|---|---|
+| `SIN PROVEEDOR` | `provider_not_found` | no hay CUIT de proveedor extraíble → revisar PDF |
+| `PROVEEDOR SIN REGISTRAR` | `provider_not_registered` | hay CUIT de proveedor en el papel, no en DB → alta |
+| `SIN CONSORCIO` | `consortium_not_found` | no se extrajo el consorcio → revisar PDF |
+| `CONSORCIO SIN REGISTRAR` | `consortium_not_registered` | se leyó el consorcio, no está en DB → alta |
+| `SIN PERÍODO` | `no_active_period` | consorcio OK sin período activo → abrir período |
+| `LSP SIN REGISTRAR` | `lsp_clientnumber_not_registered` | nº de cliente LSP no cargado → cargar LspService |
+
+**Distinción clave `*_not_found` vs `*_not_registered`** (pedido explícito del owner): no es lo mismo
+"no pude identificarlo" que "lo identifiqué pero no está cargado". Para proveedor, el gate mira si hay
+un CUIT de proveedor (≠ CUIT del consorcio, 11 dígitos) entre `allTaxIds` — que para ese momento ya
+incluye los **CUITs reales del texto** (los re-agrega `cuitSanitizeStep` antes del assignment), así que
+detecta el CUIT aunque la IA no lo haya puesto en `providerTaxId`. Para consorcio, se usa la rama
+existente: nombre leído del papel → `not_registered`; nada extraíble → `not_found`.
+
+**Idempotencia (decisión del owner):** nuevo helper puro `appendTag(fileName, tag)` que **limpia
+cualquier etiqueta conocida previa** (misma u otra) antes de agregar la actual. Evita el apilado
+`- SIN MONTO - SIN MONTO` que se veía al reprocesar (visto en el fix AFIP del 2026-07-07) y hace que el
+nombre muestre siempre el **motivo actual**. `appendNoAmountTag` ahora delega en `appendTag`, con lo que
+`SIN MONTO` también quedó idempotente. Difiere del comportamiento anterior (que apilaba) — mejora
+buscada, no regresión.
+
+**Alcance:** el destino de cada archivo no cambia (Sin Asignar / Revisión como antes); la etiqueta es
+solo informativa. `[NO BOLETA]` (prefijo) queda fuera del set idempotente de sufijos.
+
+**Impacto / archivos:** `src/lib/documentValidation.ts` (`appendTag` + `KNOWN_SUFFIX_TAGS`),
+`src/jobs/processPendingDocuments.job.ts` (refinado `reasonCategory` de proveedor/consorcio + renombrado
+en `unassignedGate` y `noPeriodGate` + `UNASSIGNED_TAG_BY_CATEGORY`). Tests: `documentValidation.test.ts`
+(+7) y `processPendingDocuments.job.test.ts` (+3 caminos: PROVEEDOR SIN REGISTRAR, SIN PROVEEDOR, SIN
+PERÍODO; y assert de CONSORCIO SIN REGISTRAR en el test de unassigned). 192 tests verdes, typecheck +
+lint 0 errores + build:jobs OK.
+
+---
+
+## 2026-07-07 — Reflow de totales AFIP (boletas con monto caían a "SIN MONTO")
+
+**Problema:** 13 facturas electrónicas AFIP ("Comprobante en línea"), simples y con monto, fueron a
+Revisión con el tag `SIN MONTO`. El gate `missingAmountGate` funcionaba bien; el fallo era aguas arriba,
+en la extracción.
+
+**Investigación (causa raíz, 2 capas):**
+1. **Layout roto de pdf-parse.** En los comprobantes AFIP, `pdf-parse` emite la **columna de importes
+   separada de la columna de rótulos**. El texto que ve la IA queda así:
+   ```
+   0,00
+   85000,00
+   85000,00
+   Subtotal: $
+   Importe Otros Tributos: $
+   Importe Total: $      ← rótulo vacío, sin número al lado
+   ```
+   El monto sí está en el texto, pero flotando 3-4 líneas arriba de un `Importe Total: $` vacío.
+2. **Modelo primario débil.** Los `[metrics]` mostraron que hoy la extracción corre con **Cerebras
+   `gpt-oss-120b`** (proveedor gratis agregado el 2026-06-24, primero en la cadena
+   `Cerebras → Groq → Gemini → OpenAI → Claude`). Ese modelo no reasocia el número flotante con el
+   rótulo → devuelve `amount: null`. La cadena (`aiExtraction.ts`) solo escala al siguiente proveedor
+   ante **excepción**; un `null` "exitoso" no escala, así que nunca llega a Gemini. Evidencia: boletas
+   AFIP casi idénticas SÍ funcionaron (CALLAO 684676; AV.CNEL DIAZ 571338.36) → debilidad del modelo,
+   no fallo duro.
+
+**Decisión:** **Reflow determinista del texto ANTES de la IA** (opción elegida por el owner sobre
+"recuperación post-IA" y "escalar a Gemini"). Nuevo helper puro `src/lib/afipTotalsReflow.ts`:
+`reflowAfipTotals(text)` reescribe el rótulo `Importe Total: $` pegándole su número. **Regla confiable
+validada con boletas reales:** el Importe Total es el número suelto **inmediatamente anterior** a la
+línea `Subtotal: $`. Se aplica a `ctx.docText` en `textExtractStep` (ambas ramas PDF), antes de
+`aiExtractStep`.
+
+**Por qué reflow y no las alternativas:**
+- Es **model-agnóstico**: sirve igual con Cerebras gratis (no gasta cuota paga de Gemini) y con
+  cualquier proveedor futuro.
+- Ataca la **causa raíz** (texto roto) en vez del síntoma (null de la IA).
+- **No toca el camino feliz**: si el `Importe Total: $` ya trae número, o no hay número válido arriba
+  de `Subtotal: $`, es no-op (no inventa montos).
+
+**Alternativas descartadas:**
+- *Recuperación post-IA* (leer el total solo cuando la IA devuelve null): más acotada pero deja el
+  texto roto para el modelo y no ayuda a otros campos.
+- *Escalar a Gemini ante null*: gasta cuota paga y depende de que Gemini acierte (no verificado).
+- *Extracción posicional con pdfjs-dist*: el arreglo "correcto" a largo plazo (reordena por coordenadas
+  y sirve para todo tipo de doc), pero mucho mayor superficie/riesgo. Queda como mejora futura.
+
+**Impacto / archivos:** `src/lib/afipTotalsReflow.ts` (nuevo) + `afipTotalsReflow.test.ts` (6 tests);
+2 líneas en `src/jobs/processPendingDocuments.job.ts` (import + 2 asignaciones de `ctx.docText`).
+Verificado contra los 13 PDFs reales (los 13 recuperan el total), 20 tests verdes, typecheck + lint 0
+errores + build:jobs OK. **Descubrimiento colateral:** CLAUDE.md documenta la cadena como
+"Gemini → OpenAI" pero producción corre Cerebras primero (drift de documentación, ver progreso.md).
+Las boletas afectadas hay que moverlas de Revisión → Pendientes para reprocesar.
+
+---
+
+## 2026-07-05 — Tipo de pago explícito (Total/Libre/Cuota) + fecha −1 día
+
+**Problemas (encontrados probando la feature de pagos por primera vez):**
+1. **Fecha −1 día:** al cargar un pago con fecha "hoy" (día 5), el historial lo mostraba el día 4.
+   Causa: la fecha es *date-only*; el backend hace `new Date("2026-07-05")` → se guarda a **medianoche
+   UTC**, y `formatDate` la mostraba con `toLocaleDateString("es-AR")` (UTC-3) → 21:00 del día anterior.
+   El dato guardado siempre fue correcto; el bug era solo de visualización.
+2. **Pago total inline rotulado "Libre":** el input inline "IMPORTE PAGO" (pensado para pago total)
+   mandaba el monto sin `totalInstallments` → el backend lo trataba en "modo libre" → el historial
+   rotulaba "Libre" todo lo que no fuera cuota. Pero la lógica de negocio del owner distingue tres cosas:
+   **Total** (paga todo), **Libre** (parcial de monto imprevisible) y **Cuota** (cuotas pactadas).
+
+**Decisión:**
+- **Fecha:** `formatDate` formatea las fechas *date-only* en **UTC** (`timeZone: "UTC"`) y
+  `todayInputDate()` usa la **fecha local** (no `toISOString`, que en la madrugada AR devolvía el día
+  anterior). Sin tocar datos: los pagos ya cargados se ven bien al instante.
+- **Tipo de pago:** campo explícito `paymentType` (enum `PaymentType { TOTAL, LIBRE, CUOTA }`) en
+  `Payment`, en vez de derivarlo por monto. Se descartó derivar porque un pago que salda el resto tras
+  un parcial se etiquetaría mal (monto < total del papel). Cada camino de UI declara su intención:
+  inline → `TOTAL`, modal "Pago libre" → `LIBRE`, cuotas → `CUOTA`. Helper puro `resolvePaymentType`
+  (testeable) centraliza la regla: con cuotas siempre CUOTA; sin cuotas gana lo pedido por el caller;
+  **salvaguarda**: un `TOTAL` que no saldó la boleta se degrada a `LIBRE`.
+- **Inline = pago total:** el input **sugiere** el saldo completo mediante un `datalist` nativo —se
+  carga solo al elegir la sugerencia, no al hacer foco— y se valida que el monto coincida con el saldo
+  (tolerancia 0,50). Los pagos parciales van por el modal → "Pago libre".
+  - *Iteración (mismo día):* la primera versión autocargaba el saldo en el `onFocus`, lo que (a) rellenaba
+    al primer click en vez de sugerir y (b) creaba una fila pendiente solo por enfocar, inflando el
+    contador "N pago(s) sin guardar" aun con el input vacío. Se cambió a `datalist` y el contador/guardado
+    ahora solo consideran filas con **pago real** (`isRowPayable`: monto > 0, o empleado con medio/comprobante).
+
+**Alternativas descartadas:** derivar el tipo por monto/resultado sin columna nueva (evita migración
+pero es ambiguo en el caso "salda el resto tras un parcial"). Se prefirió el campo explícito.
+
+**Impacto:** `prisma/schema.prisma` (enum + campo) + migración `20260705000100_add_payment_type`
+(enum + columna + backfill: cuotas→CUOTA, pago único que cubre el total→TOTAL, resto→LIBRE);
+`src/repositories/payment.repository.ts` (`resolvePaymentType` + uso en `createPayment`);
+`src/repositories/paymentType.test.ts` (7 tests nuevos); `src/app/api/client/invoices/[id]/payments/route.ts`
+(acepta/propaga `paymentType`); `src/app/admin/consortiums/page.tsx` (fecha, prefill inline, validación
+inline=total, historial distingue Total/Libre/Cuota, modal libre manda `LIBRE`). Verificado: typecheck +
+lint (0 errores) + 177 tests + build:jobs OK.
+
+**Addendum (mismo día) — encabezados de pagos en la hoja Datos:** al probar el pago, las columnas O–U
+(BANCO, SALDO PENDIENTE, MONTO PAGADO, CANT CUOTAS, FECHA PAGO, URL COMPROBANTE, MEDIO PAGO) tenían
+datos pero **sin encabezado**. Causa: `ensureHeaderRow` era todo-o-nada (si la fila 1 tenía cualquier
+celda, no escribía) → en hojas creadas antes de las columnas de pagos, las nuevas nunca recibieron
+label. Decisión: `ensureHeaders` ahora **completa solo las celdas vacías** de las columnas mapeadas, sin
+pisar labels custom del usuario (que en la práctica coinciden con los default). Se auto-cura en el
+próximo append; para forzarlo en una hoja existente: `scripts/ensure-sheet-headers.ts <cliente>`.
+Se descartó reescribir toda la fila de encabezados (pisaría cualquier label editado a mano).
+
+---
+
 ## 2026-07-04 — Scheduler: un blip transitorio de DB (P1001) crasheaba el proceso
 
 **Problema (visto en logs de prod):** el contenedor `scheduler` se reinició una vez

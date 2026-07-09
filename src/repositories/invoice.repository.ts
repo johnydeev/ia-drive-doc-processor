@@ -147,7 +147,7 @@ export class InvoiceRepository {
     });
   }
 
-  async saveProcessedInvoice(input: SaveInvoiceInput): Promise<void> {
+  async saveProcessedInvoice(input: SaveInvoiceInput): Promise<Invoice | null> {
     const parts = ensurePersistableBusinessKeyParts(
       buildBusinessKeyParts(input.extraction),
       input.documentHash
@@ -156,7 +156,7 @@ export class InvoiceRepository {
     const prisma = this.prisma;
 
     try {
-      await prisma.invoice.upsert({
+      const invoice = await prisma.invoice.upsert({
         where: {
           clientId_documentHash: {
             clientId: input.clientId,
@@ -227,6 +227,8 @@ export class InvoiceRepository {
         "invoice",
         `save client=${shortLogId(input.clientId)} hash=${shortHash(input.documentHash)} duplicate=${input.isDuplicate}`
       );
+
+      return invoice;
     } catch (error) {
       const message = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
       const isUniqueConflict = message.includes("p2002") || message.includes("unique constraint");
@@ -236,7 +238,7 @@ export class InvoiceRepository {
           "invoice",
           `save unique-conflict client=${shortLogId(input.clientId)} hash=${shortHash(input.documentHash)}`
         );
-        return;
+        return null;
       }
 
       throw error;

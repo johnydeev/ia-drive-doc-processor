@@ -2,7 +2,60 @@
 
 ## [Unreleased]
 
+### Added
+- **Gastos fijos + obligaciones de pago mensuales (2026-07-05)**. Cada consorcio define sus gastos fijos
+  (luz/EDESUR, encargado, telefonía…) vinculados a un `Provider` o `LspService`. Por período se materializan
+  **obligaciones** que aparecen "esperando la boleta"; el pipeline las vincula solas cuando llega la boleta
+  (`RECEIVED`), y al cerrar el período las que faltan pasan a `NOT_RECEIVED` con aviso. Nuevos modelos
+  `FixedExpense` + `ExpenseObligation` (enum `ObligationStatus`, migración `20260705000200_add_fixed_expenses`),
+  servicio de obligaciones (generación idempotente + vínculo + cierre), endpoints CRUD + generación, y UI:
+  sección "Gastos fijos" en el consorcio + **pestaña "Obligaciones"** con badge de faltantes. Solo panel/DB (no
+  toca Sheets). Spec/plan: `docs/superpowers/{specs,plans}/2026-07-05-gastos-fijos-obligaciones*`. Ver decisiones.md.
+- **Etiquetas de motivo en el nombre del archivo para casos sin procesar (2026-07-08)**. Igual que
+  `SIN MONTO`, ahora los archivos que quedan sin asignar se renombran con el motivo, para verlo (y saber
+  la acción) de un vistazo en la carpeta. El pipeline ya distinguía el motivo vía `reasonCategory`; solo
+  faltaba reflejarlo en el nombre. 6 etiquetas: `SIN PROVEEDOR` (no hay CUIT de proveedor extraíble),
+  `PROVEEDOR SIN REGISTRAR` (hay CUIT de proveedor en el papel pero no está en DB → darlo de alta),
+  `SIN CONSORCIO` (no se extrajo el consorcio), `CONSORCIO SIN REGISTRAR` (se leyó pero no está en DB),
+  `SIN PERÍODO` (consorcio OK sin período activo, va a Revisión), `LSP SIN REGISTRAR` (nº de cliente LSP
+  no cargado). Se refinó `reasonCategory` para separar `*_not_found` (no se pudo extraer) de
+  `*_not_registered` (identificador en el papel pero ausente en DB) — este último usa los CUITs reales
+  del texto (`allTaxIds` tras `cuitSanitizeStep`). Nuevo helper puro `appendTag(fileName, tag)`
+  **idempotente**: al reprocesar limpia la etiqueta previa (misma u otra) en vez de apilarla — resuelve
+  el `- SIN MONTO - SIN MONTO` que se veía antes (`appendNoAmountTag` ahora pasa por él). +11 tests
+  (helper + caracterización de gates).
+
 ### Fix
+- **Boletas AFIP con monto caían a "SIN MONTO → Revisión" (2026-07-07)**. 13 facturas electrónicas
+  AFIP ("Comprobante en línea") simples y con monto terminaban en Revisión etiquetadas `SIN MONTO`.
+  Causa raíz: `pdf-parse` extrae la columna de importes **separada** de sus rótulos → el número del
+  total queda flotando varias líneas arriba de un rótulo `Importe Total: $` **vacío**, y el modelo
+  primario actual (Cerebras `gpt-oss-120b`, gratis, primero en la cadena) no logra reasociarlos →
+  devuelve `amount: null`, que la cadena acepta como éxito (solo escala de proveedor ante excepción,
+  no ante null) y `missingAmountGate` manda a Revisión. Fix: nuevo helper puro
+  `reflowAfipTotals(text)` (`src/lib/afipTotalsReflow.ts`, +6 tests) que, antes de la IA, reescribe el
+  rótulo `Importe Total: $` pegándole su número (regla confiable: el importe total es el número suelto
+  inmediatamente anterior a la línea `Subtotal: $`). Verificado contra los 13 PDFs reales: los 13
+  recuperan el total (ej. 288948,00 = 2×144474). Es model-agnóstico y no toca el camino feliz. Las
+  boletas afectadas hay que recuperarlas manualmente (Revisión → Pendientes) para reprocesar. Detalle
+  en `docs/decisiones.md` (2026-07-07).
+- **Encabezados de columnas de pagos en la hoja Datos (2026-07-05)**. Las columnas O–U (BANCO, SALDO
+  PENDIENTE, MONTO PAGADO, CANT CUOTAS, FECHA PAGO, URL COMPROBANTE, MEDIO PAGO) no tenían encabezado en
+  hojas que ya existían antes de agregarlas: `ensureHeaderRow` era todo-o-nada y, si la fila 1 tenía
+  cualquier celda con texto, no escribía nada. Ahora `GoogleSheetsService.ensureHeaders` **completa solo
+  las celdas de encabezado vacías** sin pisar labels custom, y se auto-cura en el próximo append. Nuevo
+  `scripts/ensure-sheet-headers.ts <cliente>` para completarlo de una en hojas existentes.
+- **Pagos: tipo explícito (Total/Libre/Cuota) + fecha que aparecía un día antes (2026-07-05)**. (1) La
+  fecha de pago se mostraba −1 día: es *date-only* guardada a medianoche UTC y `formatDate` la
+  convertía a hora AR (UTC-3). Fix: formatear *date-only* en UTC + `todayInputDate()` en fecha local.
+  Datos intactos. (2) El pago total inline se guardaba/rotulaba como "Libre". Se agregó el campo
+  explícito `paymentType` (enum `TOTAL/LIBRE/CUOTA`) en `Payment` (migración
+  `20260705000100_add_payment_type` con backfill), helper puro `resolvePaymentType` (+7 tests), y cada
+  camino de UI declara su tipo: inline → TOTAL, modal "Pago libre" → LIBRE, cuotas → CUOTA. (3) El input
+  inline "IMPORTE PAGO" **sugiere** el saldo completo con un `datalist` (se carga al elegir la sugerencia,
+  no al hacer foco) y valida que el pago total coincida con el saldo (parciales van por el modal). El
+  contador "N pago(s) sin guardar" y el guardado solo cuentan filas con pago real (monto > 0), así una
+  fila con el input vacío ya no se registra. Ver decisiones.md.
 - **Scheduler: un blip transitorio de DB (P1001) crasheaba el proceso (2026-07-04)**. Un error momentáneo
   de conexión al pooler de Supabase saltaba dentro de `discover()` sin try/catch → unhandled rejection →
   Node mataba el scheduler (Docker lo reiniciaba). Regresión del refactor del loop por cliente. Fix en 3

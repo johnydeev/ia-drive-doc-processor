@@ -39,9 +39,22 @@ enum PaymentMethod {
   EFECTIVO
 }
 
+enum PaymentType {
+  TOTAL
+  LIBRE
+  CUOTA
+}
+
 enum ProviderType {
   PROVEEDOR
   EMPLEADO
+}
+
+enum ObligationStatus {
+  PENDING
+  RECEIVED
+  SKIPPED
+  NOT_RECEIVED
 }
 
 model Client {
@@ -72,6 +85,8 @@ model Client {
   schedulerStates      SchedulerState[]
   tokenUsages          TokenUsage[]
   payments             Payment[]
+  fixedExpenses        FixedExpense[]
+  obligations          ExpenseObligation[]
 
   @@index([isActive])
   @@index([role, isActive])
@@ -144,6 +159,7 @@ model Invoice {
   lspServiceRef       LspService?  @relation(fields: [lspServiceId], references: [id], onDelete: SetNull)
   receipt             Receipt?     @relation("InvoiceReceipt")
   payments            Payment[]
+  obligation          ExpenseObligation?
 
   @@unique([clientId, documentHash], map: "uq_invoice_document_hash")
   @@unique([clientId, boletaNumberNorm, providerTaxIdNorm, dueDateNorm, amountNorm], map: "uq_invoice_business_key")
@@ -311,6 +327,8 @@ model Consortium {
   invoices               Invoice[]
   receipts               Receipt[]
   lspServices            LspService[]
+  fixedExpenses          FixedExpense[]
+  obligations            ExpenseObligation[]
 
   @@unique([clientId, canonicalName])
   @@index([clientId])
@@ -334,6 +352,7 @@ model Provider {
   invoices            Invoice[]
   receipts            Receipt[]
   lspServices         LspService[]
+  fixedExpenses       FixedExpense[]
 
   @@unique([clientId, canonicalName])
   @@index([clientId, cuit])
@@ -366,6 +385,7 @@ model Period {
   consortium    Consortium   @relation(fields: [consortiumId], references: [id], onDelete: Cascade)
   invoices      Invoice[]
   receipts      Receipt[]
+  obligations   ExpenseObligation[]
 
   @@unique([consortiumId, year, month])
   @@index([consortiumId, status])
@@ -385,6 +405,7 @@ model LspService {
   consortium    Consortium @relation(fields: [consortiumId], references: [id], onDelete: Cascade)
   providerRef   Provider?  @relation(fields: [providerId], references: [id], onDelete: SetNull)
   invoices      Invoice[]
+  fixedExpenses FixedExpense[]
 
   @@unique([consortiumId, providerName, clientNumber])
   @@index([clientId, providerName, clientNumber])
@@ -398,6 +419,7 @@ model Payment {
   paymentDate       DateTime
   installmentNumber Int?
   totalInstallments Int?
+  paymentType       PaymentType @default(LIBRE)
   driveFileId       String?
   driveFileUrl      String?
   paymentMethod     String?
@@ -409,4 +431,45 @@ model Payment {
 
   @@index([clientId])
   @@index([invoiceId])
+}
+
+model FixedExpense {
+  id           String              @id @default(cuid())
+  clientId     String
+  consortiumId String
+  providerId   String?
+  lspServiceId String?
+  description  String?
+  active       Boolean             @default(true)
+  createdAt    DateTime            @default(now())
+  updatedAt    DateTime            @updatedAt
+  client       Client              @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  consortium   Consortium          @relation(fields: [consortiumId], references: [id], onDelete: Cascade)
+  provider     Provider?           @relation(fields: [providerId], references: [id], onDelete: Cascade)
+  lspService   LspService?         @relation(fields: [lspServiceId], references: [id], onDelete: Cascade)
+  obligations  ExpenseObligation[]
+
+  @@index([clientId])
+  @@index([consortiumId])
+}
+
+model ExpenseObligation {
+  id             String           @id @default(cuid())
+  clientId       String
+  consortiumId   String
+  periodId       String
+  fixedExpenseId String
+  status         ObligationStatus @default(PENDING)
+  invoiceId      String?          @unique
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+  client         Client           @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  consortium     Consortium       @relation(fields: [consortiumId], references: [id], onDelete: Cascade)
+  period         Period           @relation(fields: [periodId], references: [id], onDelete: Cascade)
+  fixedExpense   FixedExpense     @relation(fields: [fixedExpenseId], references: [id], onDelete: Cascade)
+  invoice        Invoice?         @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
+
+  @@unique([periodId, fixedExpenseId])
+  @@index([clientId])
+  @@index([periodId, status])
 }

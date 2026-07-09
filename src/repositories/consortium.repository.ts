@@ -1,5 +1,6 @@
 import { Consortium, Period, Prisma, PrismaClient } from "@prisma/client";
 import { getPrismaClient } from "@/lib/prisma";
+import { generateObligationsForPeriod } from "@/services/obligation.service";
 
 export class ConsortiumRepository {
   constructor(private readonly injectedPrisma?: PrismaClient) {}
@@ -56,7 +57,7 @@ export class ConsortiumRepository {
   async closePeriodAndCreateNext(consortiumId: string): Promise<Period> {
     const prisma = this.prisma;
 
-    return prisma.$transaction(async (tx) => {
+    const nextPeriod = await prisma.$transaction(async (tx) => {
       const current = await tx.period.findFirst({
         where: {
           consortiumId,
@@ -92,6 +93,17 @@ export class ConsortiumRepository {
         },
       });
     });
+
+    // Materializa las obligaciones de gastos fijos del período nuevo (best-effort).
+    try {
+      await generateObligationsForPeriod(nextPeriod.id, prisma);
+    } catch (err) {
+      console.warn(
+        `[obligations] no se pudieron generar para el período ${nextPeriod.id}: ${err instanceof Error ? err.message : err}`
+      );
+    }
+
+    return nextPeriod;
   }
 
   async listByClient(
@@ -259,6 +271,18 @@ export class ConsortiumRepository {
 
     if (!created) {
       throw new Error("Failed to create consortium");
+    }
+
+    // Materializa las obligaciones de gastos fijos del período recién creado (best-effort).
+    const newPeriodId = created.periods[0]?.id;
+    if (newPeriodId) {
+      try {
+        await generateObligationsForPeriod(newPeriodId, prisma);
+      } catch (err) {
+        console.warn(
+          `[obligations] no se pudieron generar para el período ${newPeriodId}: ${err instanceof Error ? err.message : err}`
+        );
+      }
     }
 
     return created;

@@ -133,23 +133,6 @@ export class GoogleSheetsService {
     return row;
   }
 
-  private buildHeaderRow(mapping: SheetsRowMapping): string[] {
-    const entries = Object.entries(mapping) as Array<[keyof SheetsRowMapping, string]>;
-
-    const maxIndex = entries.reduce((max, [, column]) => {
-      return Math.max(max, this.columnToIndex(column));
-    }, 0);
-
-    const row = new Array<string>(maxIndex + 1).fill("");
-
-    for (const [key, column] of entries) {
-      const index = this.columnToIndex(column);
-      row[index] = HEADER_BY_FIELD[key];
-    }
-
-    return row;
-  }
-
   private getRangeFromMapping(sheetName: string, mapping: SheetsRowMapping): string {
     const columns = Object.values(mapping).map((column) => this.columnToIndex(column));
     const minIndex = Math.min(...columns);
@@ -233,25 +216,61 @@ export class GoogleSheetsService {
     sheetName: string,
     mapping: SheetsRowMapping
   ): Promise<void> {
+    await this.ensureHeaders(sheetName, mapping);
+  }
+
+  /**
+   * Completa los encabezados de la fila 1 de las columnas mapeadas que estén
+   * **vacías**, sin pisar las que ya tienen texto (labels custom del usuario).
+   *
+   * Sirve tanto para hojas nuevas (llena todo) como para hojas viejas a las que
+   * se les agregaron columnas después (ej. las de pagos O–U): esas hojas ya
+   * tenían encabezados en A–N, por lo que la versión anterior (todo-o-nada) no
+   * completaba las nuevas. Devuelve la lista de labels agregados.
+   */
+  async ensureHeaders(
+    sheetName: string,
+    mapping: SheetsRowMapping
+  ): Promise<string[]> {
     const existing = await this.sheets.spreadsheets.values.get({
       spreadsheetId: this.spreadsheetId,
       range: `${sheetName}!1:1`,
     });
     const firstRow = existing.data.values?.[0] ?? [];
-    const hasAnyHeaderCell = firstRow.some((cell) => String(cell).trim().length > 0);
-    if (hasAnyHeaderCell) return;
 
-    const headerRow = this.buildHeaderRow(mapping);
     const columns = Object.values(mapping).map((c) => this.columnToIndex(c));
-    const startColumn = this.indexToColumn(Math.min(...columns));
-    const endColumn = this.indexToColumn(Math.max(...columns));
+    const minIndex = Math.min(...columns);
+    const maxIndex = Math.max(...columns);
 
+    // Fila objetivo dentro del rango min..max, preservando lo existente.
+    const merged: string[] = [];
+    for (let i = minIndex; i <= maxIndex; i++) {
+      merged[i - minIndex] = String(firstRow[i] ?? "");
+    }
+
+    const added: string[] = [];
+    for (const [key, column] of Object.entries(mapping) as Array<
+      [keyof SheetsRowMapping, string]
+    >) {
+      const idx = this.columnToIndex(column) - minIndex;
+      if (String(merged[idx] ?? "").trim().length === 0) {
+        merged[idx] = HEADER_BY_FIELD[key];
+        added.push(HEADER_BY_FIELD[key]);
+      }
+    }
+
+    if (added.length === 0) return [];
+
+    const startColumn = this.indexToColumn(minIndex);
+    const endColumn = this.indexToColumn(maxIndex);
     await this.sheets.spreadsheets.values.update({
       spreadsheetId: this.spreadsheetId,
       range: `${sheetName}!${startColumn}1:${endColumn}1`,
       valueInputOption: "RAW",
-      requestBody: { values: [headerRow] },
+      requestBody: { values: [merged] },
     });
+
+    return added;
   }
 
   private async withRetry<T>(fn: () => Promise<T>): Promise<T> {

@@ -47,6 +47,7 @@ const createPaymentSchema = z.object({
   amount: z.number().positive("El monto debe ser positivo"),
   paymentDate: z.string().refine((v) => !isNaN(Date.parse(v)), "Fecha inválida"),
   totalInstallments: z.number().int().min(2).optional(),
+  paymentType: z.enum(["TOTAL", "LIBRE"]).optional(),
   driveFileId: z.string().optional().nullable(),
   driveFileUrl: z.string().optional().nullable(),
   paymentMethod: z.string().optional().nullable(),
@@ -140,6 +141,7 @@ export async function POST(
     let amount: number;
     let paymentDate: string;
     let totalInstallments: number | undefined;
+    let paymentType: "TOTAL" | "LIBRE" | undefined;
     let paymentMethod: string | null;
     let observation: string | undefined;
     let driveFileId: string | null = null;
@@ -153,6 +155,8 @@ export async function POST(
       paymentDate = (form.get("paymentDate") ?? "").toString().trim();
       const instRaw = (form.get("totalInstallments") ?? "").toString().trim();
       totalInstallments = instRaw ? Number(instRaw) : undefined;
+      const typeRaw = (form.get("paymentType") ?? "").toString().trim();
+      paymentType = typeRaw === "TOTAL" || typeRaw === "LIBRE" ? typeRaw : undefined;
       paymentMethod = (form.get("paymentMethod") ?? "").toString().trim() || null;
       observation = (form.get("observation") ?? "").toString().trim() || undefined;
       const file = form.get("receipt");
@@ -176,6 +180,7 @@ export async function POST(
       amount = parsed.data.amount;
       paymentDate = parsed.data.paymentDate;
       totalInstallments = parsed.data.totalInstallments;
+      paymentType = parsed.data.paymentType;
       paymentMethod = parsed.data.paymentMethod ?? null;
       observation = parsed.data.observation;
       driveFileId = parsed.data.driveFileId ?? null;
@@ -259,6 +264,7 @@ export async function POST(
       amount,
       paymentDate: new Date(paymentDate),
       totalInstallments,
+      paymentType,
       driveFileId,
       driveFileUrl,
       paymentMethod,

@@ -54,7 +54,18 @@ export async function GET(request: Request) {
     const majorityMonthLabel = `${MONTH_NAMES[majMonth - 1]} ${majYear}`;
     const nextMonthLabel = `${MONTH_NAMES[nextMonth - 1]} ${nextYear}`;
 
-    const toClose: { id: string; canonicalName: string; currentPeriod: string }[] = [];
+    // Contar obligaciones de gastos fijos que quedarían pendientes en los períodos a cerrar.
+    const closingPeriodIds = activePeriods
+      .filter((p) => p.year === majYear && p.month === majMonth)
+      .map((p) => p.id);
+    const obligationCounts = await prisma.expenseObligation.groupBy({
+      by: ["periodId"],
+      where: { periodId: { in: closingPeriodIds }, status: "PENDING" },
+      _count: { _all: true },
+    });
+    const pendingByPeriod = new Map(obligationCounts.map((o) => [o.periodId, o._count._all]));
+
+    const toClose: { id: string; canonicalName: string; currentPeriod: string; pendingObligations: number }[] = [];
     const toSkip: { id: string; canonicalName: string; currentPeriod: string }[] = [];
 
     for (const p of activePeriods) {
@@ -62,7 +73,7 @@ export async function GET(request: Request) {
       const item = { id: p.consortium.id, canonicalName: p.consortium.canonicalName, currentPeriod: periodLabel };
 
       if (p.year === majYear && p.month === majMonth) {
-        toClose.push(item);
+        toClose.push({ ...item, pendingObligations: pendingByPeriod.get(p.id) ?? 0 });
       } else {
         toSkip.push(item);
       }
