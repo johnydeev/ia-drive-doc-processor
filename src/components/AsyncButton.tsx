@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useRef, useState, type ButtonHTMLAttributes, type ReactNode } from "react";
+import { type ButtonHTMLAttributes, type ReactNode } from "react";
+import { useAsyncAction } from "@/lib/useAsyncAction";
 
 type AsyncButtonProps = Omit<ButtonHTMLAttributes<HTMLButtonElement>, "onClick"> & {
   /** Handler de la acción. Mientras la promesa está pendiente, el botón se deshabilita
@@ -13,36 +14,14 @@ type AsyncButtonProps = Omit<ButtonHTMLAttributes<HTMLButtonElement>, "onClick">
 
 /**
  * Botón que da feedback de carga automático: mientras su `onClick` async está en curso
- * se deshabilita, muestra un spinner y corta el doble click (guard por ref, antes de que
- * React re-renderice el `disabled`). Drop-in: acepta el resto de props de <button>.
+ * se deshabilita, muestra un spinner y corta el doble click (ver useAsyncAction).
+ * Drop-in: acepta el resto de props de <button>.
  */
 export function AsyncButton({ onClick, pendingLabel, children, disabled, ...rest }: AsyncButtonProps) {
-  const [pending, setPending] = useState(false);
-  const runningRef = useRef(false);
-  const mountedRef = useRef(true);
-
-  // Setear en cada (re)montaje: en React StrictMode (dev) el ciclo
-  // setup→cleanup→setup dejaría el ref en false para siempre si el setup no lo
-  // re-setea, y el finally nunca llamaría setPending(false) → loader eterno.
-  useEffect(() => {
-    mountedRef.current = true;
-    return () => { mountedRef.current = false; };
-  }, []);
-
-  const handleClick = async () => {
-    if (runningRef.current) return; // ya hay una ejecución en curso → ignorar
-    runningRef.current = true;
-    setPending(true);
-    try {
-      await onClick();
-    } finally {
-      runningRef.current = false;
-      if (mountedRef.current) setPending(false);
-    }
-  };
+  const { pending, run } = useAsyncAction();
 
   return (
-    <button {...rest} disabled={disabled || pending} onClick={handleClick} aria-busy={pending}>
+    <button {...rest} disabled={disabled || pending} onClick={() => run(onClick)} aria-busy={pending}>
       {pending && <span className="asyncSpinner" aria-hidden="true" />}
       {pending ? (pendingLabel ?? children) : children}
     </button>

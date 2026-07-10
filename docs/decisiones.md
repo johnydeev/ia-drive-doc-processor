@@ -17,9 +17,21 @@ botones sin feedback (los nuevos de gastos fijos/obligaciones); (2) migrar incre
 tienen `saving` manual, borrando el boilerplate. Se descartó un overlay/toast global (menos preciso, no
 bloquea el botón) y migrar todo de una (refactor grande y riesgoso en un archivo de ~2.900 líneas).
 
-**Impacto (Fase 1):** `src/components/AsyncButton.tsx` (nuevo), `.asyncSpinner` en `globals.css`, y 6
-botones de `consortiums/page.tsx` migrados. Spec: `docs/superpowers/specs/2026-07-09-async-button-feedback-design.md`.
-Verificado: typecheck + lint (0 errores).
+**Fase 2 (misma sesión):** se auditaron TODAS las requests disparadas por botones y se clasificaron en 3
+categorías, porque forzar `AsyncButton` en todas rompía coordinación:
+- **Standalone / por fila** (borrar boleta/LSP/pago) → `AsyncButton` (elimina los `deleting*Id`).
+- **Submit de modal** (crear consorcio/proveedor/boleta, match names, pago, cerrar período, guardar pagos)
+  → se extrajo el hook `useAsyncAction` (`{ pending, run }`) y se reemplazó cada `useState(saving)` por
+  `const { pending: savingX, run } = useAsyncAction()` (mismo nombre → los hermanos `disabled={savingX}` no
+  se tocan). `AsyncButton` pasa a usar el hook por dentro (una sola fuente de la lógica).
+- **Sidebar con `busyAction` global** (sincronizar, proteger/desproteger, scheduler, close-all/unassigned)
+  → **intacto**: `AsyncButton` (pending por botón) rompería la coordinación "una acción a la vez" entre
+  todos los botones del sidebar.
+
+**Impacto:** `src/lib/useAsyncAction.ts` (nuevo), `src/components/AsyncButton.tsx` (usa el hook),
+`.asyncSpinner` en `globals.css`, y ~13 botones de `consortiums/page.tsx` migrados (borrando ~7
+`useState(saving/deleting)`). Spec: `docs/superpowers/specs/2026-07-09-async-button-feedback-design.md`.
+Verificado: typecheck + lint (0 errores) + 204 tests + build:jobs OK.
 
 ---
 

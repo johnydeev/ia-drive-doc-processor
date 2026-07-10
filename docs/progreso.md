@@ -17,18 +17,31 @@ Tres ajustes de UX en `src/app/admin/consortiums/page.tsx` (spec en
 
 Se hizo directo desde el spec (sin plan formal, por ser cambio chico y de un solo archivo).
 
-## Feedback de carga en botones (`AsyncButton`) — Fase 1 (2026-07-09)
+## Feedback de carga en botones (`AsyncButton` + `useAsyncAction`) — Fases 1 y 2 (2026-07-09)
 
-**Estado: implementado y verificado (typecheck + lint 0 errores). Sin migración. Sin commitear.**
+**Estado: implementado y verificado (typecheck + lint 0 errores + 204 tests + build:jobs OK). Sin
+migración. Sin commitear.**
 
 Bug: los botones nuevos de gastos fijos/obligaciones no daban feedback al hacer click → doble click →
-alta duplicada. La mayoría del panel ya tenía loader (estado `saving` por acción); faltaban los nuevos.
-Se introdujo un componente reutilizable **`src/components/AsyncButton.tsx`** que encapsula el patrón
-(deshabilita + spinner + label mientras corre la promesa del `onClick`) y **corta el doble click** con un
-guard por `ref`. **Fase 1:** aplicado a los 6 botones que faltaban (agregar/activar/quitar gasto fijo,
-generar obligaciones, omitir/reactivar). Spinner `.asyncSpinner` en `globals.css`. **Fase 2 (pendiente,
-incremental):** migrar los botones que ya tienen `saving` manual, borrando su boilerplate. Spec:
-`docs/superpowers/specs/2026-07-09-async-button-feedback-design.md`.
+alta duplicada. Se estandarizó el patrón en 2 fases, reutilizando código (DRY):
+
+- **Base:** hook `src/lib/useAsyncAction.ts` (`{ pending, run }`) que centraliza el guard anti
+  doble-click + estado `pending` (con fix de StrictMode). `src/components/AsyncButton.tsx` (deshabilita +
+  spinner + label) lo usa por dentro. Spinner `.asyncSpinner` en `globals.css`.
+- **Fase 1:** `AsyncButton` en los 6 botones que no tenían feedback (agregar/activar/quitar gasto fijo,
+  generar obligaciones, omitir/reactivar).
+- **Fase 2:** auditoría de TODAS las requests disparadas por botones → 3 categorías:
+  - **Standalone / por fila** (borrar boleta/LSP/pago) → `AsyncButton`, eliminando los estados
+    `deleting*Id`.
+  - **Submit de modal** (crear consorcio/proveedor/boleta, match names, registrar pago, cerrar período,
+    guardar pagos) → `useAsyncAction` con el mismo nombre de variable (`const { pending: savingX, run } =
+    useAsyncAction()`), así los hermanos (`disabled={savingX}`) siguen funcionando; se borró el
+    `useState(saving)` + `try/finally` de cada uno.
+  - **Sidebar con `busyAction` global** (sincronizar, proteger/desproteger hoja, scheduler, close-all y
+    unassigned) → **intacto**: `AsyncButton` (pending por botón) rompería la coordinación "una acción a la
+    vez" entre todos los botones del sidebar.
+
+Spec: `docs/superpowers/specs/2026-07-09-async-button-feedback-design.md`.
 
 ---
 

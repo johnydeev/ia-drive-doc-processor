@@ -6,6 +6,7 @@ import styles from "./page.module.css";
 import { useAuthGuard } from "@/lib/useAuthGuard";
 import { cuitDigits as normCuit } from "@/lib/cuit";
 import { AsyncButton } from "@/components/AsyncButton";
+import { useAsyncAction } from "@/lib/useAsyncAction";
 
 const TIPOS_COMPROBANTE = [
   "A", "B", "C", "E", "M", "X",
@@ -496,7 +497,7 @@ export default function ConsortiumsPage() {
   const [uploadingReceiptId, setUploadingReceiptId] = useState<string | null>(null);
 
   const [showCloseModal, setShowCloseModal] = useState(false);
-  const [closingPeriod, setClosingPeriod] = useState(false);
+  const { pending: closingPeriod, run: runClosePeriod } = useAsyncAction();
   const [closeError, setCloseError] = useState<string | null>(null);
   const [closeSuccess, setCloseSuccess] = useState<string | null>(null);
 
@@ -507,7 +508,7 @@ export default function ConsortiumsPage() {
   const [matchedProvider, setMatchedProvider] = useState<Provider | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [invoiceForm, setInvoiceForm] = useState<InvoiceForm>(EMPTY_INVOICE_FORM);
-  const [savingInvoice, setSavingInvoice] = useState(false);
+  const { pending: savingInvoice, run: runInvoice } = useAsyncAction();
   const [invoiceError, setInvoiceError] = useState<string | null>(null);
   const [copiedStatementsId, setCopiedStatementsId] = useState<string | null>(null);
 
@@ -516,20 +517,20 @@ export default function ConsortiumsPage() {
 
   const [showProviderModal, setShowProviderModal] = useState(false);
   const [providerForm, setProviderForm] = useState({ canonicalName: "", cuit: "", paymentAlias: "" });
-  const [savingProvider, setSavingProvider] = useState(false);
+  const { pending: savingProvider, run: runProvider } = useAsyncAction();
   const [providerError, setProviderError] = useState<string | null>(null);
   const [providerSuccess, setProviderSuccess] = useState<string | null>(null);
 
   const [showConsortiumModal, setShowConsortiumModal] = useState(false);
   const [consortiumForm, setConsortiumForm] = useState({ canonicalName: "", cuit: "" });
-  const [savingConsortium, setSavingConsortium] = useState(false);
+  const { pending: savingConsortium, run: runConsortium } = useAsyncAction();
   const [consortiumError, setConsortiumError] = useState<string | null>(null);
   const [consortiumSuccess, setConsortiumSuccess] = useState<string | null>(null);
 
   // matchNames editing (inside config modal)
   const [editingMatchNames, setEditingMatchNames] = useState(false);
   const [matchNamesValue, setMatchNamesValue] = useState("");
-  const [savingMatchNames, setSavingMatchNames] = useState(false);
+  const { pending: savingMatchNames, run: runMatchNames } = useAsyncAction();
   const [matchNamesMsg, setMatchNamesMsg] = useState<string | null>(null);
   const [showConfigModal, setShowConfigModal] = useState(false);
 
@@ -547,7 +548,6 @@ export default function ConsortiumsPage() {
 
   // Eliminar boleta (pestaña Boletas)
   const [confirmDeleteInvoiceId, setConfirmDeleteInvoiceId] = useState<string | null>(null);
-  const [deletingInvoiceId, setDeletingInvoiceId] = useState<string | null>(null);
   // Acordeón del modal de Configuración: una sola sección abierta a la vez
   // (Nombres alternativos / LSP / Gastos fijos). null = todas colapsadas.
   const [openConfigSection, setOpenConfigSection] = useState<"matchNames" | "lsp" | "fixed" | null>(null);
@@ -579,7 +579,7 @@ export default function ConsortiumsPage() {
     observation: "",
   });
   const [payFile, setPayFile] = useState<File | null>(null);
-  const [savingPayment, setSavingPayment] = useState(false);
+  const { pending: savingPayment, run: runPayment } = useAsyncAction();
   const [payError, setPayError] = useState<string | null>(null);
   const payFileInputRef = useRef<HTMLInputElement>(null);
 
@@ -686,7 +686,6 @@ export default function ConsortiumsPage() {
       return;
     }
 
-    setSavingPayment(true);
     setPayError(null);
     try {
       const formData = new FormData();
@@ -717,8 +716,6 @@ export default function ConsortiumsPage() {
       if (selectedId && selectedPeriod) void fetchInvoices(selectedId, selectedPeriod.id);
     } catch (err) {
       setPayError(err instanceof Error ? err.message : "Error al registrar el pago");
-    } finally {
-      setSavingPayment(false);
     }
   };
 
@@ -901,7 +898,7 @@ export default function ConsortiumsPage() {
 
   const handleSaveMatchNames = async () => {
     if (!selectedId) return;
-    setSavingMatchNames(true); setMatchNamesMsg(null);
+    setMatchNamesMsg(null);
     try {
       const res = await guardedFetch(`/api/client/consortiums/${selectedId}`, {
         method: "PATCH", headers: { "content-type": "application/json" },
@@ -915,7 +912,7 @@ export default function ConsortiumsPage() {
       setTimeout(() => setMatchNamesMsg(null), 3000);
     } catch (err) {
       setMatchNamesMsg(err instanceof Error ? err.message : "Error al guardar");
-    } finally { setSavingMatchNames(false); }
+    }
   };
 
   const handleAddLsp = async () => {
@@ -957,7 +954,6 @@ export default function ConsortiumsPage() {
   // borra fila de Sheets. Bloqueado si tiene pagos (el backend responde 409).
   const handleDeleteInvoice = async (invoiceId: string) => {
     if (!selectedId) return;
-    setDeletingInvoiceId(invoiceId);
     try {
       const res = await guardedFetch(`/api/client/consortiums/${selectedId}/invoices/${invoiceId}`, { method: "DELETE" });
       const data = await res.json();
@@ -967,7 +963,6 @@ export default function ConsortiumsPage() {
     } catch (err) {
       setToolbarError(err instanceof Error ? err.message : "Error al eliminar boleta");
     } finally {
-      setDeletingInvoiceId(null);
       setConfirmDeleteInvoiceId(null);
     }
   };
@@ -1032,7 +1027,7 @@ export default function ConsortiumsPage() {
 
   const handleClosePeriod = async () => {
     if (!selectedId || !selectedPeriod) return;
-    setClosingPeriod(true); setCloseError(null);
+    setCloseError(null);
     try {
       const res = await guardedFetch(`/api/client/consortiums/${selectedId}/close-period`, { method: "POST", headers: { "content-type": "application/json" } });
       const data = await res.json();
@@ -1044,7 +1039,7 @@ export default function ConsortiumsPage() {
       if (periodId) void fetchInvoices(selectedId, periodId);
     } catch (err) {
       setCloseError(err instanceof Error ? err.message : "Error al cerrar el período");
-    } finally { setClosingPeriod(false); }
+    }
   };
 
   // ── Upload de recibo ──────────────────────────────────────────────────────
@@ -1123,7 +1118,7 @@ export default function ConsortiumsPage() {
   const handleSaveInvoice = async () => {
     if (!selectedId || !selectedPeriod) return;
     if (!invoiceForm.providerId) { setInvoiceError("Seleccioná un proveedor"); return; }
-    setSavingInvoice(true); setInvoiceError(null);
+    setInvoiceError(null);
     try {
       let coefId = invoiceForm.coeficienteId === "__new__" ? "" : invoiceForm.coeficienteId;
       if (invoiceForm.coeficienteId === "__new__" && invoiceForm.newCoefName && invoiceForm.newCoefValue) {
@@ -1203,7 +1198,7 @@ export default function ConsortiumsPage() {
       }
     } catch (err) {
       setInvoiceError(err instanceof Error ? err.message : "Error al guardar la boleta");
-    } finally { setSavingInvoice(false); }
+    }
   };
 
   const resetInvoiceForm = () => {
@@ -1214,7 +1209,7 @@ export default function ConsortiumsPage() {
 
   const handleSaveProvider = async () => {
     if (!providerForm.canonicalName || !providerForm.cuit) { setProviderError("Razón social y CUIT son obligatorios"); return; }
-    setSavingProvider(true); setProviderError(null); setProviderSuccess(null);
+    setProviderError(null); setProviderSuccess(null);
     try {
       const res = await guardedFetch("/api/client/providers", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(providerForm) });
       const data = await res.json();
@@ -1225,12 +1220,12 @@ export default function ConsortiumsPage() {
       setProviderForm({ canonicalName: "", cuit: "", paymentAlias: "" });
     } catch (err) {
       setProviderError(err instanceof Error ? err.message : "Error al guardar el proveedor");
-    } finally { setSavingProvider(false); }
+    }
   };
 
   const handleSaveConsortium = async () => {
     if (!consortiumForm.canonicalName.trim()) { setConsortiumError("El nombre del consorcio es obligatorio"); return; }
-    setSavingConsortium(true); setConsortiumError(null); setConsortiumSuccess(null);
+    setConsortiumError(null); setConsortiumSuccess(null);
     try {
       const res = await guardedFetch("/api/client/consortiums", {
         method: "POST", headers: { "content-type": "application/json" },
@@ -1243,7 +1238,7 @@ export default function ConsortiumsPage() {
       void fetchConsortiums();
     } catch (err) {
       setConsortiumError(err instanceof Error ? err.message : "Error al guardar el consorcio");
-    } finally { setSavingConsortium(false); }
+    }
   };
 
   const filteredInvoices = invoices.filter((inv) => {
@@ -1710,9 +1705,7 @@ export default function ConsortiumsPage() {
                               {confirmDeleteInvoiceId === inv.id ? (
                                 <span className={styles.lspConfirmDelete}>
                                   ¿Borrar?{" "}
-                                  <button type="button" className={styles.lspConfirmYes} onClick={() => handleDeleteInvoice(inv.id)} disabled={deletingInvoiceId === inv.id}>
-                                    {deletingInvoiceId === inv.id ? "..." : "Sí"}
-                                  </button>
+                                  <AsyncButton type="button" className={styles.lspConfirmYes} onClick={() => handleDeleteInvoice(inv.id)} pendingLabel="…">Sí</AsyncButton>
                                   <button type="button" className={styles.lspConfirmNo} onClick={() => setConfirmDeleteInvoiceId(null)}>No</button>
                                 </span>
                               ) : (
@@ -1879,7 +1872,7 @@ export default function ConsortiumsPage() {
                       />
                       <div className={styles.matchNamesActions}>
                         <button type="button" className={styles.ghostBtn} onClick={() => setEditingMatchNames(false)} disabled={savingMatchNames}>Cancelar</button>
-                        <button type="button" className={styles.addInvoiceBtn} onClick={handleSaveMatchNames} disabled={savingMatchNames}>
+                        <button type="button" className={styles.addInvoiceBtn} onClick={() => runMatchNames(handleSaveMatchNames)} disabled={savingMatchNames}>
                           {savingMatchNames ? "Guardando..." : "Guardar"}
                         </button>
                       </div>
@@ -2064,7 +2057,7 @@ export default function ConsortiumsPage() {
             {closeError && <p className={styles.errorMsg}>{closeError}</p>}
             <div className={styles.modalActions}>
               <button type="button" className={styles.ghostBtn} onClick={() => setShowCloseModal(false)} disabled={closingPeriod}>Cancelar</button>
-              <button type="button" className={styles.closePeriodConfirmBtn} onClick={handleClosePeriod} disabled={closingPeriod}>
+              <button type="button" className={styles.closePeriodConfirmBtn} onClick={() => runClosePeriod(handleClosePeriod)} disabled={closingPeriod}>
                 {closingPeriod ? "Cerrando..." : "Confirmar cierre"}
               </button>
             </div>
@@ -2218,7 +2211,7 @@ export default function ConsortiumsPage() {
             {invoiceError && <p className={styles.errorMsg}>{invoiceError}</p>}
             <div className={styles.modalActions}>
               <button type="button" className={styles.ghostBtn} onClick={() => { setShowInvoiceModal(false); resetInvoiceForm(); }} disabled={savingInvoice || scanning}>Cancelar</button>
-              <button type="button" className={styles.addInvoiceBtn} onClick={handleSaveInvoice} disabled={savingInvoice || scanning}>
+              <button type="button" className={styles.addInvoiceBtn} onClick={() => runInvoice(handleSaveInvoice)} disabled={savingInvoice || scanning}>
                 {savingInvoice ? "Guardando..." : "Guardar boleta"}
               </button>
             </div>
@@ -2250,7 +2243,7 @@ export default function ConsortiumsPage() {
             {providerSuccess && <p className={styles.infoMsg}>{providerSuccess}</p>}
             <div className={styles.modalActions}>
               <button type="button" className={styles.ghostBtn} onClick={() => setShowProviderModal(false)} disabled={savingProvider}>Cerrar</button>
-              <button type="button" className={styles.providerBtn} onClick={handleSaveProvider} disabled={savingProvider}>
+              <button type="button" className={styles.providerBtn} onClick={() => runProvider(handleSaveProvider)} disabled={savingProvider}>
                 {savingProvider ? "Guardando..." : "Crear proveedor"}
               </button>
             </div>
@@ -2278,7 +2271,7 @@ export default function ConsortiumsPage() {
             {consortiumSuccess && <p className={styles.infoMsg}>{consortiumSuccess}</p>}
             <div className={styles.modalActions}>
               <button type="button" className={styles.ghostBtn} onClick={() => setShowConsortiumModal(false)} disabled={savingConsortium}>Cerrar</button>
-              <button type="button" className={styles.consortiumBtn} onClick={handleSaveConsortium} disabled={savingConsortium}>
+              <button type="button" className={styles.consortiumBtn} onClick={() => runConsortium(handleSaveConsortium)} disabled={savingConsortium}>
                 {savingConsortium ? "Creando..." : "Crear consorcio"}
               </button>
             </div>
@@ -2595,7 +2588,7 @@ export default function ConsortiumsPage() {
               <button type="button" className={styles.ghostBtn} onClick={handleClosePayModal} disabled={savingPayment}>
                 Cancelar
               </button>
-              <button type="button" className={styles.addInvoiceBtn} onClick={handleSubmitPayment} disabled={savingPayment || loadingExistingPayments}>
+              <button type="button" className={styles.addInvoiceBtn} onClick={() => runPayment(handleSubmitPayment)} disabled={savingPayment || loadingExistingPayments}>
                 {savingPayment ? "Guardando..." : "Registrar pago"}
               </button>
             </div>
@@ -2690,9 +2683,8 @@ interface PagosViewProps {
 function PagosView({ invoices, onPagoGuardado, onPagar, onVerPagos, onEliminarUltimoPago }: PagosViewProps) {
   // Confirm inline para eliminar último pago de una boleta paga (estado local).
   const [confirmDeletePaymentInvoiceId, setConfirmDeletePaymentInvoiceId] = useState<string | null>(null);
-  const [deletingPaymentInvoiceId, setDeletingPaymentInvoiceId] = useState<string | null>(null);
   const [pendingPayments, setPendingPayments] = useState<Record<string, PendingPaymentInput>>({});
-  const [saving, setSaving] = useState(false);
+  const { pending: saving, run: runGuardar } = useAsyncAction();
   const [error, setError] = useState<string | null>(null);
   // Buscador local de PagosView. State separado del de Boletas — cada pestaña
   // tiene su contexto de búsqueda independiente.
@@ -2809,7 +2801,6 @@ function PagosView({ invoices, onPagoGuardado, onPagar, onVerPagos, onEliminarUl
       return;
     }
 
-    setSaving(true);
     try {
       for (const [invoiceId, pago] of dirtyEntries) {
         const inv = visibleInvoices.find((i) => i.id === invoiceId);
@@ -2857,8 +2848,6 @@ function PagosView({ invoices, onPagoGuardado, onPagar, onVerPagos, onEliminarUl
       onPagoGuardado();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Error al guardar los pagos");
-    } finally {
-      setSaving(false);
     }
   };
 
@@ -3053,18 +3042,17 @@ function PagosView({ invoices, onPagoGuardado, onPagar, onVerPagos, onEliminarUl
                           confirmDeletePaymentInvoiceId === inv.id ? (
                             <span className={styles.lspConfirmDelete}>
                               ¿Borrar último pago?{" "}
-                              <button
+                              <AsyncButton
                                 type="button"
                                 className={styles.lspConfirmYes}
-                                disabled={deletingPaymentInvoiceId === inv.id}
+                                pendingLabel="…"
                                 onClick={async () => {
-                                  setDeletingPaymentInvoiceId(inv.id);
                                   try { await onEliminarUltimoPago(inv.id); }
-                                  finally { setDeletingPaymentInvoiceId(null); setConfirmDeletePaymentInvoiceId(null); }
+                                  finally { setConfirmDeletePaymentInvoiceId(null); }
                                 }}
                               >
-                                {deletingPaymentInvoiceId === inv.id ? "..." : "Sí"}
-                              </button>
+                                Sí
+                              </AsyncButton>
                               <button type="button" className={styles.lspConfirmNo} onClick={() => setConfirmDeletePaymentInvoiceId(null)}>No</button>
                             </span>
                           ) : (
@@ -3105,7 +3093,7 @@ function PagosView({ invoices, onPagoGuardado, onPagar, onVerPagos, onEliminarUl
           <button
             type="button"
             className={styles.btnPrimary}
-            onClick={handleGuardarPagos}
+            onClick={() => runGuardar(handleGuardarPagos)}
             disabled={saving}
           >
             {saving ? "Guardando..." : "GUARDAR"}
