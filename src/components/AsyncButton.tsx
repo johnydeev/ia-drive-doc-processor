@@ -21,7 +21,13 @@ export function AsyncButton({ onClick, pendingLabel, children, disabled, ...rest
   const runningRef = useRef(false);
   const mountedRef = useRef(true);
 
-  useEffect(() => () => { mountedRef.current = false; }, []);
+  // Setear en cada (re)montaje: en React StrictMode (dev) el ciclo
+  // setup→cleanup→setup dejaría el ref en false para siempre si el setup no lo
+  // re-setea, y el finally nunca llamaría setPending(false) → loader eterno.
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
 
   const handleClick = async () => {
     if (runningRef.current) return; // ya hay una ejecución en curso → ignorar

@@ -2,6 +2,30 @@
 
 ## [Unreleased]
 
+### Fixed
+- **`AsyncButton` quedaba en loading para siempre en dev (2026-07-09)**. El guard `mountedRef` se seteaba
+  `true` solo en `useRef(true)` pero el `useEffect` nunca lo re-seteaba en el setup: con React StrictMode
+  (default de Next en dev) el ciclo setup→cleanup→setup lo dejaba en `false`, y el `finally` saltaba
+  `setPending(false)` → spinner eterno. Fix: `mountedRef.current = true` en el setup del effect. Afecta a
+  todos los botones migrados a `AsyncButton` (se notaba en "Agregar" de Gastos fijos, que queda visible
+  tras la acción). Solo se manifestaba en dev; en el build de producción StrictMode no duplica los effects.
+
+### Changed
+- **UX vista de consorcio: limpieza + Configuración con acordeón (2026-07-09)**. (1) Se quitaron las
+  tarjetas **Duplicados** y **Rubros** de la solapa Boletas (ruido; el statsStrip queda con Boletas +
+  Total período). (2) Las secciones **Servicios públicos (LSP)** y **Gastos fijos** se **movieron al
+  modal de Configuración** del consorcio, que ahora es un **acordeón de una sola sección abierta a la
+  vez** (Nombres alternativos / LSP / Gastos fijos), todas colapsadas al abrir. La vista principal queda
+  más limpia. Se reemplazó el estado `lspCollapsed`/`fxCollapsed` por `openConfigSection`. (3) La solapa
+  **Obligaciones** pasó a ser la **primera** (Obligaciones · Boletas · Pagos) y la **activa por
+  defecto** al abrir un consorcio. (4) **Feedback de carga (`AsyncButton`) en los botones del modal de
+  Configuración**: Gastos fijos (Agregar, Desactivar/Activar, Quitar) y LSP (Agregar, y el "Sí" de
+  confirmación de borrado — "Eliminar" solo abre el confirm, no es async). Se eliminaron los estados
+  manuales redundantes `savingLsp`/`deletingLspId` (los reemplaza el `pending` de `AsyncButton`) y se
+  awaitea el refetch en toggle/quitar de gastos fijos para que el spinner cubra la actualización. Solo
+  frontend (`src/app/admin/consortiums/page.tsx`), sin cambios de API/datos. Spec:
+  `docs/superpowers/specs/2026-07-09-ux-vista-consorcio-config-design.md`.
+
 ### Added
 - **Componente `AsyncButton` — feedback de carga en botones (Fase 1) (2026-07-09)**. Los botones nuevos de
   gastos fijos/obligaciones no daban feedback al click → doble click → alta duplicada. Nuevo componente

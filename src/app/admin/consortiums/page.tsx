@@ -486,7 +486,7 @@ export default function ConsortiumsPage() {
   const [search, setSearch] = useState("");
   // Búsqueda de la vista general de tarjetas (independiente del `search` de boletas).
   const [consortiumSearch, setConsortiumSearch] = useState("");
-  const [activeTab, setActiveTab] = useState<"boletas" | "pagos" | "obligaciones">("boletas");
+  const [activeTab, setActiveTab] = useState<"boletas" | "pagos" | "obligaciones">("obligaciones");
   const [providers, setProviders] = useState<Provider[]>([]);
   const [coeficientes, setCoeficientes] = useState<Coeficiente[]>([]);
   const [rubros, setRubros] = useState<Rubro[]>([]);
@@ -535,7 +535,6 @@ export default function ConsortiumsPage() {
 
   // Gastos fijos + obligaciones del período
   const [fixedExpenses, setFixedExpenses] = useState<FixedExpenseRow[]>([]);
-  const [fxCollapsed, setFxCollapsed] = useState(true);
   const [fxTarget, setFxTarget] = useState("");
   const [fxError, setFxError] = useState<string | null>(null);
   const [obligations, setObligations] = useState<ObligationRow[]>([]);
@@ -543,18 +542,15 @@ export default function ConsortiumsPage() {
   // LspServices
   const [lspServices, setLspServices] = useState<LspService[]>([]);
   const [lspForm, setLspForm] = useState({ provider: "", clientNumber: "", description: "" });
-  const [savingLsp, setSavingLsp] = useState(false);
   const [lspError, setLspError] = useState<string | null>(null);
-  const [deletingLspId, setDeletingLspId] = useState<string | null>(null);
   const [confirmDeleteLspId, setConfirmDeleteLspId] = useState<string | null>(null);
 
   // Eliminar boleta (pestaña Boletas)
   const [confirmDeleteInvoiceId, setConfirmDeleteInvoiceId] = useState<string | null>(null);
   const [deletingInvoiceId, setDeletingInvoiceId] = useState<string | null>(null);
-  // Sección LSP colapsable. Default colapsada para ahorrar espacio visual —
-  // la mayoría de las veces los servicios públicos ya están cargados y no
-  // se necesita interactuar. Se abre on-demand para ver, agregar o eliminar.
-  const [lspCollapsed, setLspCollapsed] = useState(true);
+  // Acordeón del modal de Configuración: una sola sección abierta a la vez
+  // (Nombres alternativos / LSP / Gastos fijos). null = todas colapsadas.
+  const [openConfigSection, setOpenConfigSection] = useState<"matchNames" | "lsp" | "fixed" | null>(null);
 
   // Payment modal — soporta dos modos según PaymentRepository:
   //   Modo A (cuotas pactadas): primer pago define totalInstallments. El backend calcula
@@ -880,13 +876,13 @@ export default function ConsortiumsPage() {
     await guardedFetch(`/api/client/consortiums/${selectedId}/fixed-expenses/${fx.id}`, {
       method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ active: !fx.active }),
     });
-    void fetchFixedExpenses(selectedId);
+    await fetchFixedExpenses(selectedId);
   };
 
   const handleDeleteFixedExpense = async (id: string) => {
     if (!selectedId) return;
     await guardedFetch(`/api/client/consortiums/${selectedId}/fixed-expenses/${id}`, { method: "DELETE" });
-    void fetchFixedExpenses(selectedId);
+    await fetchFixedExpenses(selectedId);
   };
 
   const handleGenerateObligations = async () => {
@@ -926,7 +922,7 @@ export default function ConsortiumsPage() {
     if (!selectedId) return;
     if (!lspForm.provider) { setLspError("Seleccioná una empresa"); return; }
     if (!lspForm.clientNumber.trim()) { setLspError("El número de cliente es obligatorio"); return; }
-    setSavingLsp(true); setLspError(null);
+    setLspError(null);
     try {
       const res = await guardedFetch(`/api/client/consortiums/${selectedId}/lsp-services`, {
         method: "POST", headers: { "content-type": "application/json" },
@@ -942,12 +938,11 @@ export default function ConsortiumsPage() {
       setLspForm({ provider: "", clientNumber: "", description: "" });
     } catch (err) {
       setLspError(err instanceof Error ? err.message : "Error al agregar servicio");
-    } finally { setSavingLsp(false); }
+    }
   };
 
   const handleDeleteLsp = async (lspId: string) => {
     if (!selectedId) return;
-    setDeletingLspId(lspId);
     try {
       const res = await guardedFetch(`/api/client/consortiums/${selectedId}/lsp-services/${lspId}`, { method: "DELETE" });
       const data = await res.json();
@@ -955,7 +950,7 @@ export default function ConsortiumsPage() {
       setLspServices((prev) => prev.filter((s) => s.id !== lspId));
     } catch (err) {
       setLspError(err instanceof Error ? err.message : "Error al eliminar servicio");
-    } finally { setDeletingLspId(null); setConfirmDeleteLspId(null); }
+    } finally { setConfirmDeleteLspId(null); }
   };
 
   // Elimina la boleta + recibo asociado + mueve el PDF en Drive scanned→pending +
@@ -982,14 +977,14 @@ export default function ConsortiumsPage() {
     // Deep-link híbrido: URL legible (slug del nombre) + id inmutable al final. Sin
     // navegar. F5 lo restaura por el id, así que un renombre no rompe el link.
     window.history.replaceState(null, "", `${window.location.pathname}?c=${consortiumUrlKey(c)}`);
-    setActiveTab("boletas");
+    setActiveTab("obligaciones");
     setInvoices([]); setSearch(""); setCloseSuccess(null); setCloseError(null);
     setEditingMatchNames(false); setMatchNamesMsg(null);
     setMatchNamesValue(c.matchNames ?? "");
     setLspServices([]); setLspError(null); setLspForm({ provider: "", clientNumber: "", description: "" });
     setConfirmDeleteLspId(null);
     setConfirmDeleteInvoiceId(null);
-    setFixedExpenses([]); setObligations([]); setFxCollapsed(true); setFxTarget(""); setFxError(null);
+    setFixedExpenses([]); setObligations([]); setFxTarget(""); setFxError(null);
     void fetchCoeficientes(c.id);
     void fetchRubros(c.id);
     void fetchLspServices(c.id);
@@ -1260,7 +1255,6 @@ export default function ConsortiumsPage() {
   // Los totales del header se calculan sobre el período completo, no sobre
   // el subset filtrado — el filtro afecta la tabla visible, no las métricas.
   const totalAmount = invoices.reduce((s, i) => s + (i.amount != null ? Number(i.amount) : 0), 0);
-  const duplicates = invoices.filter((i) => i.isDuplicate).length;
 
   if (!accessChecked) return null;
 
@@ -1598,6 +1592,7 @@ export default function ConsortiumsPage() {
                     setMatchNamesValue(selectedConsortium.matchNames ?? "");
                     setEditingMatchNames(false);
                     setMatchNamesMsg(null);
+                    setOpenConfigSection(null);
                     setShowConfigModal(true);
                   }}>
                     Configuración
@@ -1605,156 +1600,23 @@ export default function ConsortiumsPage() {
                 </div>
               </div>
 
-              {/* ── LspServices section (colapsable) ── */}
-              <div className={styles.lspSection}>
-                <button
-                  type="button"
-                  className={styles.lspToggle}
-                  onClick={() => setLspCollapsed((c) => !c)}
-                  aria-expanded={!lspCollapsed}
-                  aria-controls="lsp-content"
-                >
-                  <span className={styles.lspToggleChevron} aria-hidden="true">
-                    {lspCollapsed ? "▸" : "▾"}
-                  </span>
-                  <span className={styles.lspTitle}>Servicios públicos (LSP)</span>
-                  {lspServices.length > 0 && (
-                    <span className={styles.lspToggleCount}>{lspServices.length}</span>
-                  )}
-                </button>
-                {!lspCollapsed && (
-                <div id="lsp-content" className={styles.lspContent}>
-                {lspServices.length > 0 && (
-                  <div className={styles.lspTableWrap}>
-                    <table className={styles.lspTable}>
-                      <thead>
-                        <tr>
-                          <th>Empresa</th><th>Nro. Cliente</th><th>Descripción</th><th>Acciones</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {lspServices.map((s) => (
-                          <tr key={s.id}>
-                            <td>{LSP_PROVIDERS.find((p) => p.value === s.providerName)?.label ?? s.providerName}</td>
-                            <td className={styles.tdMono}>{s.clientNumber}</td>
-                            <td>{s.description ?? "—"}</td>
-                            <td>
-                              {confirmDeleteLspId === s.id ? (
-                                <span className={styles.lspConfirmDelete}>
-                                  ¿Confirmar?{" "}
-                                  <button type="button" className={styles.lspConfirmYes} onClick={() => handleDeleteLsp(s.id)} disabled={deletingLspId === s.id}>
-                                    {deletingLspId === s.id ? "..." : "Sí"}
-                                  </button>
-                                  <button type="button" className={styles.lspConfirmNo} onClick={() => setConfirmDeleteLspId(null)}>No</button>
-                                </span>
-                              ) : (
-                                <button type="button" className={styles.lspDeleteBtn} onClick={() => setConfirmDeleteLspId(s.id)}>Eliminar</button>
-                              )}
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-                {lspServices.length === 0 && (
-                  <p className={styles.lspEmpty}>No hay servicios públicos cargados para este consorcio.</p>
-                )}
-                <div className={styles.lspAddForm}>
-                  <select className={styles.formSelect} value={lspForm.provider} onChange={(e) => setLspForm((f) => ({ ...f, provider: e.target.value }))}>
-                    <option value="">Empresa...</option>
-                    {LSP_PROVIDERS.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
-                  </select>
-                  <input className={styles.formInput} value={lspForm.clientNumber} onChange={(e) => setLspForm((f) => ({ ...f, clientNumber: e.target.value }))} placeholder="Nro. de cliente" />
-                  <input className={styles.formInput} value={lspForm.description} onChange={(e) => setLspForm((f) => ({ ...f, description: e.target.value }))} placeholder="Descripción (opcional)" />
-                  <button type="button" className={styles.addInvoiceBtn} onClick={handleAddLsp} disabled={savingLsp}>
-                    {savingLsp ? "Agregando..." : "Agregar"}
-                  </button>
-                </div>
-                {lspError && <p className={styles.errorMsg}>{lspError}</p>}
-                </div>
-                )}
-              </div>
-
-              {/* ── Gastos fijos section (colapsable) ── */}
-              <div className={styles.lspSection}>
-                <button
-                  type="button"
-                  className={styles.lspToggle}
-                  onClick={() => setFxCollapsed((c) => !c)}
-                  aria-expanded={!fxCollapsed}
-                  aria-controls="fx-content"
-                >
-                  <span className={styles.lspToggleChevron} aria-hidden="true">{fxCollapsed ? "▸" : "▾"}</span>
-                  <span className={styles.lspTitle}>Gastos fijos</span>
-                  {fixedExpenses.length > 0 && (
-                    <span className={styles.lspToggleCount}>{fixedExpenses.length}</span>
-                  )}
-                </button>
-                {!fxCollapsed && (
-                <div id="fx-content" className={styles.lspContent}>
-                  {fixedExpenses.length > 0 ? (
-                    <div className={styles.lspTableWrap}>
-                      <table className={styles.lspTable}>
-                        <thead>
-                          <tr><th>Gasto fijo</th><th>Estado</th><th>Acciones</th></tr>
-                        </thead>
-                        <tbody>
-                          {fixedExpenses.map((fx) => {
-                            const lsp = lspServices.find((l) => l.id === fx.lspServiceId);
-                            const prov = providers.find((p) => p.id === fx.providerId);
-                            const label = lsp
-                              ? `${LSP_PROVIDERS.find((p) => p.value === lsp.providerName)?.label ?? lsp.providerName} (${lsp.clientNumber})`
-                              : prov?.canonicalName ?? fx.description ?? "—";
-                            return (
-                              <tr key={fx.id}>
-                                <td>{label}</td>
-                                <td>{fx.active ? "Activo" : "Inactivo"}</td>
-                                <td>
-                                  <button type="button" className={styles.ghostBtn} style={{ padding: "4px 10px", fontSize: 12 }} onClick={() => handleToggleFixedExpense(fx)}>
-                                    {fx.active ? "Desactivar" : "Activar"}
-                                  </button>{" "}
-                                  <button type="button" className={styles.lspDeleteBtn} onClick={() => handleDeleteFixedExpense(fx.id)}>Quitar</button>
-                                </td>
-                              </tr>
-                            );
-                          })}
-                        </tbody>
-                      </table>
-                    </div>
-                  ) : (
-                    <p className={styles.lspEmpty}>No hay gastos fijos cargados para este consorcio.</p>
-                  )}
-                  <div className={styles.lspAddForm}>
-                    <select className={styles.formSelect} value={fxTarget} onChange={(e) => setFxTarget(e.target.value)}>
-                      <option value="">Elegir proveedor o servicio...</option>
-                      {providers.length > 0 && (
-                        <optgroup label="Proveedores">
-                          {providers.map((p) => <option key={`p-${p.id}`} value={`provider:${p.id}`}>{p.canonicalName}</option>)}
-                        </optgroup>
-                      )}
-                      {lspServices.length > 0 && (
-                        <optgroup label="Servicios (LSP)">
-                          {lspServices.map((l) => (
-                            <option key={`l-${l.id}`} value={`lsp:${l.id}`}>
-                              {LSP_PROVIDERS.find((p) => p.value === l.providerName)?.label ?? l.providerName} ({l.clientNumber})
-                            </option>
-                          ))}
-                        </optgroup>
-                      )}
-                    </select>
-                    <button type="button" className={styles.addInvoiceBtn} onClick={handleAddFixedExpense} disabled={!fxTarget}>Agregar</button>
-                  </div>
-                  {fxError && <p className={styles.errorMsg}>{fxError}</p>}
-                </div>
-                )}
-              </div>
-
               {closeSuccess && <p className={styles.infoMsg}>{closeSuccess}</p>}
               {closeError && <p className={styles.errorMsg}>{closeError}</p>}
               {invoicesError && <p className={styles.errorMsg}>{invoicesError}</p>}
 
               <div className={styles.tabBar}>
+                <button
+                  type="button"
+                  className={activeTab === "obligaciones" ? styles.tabActive : styles.tab}
+                  onClick={() => setActiveTab("obligaciones")}
+                >
+                  Obligaciones
+                  {obligations.filter((o) => o.status === "PENDING").length > 0 && (
+                    <span className={styles.statWarn} style={{ marginLeft: 6, fontWeight: 700 }}>
+                      {obligations.filter((o) => o.status === "PENDING").length}
+                    </span>
+                  )}
+                </button>
                 <button
                   type="button"
                   className={activeTab === "boletas" ? styles.tabActive : styles.tab}
@@ -1769,18 +1631,6 @@ export default function ConsortiumsPage() {
                 >
                   Pagos
                 </button>
-                <button
-                  type="button"
-                  className={activeTab === "obligaciones" ? styles.tabActive : styles.tab}
-                  onClick={() => setActiveTab("obligaciones")}
-                >
-                  Obligaciones
-                  {obligations.filter((o) => o.status === "PENDING").length > 0 && (
-                    <span className={styles.statWarn} style={{ marginLeft: 6, fontWeight: 700 }}>
-                      {obligations.filter((o) => o.status === "PENDING").length}
-                    </span>
-                  )}
-                </button>
               </div>
 
               {activeTab === "boletas" && (
@@ -1788,8 +1638,6 @@ export default function ConsortiumsPage() {
               <div className={styles.statsStrip}>
                 <div className={styles.statCard}><span className={styles.statLabel}>Boletas</span><span className={styles.statValue}>{invoices.length}</span></div>
                 <div className={styles.statCard}><span className={styles.statLabel}>Total período</span><span className={styles.statValue}>{formatAmount(totalAmount)}</span></div>
-                <div className={styles.statCard}><span className={styles.statLabel}>Duplicados</span><span className={`${styles.statValue} ${duplicates > 0 ? styles.statWarn : ""}`}>{duplicates}</span></div>
-                <div className={styles.statCard}><span className={styles.statLabel}>Rubros</span><span className={styles.statValue}>{rubros.length}</span></div>
               </div>
 
               <div className={styles.searchRow}>
@@ -1996,37 +1844,178 @@ export default function ConsortiumsPage() {
             <h3 className={styles.modalTitle}>Configuración — {selectedConsortium.rawName}</h3>
             <p className={styles.modalSubtitle}>Ajustes de matching y datos internos del consorcio</p>
 
+            {/* ── Acordeón: una sola sección abierta a la vez ── */}
             <div className={styles.configSection}>
-              <h4 className={styles.configSectionTitle}>Nombres alternativos (matching interno)</h4>
-              <p className={styles.configSectionDesc}>
-                Separar con | (pipe). Estos nombres se usan internamente para identificar el consorcio en facturas.
-              </p>
-              {!editingMatchNames ? (
-                <>
-                  <p className={styles.matchNamesValue}>
-                    {matchNamesValue || <span style={{ opacity: 0.4 }}>Sin nombres alternativos</span>}
+              <button
+                type="button"
+                className={styles.lspToggle}
+                onClick={() => setOpenConfigSection((s) => (s === "matchNames" ? null : "matchNames"))}
+                aria-expanded={openConfigSection === "matchNames"}
+              >
+                <span className={styles.lspToggleChevron} aria-hidden="true">{openConfigSection === "matchNames" ? "▾" : "▸"}</span>
+                <span className={styles.lspTitle}>Nombres alternativos (matching interno)</span>
+              </button>
+              {openConfigSection === "matchNames" && (
+                <div className={styles.lspContent}>
+                  <p className={styles.configSectionDesc}>
+                    Separar con | (pipe). Estos nombres se usan internamente para identificar el consorcio en facturas.
                   </p>
-                  <div className={styles.matchNamesActions} style={{ marginTop: 8 }}>
-                    <button type="button" className={styles.matchNamesEditBtn} onClick={() => setEditingMatchNames(true)}>Editar</button>
-                  </div>
-                </>
-              ) : (
-                <div className={styles.matchNamesEdit}>
-                  <input
-                    className={styles.formInput}
-                    value={matchNamesValue}
-                    onChange={(e) => setMatchNamesValue(e.target.value)}
-                    placeholder="NOMBRE ALT 1|NOMBRE ALT 2|NOMBRE ALT 3"
-                  />
-                  <div className={styles.matchNamesActions}>
-                    <button type="button" className={styles.ghostBtn} onClick={() => setEditingMatchNames(false)} disabled={savingMatchNames}>Cancelar</button>
-                    <button type="button" className={styles.addInvoiceBtn} onClick={handleSaveMatchNames} disabled={savingMatchNames}>
-                      {savingMatchNames ? "Guardando..." : "Guardar"}
-                    </button>
-                  </div>
+                  {!editingMatchNames ? (
+                    <>
+                      <p className={styles.matchNamesValue}>
+                        {matchNamesValue || <span style={{ opacity: 0.4 }}>Sin nombres alternativos</span>}
+                      </p>
+                      <div className={styles.matchNamesActions} style={{ marginTop: 8 }}>
+                        <button type="button" className={styles.matchNamesEditBtn} onClick={() => setEditingMatchNames(true)}>Editar</button>
+                      </div>
+                    </>
+                  ) : (
+                    <div className={styles.matchNamesEdit}>
+                      <input
+                        className={styles.formInput}
+                        value={matchNamesValue}
+                        onChange={(e) => setMatchNamesValue(e.target.value)}
+                        placeholder="NOMBRE ALT 1|NOMBRE ALT 2|NOMBRE ALT 3"
+                      />
+                      <div className={styles.matchNamesActions}>
+                        <button type="button" className={styles.ghostBtn} onClick={() => setEditingMatchNames(false)} disabled={savingMatchNames}>Cancelar</button>
+                        <button type="button" className={styles.addInvoiceBtn} onClick={handleSaveMatchNames} disabled={savingMatchNames}>
+                          {savingMatchNames ? "Guardando..." : "Guardar"}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                  {matchNamesMsg && <p className={styles.infoMsg} style={{ marginTop: 6 }}>{matchNamesMsg}</p>}
                 </div>
               )}
-              {matchNamesMsg && <p className={styles.infoMsg} style={{ marginTop: 6 }}>{matchNamesMsg}</p>}
+            </div>
+
+            <div className={styles.configSection}>
+              <button
+                type="button"
+                className={styles.lspToggle}
+                onClick={() => setOpenConfigSection((s) => (s === "lsp" ? null : "lsp"))}
+                aria-expanded={openConfigSection === "lsp"}
+              >
+                <span className={styles.lspToggleChevron} aria-hidden="true">{openConfigSection === "lsp" ? "▾" : "▸"}</span>
+                <span className={styles.lspTitle}>Servicios públicos (LSP)</span>
+                {lspServices.length > 0 && <span className={styles.lspToggleCount}>{lspServices.length}</span>}
+              </button>
+              {openConfigSection === "lsp" && (
+                <div className={styles.lspContent}>
+                  {lspServices.length > 0 ? (
+                    <div className={styles.lspTableWrap}>
+                      <table className={styles.lspTable}>
+                        <thead>
+                          <tr><th>Empresa</th><th>Nro. Cliente</th><th>Descripción</th><th>Acciones</th></tr>
+                        </thead>
+                        <tbody>
+                          {lspServices.map((s) => (
+                            <tr key={s.id}>
+                              <td>{LSP_PROVIDERS.find((p) => p.value === s.providerName)?.label ?? s.providerName}</td>
+                              <td className={styles.tdMono}>{s.clientNumber}</td>
+                              <td>{s.description ?? "—"}</td>
+                              <td>
+                                {confirmDeleteLspId === s.id ? (
+                                  <span className={styles.lspConfirmDelete}>
+                                    ¿Confirmar?{" "}
+                                    <AsyncButton type="button" className={styles.lspConfirmYes} onClick={() => handleDeleteLsp(s.id)} pendingLabel="…">Sí</AsyncButton>
+                                    <button type="button" className={styles.lspConfirmNo} onClick={() => setConfirmDeleteLspId(null)}>No</button>
+                                  </span>
+                                ) : (
+                                  <button type="button" className={styles.lspDeleteBtn} onClick={() => setConfirmDeleteLspId(s.id)}>Eliminar</button>
+                                )}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  ) : (
+                    <p className={styles.lspEmpty}>No hay servicios públicos cargados para este consorcio.</p>
+                  )}
+                  <div className={styles.lspAddForm}>
+                    <select className={styles.formSelect} value={lspForm.provider} onChange={(e) => setLspForm((f) => ({ ...f, provider: e.target.value }))}>
+                      <option value="">Empresa...</option>
+                      {LSP_PROVIDERS.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
+                    </select>
+                    <input className={styles.formInput} value={lspForm.clientNumber} onChange={(e) => setLspForm((f) => ({ ...f, clientNumber: e.target.value }))} placeholder="Nro. de cliente" />
+                    <input className={styles.formInput} value={lspForm.description} onChange={(e) => setLspForm((f) => ({ ...f, description: e.target.value }))} placeholder="Descripción (opcional)" />
+                    <AsyncButton type="button" className={styles.addInvoiceBtn} onClick={handleAddLsp} pendingLabel="Agregando…">Agregar</AsyncButton>
+                  </div>
+                  {lspError && <p className={styles.errorMsg}>{lspError}</p>}
+                </div>
+              )}
+            </div>
+
+            <div className={styles.configSection}>
+              <button
+                type="button"
+                className={styles.lspToggle}
+                onClick={() => setOpenConfigSection((s) => (s === "fixed" ? null : "fixed"))}
+                aria-expanded={openConfigSection === "fixed"}
+              >
+                <span className={styles.lspToggleChevron} aria-hidden="true">{openConfigSection === "fixed" ? "▾" : "▸"}</span>
+                <span className={styles.lspTitle}>Gastos fijos</span>
+                {fixedExpenses.length > 0 && <span className={styles.lspToggleCount}>{fixedExpenses.length}</span>}
+              </button>
+              {openConfigSection === "fixed" && (
+                <div className={styles.lspContent}>
+                  {fixedExpenses.length > 0 ? (
+                    <div className={styles.lspTableWrap}>
+                      <table className={styles.lspTable}>
+                        <thead>
+                          <tr><th>Gasto fijo</th><th>Estado</th><th>Acciones</th></tr>
+                        </thead>
+                        <tbody>
+                          {fixedExpenses.map((fx) => {
+                            const lsp = lspServices.find((l) => l.id === fx.lspServiceId);
+                            const prov = providers.find((p) => p.id === fx.providerId);
+                            const label = lsp
+                              ? `${LSP_PROVIDERS.find((p) => p.value === lsp.providerName)?.label ?? lsp.providerName} (${lsp.clientNumber})`
+                              : prov?.canonicalName ?? fx.description ?? "—";
+                            return (
+                              <tr key={fx.id}>
+                                <td>{label}</td>
+                                <td>{fx.active ? "Activo" : "Inactivo"}</td>
+                                <td>
+                                  <AsyncButton type="button" className={styles.ghostBtn} style={{ padding: "4px 10px", fontSize: 12 }} onClick={() => handleToggleFixedExpense(fx)}>
+                                    {fx.active ? "Desactivar" : "Activar"}
+                                  </AsyncButton>{" "}
+                                  <AsyncButton type="button" className={styles.lspDeleteBtn} onClick={() => handleDeleteFixedExpense(fx.id)} pendingLabel="…">Quitar</AsyncButton>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  ) : (
+                    <p className={styles.lspEmpty}>No hay gastos fijos cargados para este consorcio.</p>
+                  )}
+                  <div className={styles.lspAddForm}>
+                    <select className={styles.formSelect} value={fxTarget} onChange={(e) => setFxTarget(e.target.value)}>
+                      <option value="">Elegir proveedor o servicio...</option>
+                      {providers.length > 0 && (
+                        <optgroup label="Proveedores">
+                          {providers.map((p) => <option key={`p-${p.id}`} value={`provider:${p.id}`}>{p.canonicalName}</option>)}
+                        </optgroup>
+                      )}
+                      {lspServices.length > 0 && (
+                        <optgroup label="Servicios (LSP)">
+                          {lspServices.map((l) => (
+                            <option key={`l-${l.id}`} value={`lsp:${l.id}`}>
+                              {LSP_PROVIDERS.find((p) => p.value === l.providerName)?.label ?? l.providerName} ({l.clientNumber})
+                            </option>
+                          ))}
+                        </optgroup>
+                      )}
+                    </select>
+                    <AsyncButton type="button" className={styles.addInvoiceBtn} onClick={handleAddFixedExpense} disabled={!fxTarget} pendingLabel="Agregando…">Agregar</AsyncButton>
+                  </div>
+                  {fxError && <p className={styles.errorMsg}>{fxError}</p>}
+                </div>
+              )}
             </div>
 
             <div className={styles.modalActions}>

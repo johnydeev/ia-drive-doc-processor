@@ -1,6 +1,21 @@
 # Progreso del proyecto — drive-doc-processor
 
-Actualizado al 08/07/2026 (sesión 40).
+Actualizado al 09/07/2026 (sesión 41).
+
+## UX vista de consorcio: limpieza + Configuración con acordeón (2026-07-09)
+
+**Estado: implementado y verificado (typecheck + lint 0 errores). Falta verificación visual (login).
+Sin migración. Sin commitear.**
+
+Tres ajustes de UX en `src/app/admin/consortiums/page.tsx` (spec en
+`docs/superpowers/specs/2026-07-09-ux-vista-consorcio-config-design.md`):
+1. Quitadas las tarjetas **Duplicados** y **Rubros** de la solapa Boletas (+ `const duplicates` huérfano).
+2. **LSP** y **Gastos fijos** movidos al modal de Configuración, ahora **acordeón de una sola sección
+   abierta** (Nombres / LSP / Gastos), todas colapsadas al abrir. Estado `lspCollapsed`/`fxCollapsed`
+   reemplazado por `openConfigSection`.
+3. Solapa **Obligaciones** primera y activa por defecto.
+
+Se hizo directo desde el spec (sin plan formal, por ser cambio chico y de un solo archivo).
 
 ## Feedback de carga en botones (`AsyncButton`) — Fase 1 (2026-07-09)
 
