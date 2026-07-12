@@ -236,6 +236,28 @@ export class GoogleDriveService {
     });
   }
 
+  /**
+   * Mueve Y renombra un archivo en UNA sola llamada atómica a Drive (o aplica
+   * todo o nada). Usado por la migración de período, que necesita mover el PDF a
+   * la subcarpeta del período nuevo y renombrarlo (el nombre embebe el período,
+   * `P06-2026` → `P07-2026`) sin ventana intermedia inconsistente.
+   */
+  async moveAndRenameFile(
+    fileId: string,
+    fromFolderId: string,
+    toFolderId: string,
+    newName: string
+  ): Promise<void> {
+    await this.drive.files.update({
+      fileId,
+      addParents: toFolderId,
+      removeParents: fromFolderId,
+      requestBody: { name: newName },
+      fields: "id, parents, name",
+      supportsAllDrives: true,
+    });
+  }
+
   async moveFileToScanned(
     fileId: string,
     pendingFolderId: string = env.GOOGLE_DRIVE_PENDING_FOLDER_ID,

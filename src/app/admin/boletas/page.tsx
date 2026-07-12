@@ -25,6 +25,9 @@ type InvoiceRow = {
 
 type Facet = { id: string; name: string };
 
+type MovePreviewItem = { invoiceId: string; consortium: string | null; movable: boolean; fromLabel?: string; toLabel?: string; skip?: string };
+type MoveSummary = { moved: number; skipped: Array<{ invoiceId: string; reason: string }>; failed: Array<{ invoiceId: string; error: string; reverted: boolean }>; total: number };
+
 function formatAmount(v: number | null) {
   if (v == null) return "—";
   return new Intl.NumberFormat("es-AR", { style: "currency", currency: "ARS", minimumFractionDigits: 2 }).format(v);
@@ -70,6 +73,10 @@ export default function BoletasEntrantesPage() {
   const [pageSize] = useState(50);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [deleting, setDeleting] = useState(false);
+  const [moving, setMoving] = useState(false);
+  const [moveStep, setMoveStep] = useState<null | "preview" | "result">(null);
+  const [movePreview, setMovePreview] = useState<MovePreviewItem[]>([]);
+  const [moveResult, setMoveResult] = useState<MoveSummary | null>(null);
   const [facets, setFacets] = useState<{ consortiums: Facet[]; providers: Facet[]; periods: Facet[] }>({ consortiums: [], providers: [], periods: [] });
   const [consortiumFilter, setConsortiumFilter] = useState("");
   const [providerFilter, setProviderFilter] = useState("");
@@ -164,6 +171,66 @@ export default function BoletasEntrantesPage() {
     }
   }, [guardedFetch, selected, selectedCount, fetchInvoices]);
 
+  const SKIP_LABELS: Record<string, string> = {
+    sin_periodo: "sin período asignado",
+    destino_inexistente: "el período siguiente no existe todavía (cerrá el período primero)",
+    destino_cerrado: "el período siguiente está cerrado",
+  };
+
+  const openMoveModal = useCallback(async () => {
+    if (selectedCount === 0) return;
+    setError(null);
+    setNotice(null);
+    setMoveResult(null);
+    setMoving(true);
+    try {
+      const res = await guardedFetch("/api/client/invoices/bulk-move-period/preview", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ invoiceIds: [...selected] }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
+      setMovePreview(data.items as MovePreviewItem[]);
+      setMoveStep("preview");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Error al previsualizar");
+    } finally {
+      setMoving(false);
+    }
+  }, [guardedFetch, selected, selectedCount]);
+
+  const confirmMove = useCallback(async () => {
+    setMoving(true);
+    setError(null);
+    try {
+      const res = await guardedFetch("/api/client/invoices/bulk-move-period", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ invoiceIds: [...selected] }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
+      setMoveResult(data as MoveSummary);
+      setMoveStep("result");
+      setSelected(new Set());
+      await fetchInvoices();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Error al mover");
+    } finally {
+      setMoving(false);
+    }
+  }, [guardedFetch, selected, fetchInvoices]);
+
+  const closeMoveModal = useCallback(() => {
+    setMoveStep(null);
+    setMovePreview([]);
+    setMoveResult(null);
+  }, []);
+
+  const movableCount = movePreview.filter((i) => i.movable).length;
+  const skippablePreview = movePreview.filter((i) => !i.movable);
+
   const dangerBtnStyle = useMemo<React.CSSProperties>(() => ({
     background: selectedCount > 0 ? "#b91c1c" : undefined,
     borderColor: selectedCount > 0 ? "#b91c1c" : undefined,
@@ -193,8 +260,12 @@ export default function BoletasEntrantesPage() {
 
         <div className={styles.filterBar}>
           <button type="button" className={styles.ghostBtn} style={dangerBtnStyle}
-            disabled={selectedCount === 0 || deleting} onClick={handleDeleteSelected}>
+            disabled={selectedCount === 0 || deleting || moving} onClick={handleDeleteSelected}>
             {deleting ? "Borrando..." : `Borrar seleccionadas${selectedCount > 0 ? ` (${selectedCount})` : ""}`}
+          </button>
+          <button type="button" className={styles.ghostBtn}
+            disabled={selectedCount === 0 || moving || deleting} onClick={() => void openMoveModal()}>
+            {moving && moveStep === null ? "Cargando..." : `Mover al período siguiente${selectedCount > 0 ? ` (${selectedCount})` : ""}`}
           </button>
           <button type="button" className={styles.ghostBtn} disabled={loading} onClick={() => void fetchInvoices()}>
             Refrescar
@@ -346,6 +417,69 @@ export default function BoletasEntrantesPage() {
               style={{ flex: 1, width: "100%", border: "none", background: "#fff" }}
               allow="autoplay"
             />
+          </div>
+        </div>
+      )}
+
+      {/* Modal de 2 pasos: migración de boletas al período siguiente. */}
+      {moveStep !== null && (
+        <div
+          style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000 }}
+          onClick={closeMoveModal}
+        >
+          <div
+            style={{ background: theme === "dark" ? "#111827" : "#fff", color: theme === "dark" ? "#f9fafb" : "#111827", borderRadius: 12, padding: 24, maxWidth: 560, width: "90%", maxHeight: "80vh", overflowY: "auto" }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {moveStep === "preview" && (
+              <>
+                <h2 style={{ marginTop: 0 }}>Mover al período siguiente</h2>
+                <p><strong>{movableCount}</strong> boleta(s) se moverán al mes siguiente de su consorcio.</p>
+                <ul style={{ maxHeight: 180, overflowY: "auto", paddingLeft: 18 }}>
+                  {movePreview.filter((i) => i.movable).map((i) => (
+                    <li key={i.invoiceId}>{i.consortium ?? "(sin consorcio)"}: {i.fromLabel} → {i.toLabel}</li>
+                  ))}
+                </ul>
+                {skippablePreview.length > 0 && (
+                  <>
+                    <p style={{ color: "#b45309" }}><strong>{skippablePreview.length}</strong> se saltearán:</p>
+                    <ul style={{ maxHeight: 140, overflowY: "auto", paddingLeft: 18, color: "#b45309" }}>
+                      {skippablePreview.map((i) => (
+                        <li key={i.invoiceId}>{i.consortium ?? "(sin consorcio)"}: {i.skip ? SKIP_LABELS[i.skip] ?? i.skip : "no evaluable"}</li>
+                      ))}
+                    </ul>
+                  </>
+                )}
+                <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 16 }}>
+                  <button type="button" className={styles.ghostBtn} onClick={closeMoveModal} disabled={moving}>Cancelar</button>
+                  <button type="button" className={styles.ghostBtn}
+                    style={{ background: "#2563eb", borderColor: "#2563eb", color: "#fff", opacity: movableCount > 0 ? 1 : 0.5 }}
+                    disabled={moving || movableCount === 0} onClick={() => void confirmMove()}>
+                    {moving ? "Moviendo..." : `Confirmar (${movableCount})`}
+                  </button>
+                </div>
+              </>
+            )}
+            {moveStep === "result" && moveResult && (
+              <>
+                <h2 style={{ marginTop: 0 }}>Resultado</h2>
+                <p>
+                  <strong>{moveResult.moved}</strong> movida(s) · <strong>{moveResult.skipped.length}</strong> salteada(s) · <strong>{moveResult.failed.length}</strong> con error
+                </p>
+                {moveResult.failed.length > 0 && (
+                  <ul style={{ maxHeight: 180, overflowY: "auto", paddingLeft: 18, color: "#b91c1c" }}>
+                    {moveResult.failed.map((f) => (
+                      <li key={f.invoiceId}>
+                        {f.invoiceId}: {f.error}{f.reverted ? " (revertida)" : " — NO revertida, revisar manualmente"}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 16 }}>
+                  <button type="button" className={styles.ghostBtn} onClick={closeMoveModal}>Cerrar</button>
+                </div>
+              </>
+            )}
           </div>
         </div>
       )}

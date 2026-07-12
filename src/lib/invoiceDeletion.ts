@@ -31,7 +31,11 @@ export interface InvoiceDeleteResult {
   warning?: string;
 }
 
-const DEFAULT_MAPPING: SheetsRowMapping = {
+/**
+ * Mapeo de columnas por defecto de la hoja de boletas (A–U). Se exporta para que
+ * otros flujos (migración de período) reusen el mismo default sin duplicarlo.
+ */
+export const DEFAULT_SHEETS_MAPPING: SheetsRowMapping = {
   boletaNumber: "A", provider: "B", consortium: "C", providerTaxId: "D",
   detail: "E", observation: "F", dueDate: "G", amount: "H", alias: "I",
   clientNumber: "J", sourceFileUrl: "K", isDuplicate: "L", period: "M",
@@ -67,7 +71,7 @@ export async function resolveDeletionContext(
       sheetsService: new GoogleSheetsService(googleConfig),
       folders: resolveFolders(processingClient),
       sheetName: resolveSheetName(processingClient),
-      mapping: resolveMapping(processingClient) ?? DEFAULT_MAPPING,
+      mapping: resolveMapping(processingClient) ?? DEFAULT_SHEETS_MAPPING,
     },
   };
 }

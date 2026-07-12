@@ -1,6 +1,40 @@
 # Progreso del proyecto — drive-doc-processor
 
-Actualizado al 09/07/2026 (sesión 41).
+Actualizado al 10/07/2026 (sesión 42).
+
+## Migrar boleta al período siguiente (2026-07-10)
+
+**Estado: implementado y verificado (typecheck + lint 0 errores + 217 tests + build:jobs OK). Sin
+migración. Sin commitear (lo hace el owner → deploy automático). Falta verificación manual del owner
+(`npm run dev`).**
+
+Acción masiva nueva en `/admin/boletas`: seleccionar boletas y moverlas al **período siguiente (+1 mes)**
+de su consorcio, resolviendo DB + Google Sheets + PDF en Drive + obligaciones de gastos fijos. Resuelve el
+caso "me olvidé de cerrar el período y entraron boletas en el mes equivocado" sin borrar + reprocesar.
+
+**Qué se hizo:**
+- **Núcleo** `src/lib/invoicePeriodMove.ts` (TDD, 13 tests): `nextPeriod` (+1 mes, wrap dic→ene),
+  `classifyTarget` (destino o motivo de skip), `previewMove`, `applyDbMove` (txn: `periodId` +
+  obligaciones), `moveOneInvoiceToNextPeriod` (Drive → Sheets → DB con **reversión por compensación
+  LIFO**), `moveInvoicesToNextPeriod` (lote) y `resolveMoveContext` (config Google, espeja
+  `invoiceDeletion`).
+- **Solo destino ACTIVE existente**: 3 motivos de skip (`sin_periodo`, `destino_inexistente`,
+  `destino_cerrado`). No crea ni cierra períodos (eso es "Cerrar Periodo General").
+- **Drive**: nuevo `GoogleDriveService.moveAndRenameFile` (mover+renombrar en 1 llamada atómica);
+  el PDF pasa a la subcarpeta del mes nuevo con el nombre `P{MM}-{YYYY}` actualizado.
+- **Reversión por boleta**: si Drive/Sheets/DB falla, se deshace lo hecho y la boleta queda igual; el
+  lote sigue y se reporta al final (`reverted: false` marcado aparte si la reversión falla).
+- **API**: `POST /api/client/invoices/bulk-move-period` (+ `/preview` sin efectos).
+- **UI**: botón "Mover al período siguiente" + modal de 2 pasos (preview con "se moverán / se saltearán"
+  → resultado con contadores) en `admin/boletas/page.tsx`.
+- **DRY**: `DEFAULT_SHEETS_MAPPING` exportado de `invoiceDeletion.ts`.
+
+Spec/plan: `docs/superpowers/{specs,plans}/2026-07-10-migrar-boleta-periodo*`. Decisión en
+`docs/decisiones.md` (2026-07-10).
+
+**Pendiente de verificación manual (owner, `npm run dev`):** mover boletas de un consorcio con período
+siguiente ACTIVE → verificar celda PERIODO en Sheets + PDF renombrado/movido en Drive; y probar el skip
+cuando el período siguiente no existe.
 
 ## UX vista de consorcio: limpieza + Configuración con acordeón (2026-07-09)
 

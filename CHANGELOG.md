@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Added
+- **Migrar boletas al período siguiente (2026-07-10)**. Nueva acción masiva en `/admin/boletas`:
+  seleccionar boletas y moverlas al período siguiente (+1 mes) de su consorcio, resolviendo DB +
+  Google Sheets (celda PERIODO) + PDF en Drive (mover a la subcarpeta del mes nuevo + renombrar
+  `P06-2026`→`P07-2026`) + obligaciones de gastos fijos. Sólo mueve a un período destino que exista y
+  esté ACTIVE (sino saltea con aviso). Reversión por boleta ante cualquier fallo (orden Drive → Sheets →
+  DB con pila de compensación LIFO). Modal de 2 pasos (preview → resultado). Sin migración de DB.
+
 ### Fixed
 - **`AsyncButton` quedaba en loading para siempre en dev (2026-07-09)**. El guard `mountedRef` se seteaba
   `true` solo en `useRef(true)` pero el `useEffect` nunca lo re-seteaba en el setup: con React StrictMode

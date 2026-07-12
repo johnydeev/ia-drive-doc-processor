@@ -4,6 +4,34 @@ Registro de decisiones tomadas ante problemas reales encontrados en producción.
 
 ---
 
+## 2026-07-10 — Migración de período: orden Drive → Sheets → DB con compensación
+
+**Problema:** al olvidar cerrar un período, entran boletas que quedan en el mes equivocado. El
+workaround era borrar + cerrar período + reprocesar. Se quiere mover las boletas directo, tocando
+tres sistemas sin transacción común (Drive, Sheets, DB) sin dejar estados inconsistentes.
+
+**Decisión:** por boleta, ejecutar Drive → Sheets → DB con una pila de compensación (LIFO). La DB va
+**última** y es transaccional, así su propio rollback cubre `periodId` + obligaciones sin inversión
+manual; las únicas compensaciones son las de los pasos externos (una llamada inversa cada uno). Drive
+mueve+renombra en **una sola llamada atómica** (`GoogleDriveService.moveAndRenameFile`). Si algún paso
+falla, se revierte lo hecho y la boleta queda como estaba; el lote continúa y se reporta al final (con
+`reverted: false` marcado aparte si la propia reversión falla). Sólo se mueve a períodos existentes y
+ACTIVE (no se crean períodos ni se cierran: eso es "Cerrar Periodo General"). La subcarpeta de período
+creada en Drive no se borra al revertir (es válida e inofensiva; se reutiliza al reintentar).
+
+**Alternativas descartadas:** (a) crear el período destino si falta → rompe la invariante de un solo
+período ACTIVE por consorcio (`findActivePeriod`, `resolveMajorityMonth`, tarjetas, close-all);
+(b) saga/reintentos distribuidos → YAGNI a esta frecuencia.
+
+**Impacto:** nuevo `src/lib/invoicePeriodMove.ts` (+ `invoicePeriodMove.test.ts`, 13 tests),
+`moveAndRenameFile` en `googleDrive.service.ts`, `DEFAULT_SHEETS_MAPPING` exportado de
+`invoiceDeletion.ts` (DRY), endpoints `POST /api/client/invoices/bulk-move-period` (+ `/preview`), UI
+(botón + modal de 2 pasos) en `admin/boletas/page.tsx`. Reusa `resolveStatementsFolders`,
+`buildInvoiceFileName`, `updateInvoicePaymentInfo({ period })` y `linkInvoiceToObligation`. Sin migración.
+Spec/plan: `docs/superpowers/{specs,plans}/2026-07-10-migrar-boleta-periodo*`.
+
+---
+
 ## 2026-07-09 — `AsyncButton` para feedback de carga (en vez de repetir estado `saving`)
 
 **Problema:** el botón "Agregar gasto fijo" no daba feedback → doble click → alta duplicada. El resto del
