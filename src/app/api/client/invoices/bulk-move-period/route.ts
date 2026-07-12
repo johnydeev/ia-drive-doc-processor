@@ -2,8 +2,11 @@ import { z } from "zod";
 import { apiOk, apiError, withClientAuth } from "@/lib/apiHandler";
 import { resolveMoveContext, moveInvoicesToNextPeriod } from "@/lib/invoicePeriodMove";
 
+// Tope de 40 por tanda: cada boleta hace ~3-4 llamadas a Google (Drive+Sheets),
+// así que un lote grande superaría el timeout de ~100s del túnel Cloudflare (524).
+// La UI también lo valida y avisa; esto es el guardrail del server.
 const bodySchema = z.object({
-  invoiceIds: z.array(z.string().min(1)).min(1).max(200),
+  invoiceIds: z.array(z.string().min(1)).min(1).max(40),
 });
 
 /**

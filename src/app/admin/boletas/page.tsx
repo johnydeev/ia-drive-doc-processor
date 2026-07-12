@@ -8,6 +8,8 @@ import { useAuthGuard } from "@/lib/useAuthGuard";
 
 type ThemeMode = "dark" | "light";
 const THEME_STORAGE_KEY = "dpp_admin_theme";
+/** Tope de boletas por tanda al mover de período (evita el timeout de ~100s del túnel). */
+const MAX_MOVE_BATCH = 40;
 
 type InvoiceRow = {
   id: string;
@@ -179,6 +181,10 @@ export default function BoletasEntrantesPage() {
 
   const openMoveModal = useCallback(async () => {
     if (selectedCount === 0) return;
+    if (selectedCount > MAX_MOVE_BATCH) {
+      setError(`No se pueden mover más de ${MAX_MOVE_BATCH} boletas por tanda. Seleccioná hasta ${MAX_MOVE_BATCH} y hacé el resto en la siguiente tanda.`);
+      return;
+    }
     setError(null);
     setNotice(null);
     setMoveResult(null);

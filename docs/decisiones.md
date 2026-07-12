@@ -4,6 +4,46 @@ Registro de decisiones tomadas ante problemas reales encontrados en producción.
 
 ---
 
+## 2026-07-12 — `close-all`: reescritura set-based + idempotente (fix de 524 / runaway)
+
+**Problema (incidente en producción):** al apretar "Cerrar Periodo General" con **47 consorcios**,
+el endpoint `POST /api/client/periods/close-all` recorría los 47 períodos haciendo, por cada uno,
+una `$transaction` (cerrar + crear siguiente) **+** `closeObligationsForPeriod` **+**
+`generateObligationsForPeriod` — O(N) round-trips secuenciales al pooler de Supabase. Superó los
+**100s** → Cloudflare (túnel) cortó con **524** y devolvió su página HTML de error, que el frontend
+intentó parsear como JSON (`Unexpected token '<', "<!DOCTYPE"`). Peor: el 524 corta en el edge pero
+**el server siguió procesando y commiteando de a uno**, y como el endpoint **no era idempotente**,
+los reintentos del usuario empujaron el estado de más (junio→julio→**agosto** en 12→25→35→47
+consorcios). Diagnóstico con evidencia: status 524 en consola + consultas a la DB mostrando el
+`updatedAt` de los períodos avanzando en vivo mientras se investigaba (**runaway** aún corriendo).
+
+**Contención:** se reinició el contenedor `web` (mata el proceso; cada cierre ya estaba commiteado
+en su propia transacción → sin corrupción) y se reparó el estado por SQL (reabrir junio, borrar los
+julios/agostos vacíos — 0 boletas / 0 obligaciones verificadas).
+
+**Decisión (fix de raíz):** reescribir `close-all` **set-based e idempotente** en
+`src/services/closePeriods.service.ts` (`executeCloseAll`), con la planificación pura extraída a
+`src/lib/closeAllPlan.ts` (`planCloseAll`, testeada) y **reusada también por el preview** (antes el
+cálculo del mes mayoritario estaba duplicado):
+- Una sola transacción: `updateMany` (cerrar los del mes mayoritario, filtrando por `status: ACTIVE`)
+  + `createMany({ skipDuplicates: true })` (crear los siguientes). ~4 queries totales (<1s), muy por
+  debajo del límite de 100s.
+- **Idempotente:** un reintento matchea 0 en el `updateMany` (ya cerrados) y saltea en el `createMany`
+  (unique `consortiumId_year_month`) → no-op seguro. Elimina la clase de bug del runaway.
+- Obligaciones de gastos fijos ajustadas **set-based y best-effort** (updateMany NOT_RECEIVED con
+  avisos por consorcio + createMany de las del período nuevo), sin loop por consorcio.
+
+**Alternativas descartadas:** subir el timeout de Cloudflare (el plan free tope 100s, no configurable);
+job en background con polling (YAGNI para una operación que set-based tarda <1s).
+
+**Pendiente relacionado:** mi feature `bulk-move-period` (sin deployar) tiene el mismo patrón O(N)
+llamadas externas por request (tope 200 boletas) → acotar el lote antes de usarla en volumen.
+
+**Impacto:** `src/lib/closeAllPlan.ts` (+ test, 7), `src/services/closePeriods.service.ts` (+ test, 2),
+`close-all/route.ts` y `close-all/preview/route.ts` (thin, reusan la lógica). Sin migración.
+
+---
+
 ## 2026-07-10 — Migración de período: orden Drive → Sheets → DB con compensación
 
 **Problema:** al olvidar cerrar un período, entran boletas que quedan en el mes equivocado. El

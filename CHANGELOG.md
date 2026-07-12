@@ -8,9 +8,18 @@
   Google Sheets (celda PERIODO) + PDF en Drive (mover a la subcarpeta del mes nuevo + renombrar
   `P06-2026`→`P07-2026`) + obligaciones de gastos fijos. Sólo mueve a un período destino que exista y
   esté ACTIVE (sino saltea con aviso). Reversión por boleta ante cualquier fallo (orden Drive → Sheets →
-  DB con pila de compensación LIFO). Modal de 2 pasos (preview → resultado). Sin migración de DB.
+  DB con pila de compensación LIFO). Modal de 2 pasos (preview → resultado). **Tope de 40 boletas por
+  tanda** (cada una hace varias llamadas a Google → evita el timeout de ~100s del túnel; la UI avisa y
+  el resto se hace en la siguiente tanda). Sin migración de DB.
 
 ### Fixed
+- **`close-all` daba 524 y avanzaba períodos de más (runaway) con muchos consorcios (2026-07-12)**.
+  "Cerrar Periodo General" con 47 consorcios hacía O(N) transacciones secuenciales → superaba los
+  100s → Cloudflare cortaba con 524 (el `<!DOCTYPE` que el front parseaba como JSON), pero el server
+  seguía commiteando y, al no ser idempotente, los reintentos empujaban el estado a agosto. Reescrito
+  **set-based e idempotente** (`executeCloseAll` + `planCloseAll`): 1 transacción con `updateMany` +
+  `createMany({ skipDuplicates })` (~4 queries, <1s); un reintento es no-op seguro. El preview reusa
+  la misma planificación (se eliminó el cálculo duplicado del mes mayoritario).
 - **`AsyncButton` quedaba en loading para siempre en dev (2026-07-09)**. El guard `mountedRef` se seteaba
   `true` solo en `useRef(true)` pero el `useEffect` nunca lo re-seteaba en el setup: con React StrictMode
   (default de Next en dev) el ciclo setup→cleanup→setup lo dejaba en `false`, y el `finally` saltaba

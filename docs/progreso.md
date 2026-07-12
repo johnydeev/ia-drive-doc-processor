@@ -1,6 +1,36 @@
 # Progreso del proyecto — drive-doc-processor
 
-Actualizado al 10/07/2026 (sesión 42).
+Actualizado al 12/07/2026 (sesión 42).
+
+## Fix `close-all`: 524 / runaway al cerrar período general (2026-07-12)
+
+**Estado: implementado y verificado (typecheck + lint 0 errores + 226 tests + build:jobs OK). Sin
+migración. Sin commitear (lo hace el owner → deploy automático).**
+
+**Incidente:** el owner apretó "Cerrar Periodo General" (47 consorcios) y falló con
+`Unexpected token '<'`. Diagnóstico (systematic-debugging con evidencia): la consola mostraba **524**
+(timeout de Cloudflare) en `POST /close-all`; el endpoint hacía O(N) transacciones secuenciales
+(cerrar+crear+obligaciones por consorcio) → >100s → el túnel cortaba con una página HTML que el front
+parseaba como JSON. El server seguía commiteando y, al no ser idempotente, **los reintentos avanzaron
+el estado de más** (se observó en vivo el `updatedAt` de los períodos subiendo mientras se
+investigaba: 12→25→35→47 consorcios pasados a agosto).
+
+**Contención:** se reinició el contenedor `web` (frena el proceso; cada cierre ya commiteado por
+transacción → sin corrupción) y se reparó el estado por SQL (reabrir junio ACTIVE, borrar los julios
+cerrados y agostos activos — verificados vacíos: 0 boletas / 0 obligaciones). MorinigoAdm quedó en el
+estado pre-incidente: junio ACTIVE (47, con 372 boletas).
+
+**Fix de raíz:** `close-all` reescrito **set-based + idempotente**:
+- `src/lib/closeAllPlan.ts` — `planCloseAll` (mes mayoritario, wrap dic→ene, qué cerrar/saltear),
+  lógica pura testeada (7 tests). Reusada por preview y execute (antes duplicada).
+- `src/services/closePeriods.service.ts` — `executeCloseAll`: 1 transacción con `updateMany` (cerrar,
+  filtrando `status: ACTIVE`) + `createMany({ skipDuplicates })` (crear siguientes) + obligaciones
+  set-based best-effort. ~4 queries (<1s). Un reintento es no-op seguro (2 tests).
+- `close-all/route.ts` y `close-all/preview/route.ts` quedan finos (reusan la lógica).
+
+**Pendiente:** owner commitea/deploya; después probar "Cerrar Periodo General" (debería hacer
+junio→julio en <1s). El riesgo gemelo en `bulk-move-period` ya se **mitigó**: tope de 40 boletas por
+tanda (guardrail en los endpoints `.max(40)` + aviso en la UI).
 
 ## Migrar boleta al período siguiente (2026-07-10)
 

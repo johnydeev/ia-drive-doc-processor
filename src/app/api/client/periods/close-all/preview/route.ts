@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { requireClientSession } from "@/lib/clientAuth";
 import { getPrismaClient } from "@/lib/prisma";
+import { planCloseAll } from "@/lib/closeAllPlan";
 
 const MONTH_NAMES = [
   "ENERO", "FEBRERO", "MARZO", "ABRIL", "MAYO", "JUNIO",
@@ -21,7 +22,12 @@ export async function GET(request: Request) {
       include: { consortium: { select: { id: true, canonicalName: true } } },
     });
 
-    if (activePeriods.length === 0) {
+    // Mismo planificador que usa la ejecución (evita duplicar el cálculo del mes mayoritario).
+    const plan = planCloseAll(
+      activePeriods.map((p) => ({ id: p.id, consortiumId: p.consortiumId, year: p.year, month: p.month }))
+    );
+
+    if (!plan) {
       return NextResponse.json({
         ok: true,
         majorityMonth: null,
@@ -31,36 +37,13 @@ export async function GET(request: Request) {
       });
     }
 
-    // Calcular mes mayoritario
-    const freq = new Map<string, number>();
-    for (const p of activePeriods) {
-      const key = `${p.year}-${p.month}`;
-      freq.set(key, (freq.get(key) ?? 0) + 1);
-    }
-
-    let majorityKey = "";
-    let majorityCount = 0;
-    for (const [key, count] of freq) {
-      if (count > majorityCount) {
-        majorityKey = key;
-        majorityCount = count;
-      }
-    }
-
-    const [majYear, majMonth] = majorityKey.split("-").map(Number);
-    const nextMonth = majMonth === 12 ? 1 : majMonth + 1;
-    const nextYear = majMonth === 12 ? majYear + 1 : majYear;
-
-    const majorityMonthLabel = `${MONTH_NAMES[majMonth - 1]} ${majYear}`;
-    const nextMonthLabel = `${MONTH_NAMES[nextMonth - 1]} ${nextYear}`;
+    const majorityMonthLabel = `${MONTH_NAMES[plan.majorityMonth - 1]} ${plan.majorityYear}`;
+    const nextMonthLabel = `${MONTH_NAMES[plan.nextMonth - 1]} ${plan.nextYear}`;
 
     // Contar obligaciones de gastos fijos que quedarían pendientes en los períodos a cerrar.
-    const closingPeriodIds = activePeriods
-      .filter((p) => p.year === majYear && p.month === majMonth)
-      .map((p) => p.id);
     const obligationCounts = await prisma.expenseObligation.groupBy({
       by: ["periodId"],
-      where: { periodId: { in: closingPeriodIds }, status: "PENDING" },
+      where: { periodId: { in: plan.toCloseIds }, status: "PENDING" },
       _count: { _all: true },
     });
     const pendingByPeriod = new Map(obligationCounts.map((o) => [o.periodId, o._count._all]));
@@ -72,7 +55,7 @@ export async function GET(request: Request) {
       const periodLabel = `${MONTH_NAMES[p.month - 1]} ${p.year}`;
       const item = { id: p.consortium.id, canonicalName: p.consortium.canonicalName, currentPeriod: periodLabel };
 
-      if (p.year === majYear && p.month === majMonth) {
+      if (p.year === plan.majorityYear && p.month === plan.majorityMonth) {
         toClose.push({ ...item, pendingObligations: pendingByPeriod.get(p.id) ?? 0 });
       } else {
         toSkip.push(item);
