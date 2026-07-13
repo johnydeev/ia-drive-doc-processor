@@ -36,8 +36,9 @@ cálculo del mes mayoritario estaba duplicado):
 **Alternativas descartadas:** subir el timeout de Cloudflare (el plan free tope 100s, no configurable);
 job en background con polling (YAGNI para una operación que set-based tarda <1s).
 
-**Pendiente relacionado:** mi feature `bulk-move-period` (sin deployar) tiene el mismo patrón O(N)
-llamadas externas por request (tope 200 boletas) → acotar el lote antes de usarla en volumen.
+**Riesgo gemelo (mitigado):** `bulk-move-period` tiene el mismo patrón O(N) llamadas externas por
+request (Drive+Sheets por boleta). Se acotó a **tope de 40 boletas por tanda** (guardrail `.max(40)` en
+los endpoints + aviso en la UI; el resto se hace en la siguiente tanda).
 
 **Impacto:** `src/lib/closeAllPlan.ts` (+ test, 7), `src/services/closePeriods.service.ts` (+ test, 2),
 `close-all/route.ts` y `close-all/preview/route.ts` (thin, reusan la lógica). Sin migración.
@@ -67,8 +68,15 @@ período ACTIVE por consorcio (`findActivePeriod`, `resolveMajorityMonth`, tarje
 `moveAndRenameFile` en `googleDrive.service.ts`, `DEFAULT_SHEETS_MAPPING` exportado de
 `invoiceDeletion.ts` (DRY), endpoints `POST /api/client/invoices/bulk-move-period` (+ `/preview`), UI
 (botón + modal de 2 pasos) en `admin/boletas/page.tsx`. Reusa `resolveStatementsFolders`,
-`buildInvoiceFileName`, `updateInvoicePaymentInfo({ period })` y `linkInvoiceToObligation`. Sin migración.
+`buildInvoiceFileName` y `linkInvoiceToObligation`. Sin migración.
 Spec/plan: `docs/superpowers/{specs,plans}/2026-07-10-migrar-boleta-periodo*`.
+
+**Ajustes durante la implementación (posteriores al spec/plan):**
+- **Tope de 40 por tanda** (el spec/plan decían 200) — ver "Riesgo gemelo" arriba.
+- La celda PERIODO en Sheets se escribe con un método dedicado **`updateInvoicePeriodCell`**
+  (`valueInputOption: "USER_ENTERED"`), no con `updateInvoicePaymentInfo` (que va en RAW para los
+  montos): así Sheets muestra el período con el mismo formato que el resto de la hoja (ej. "julio-2026")
+  en vez del literal "07/2026".
 
 ---
 

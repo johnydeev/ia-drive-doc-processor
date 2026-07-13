@@ -34,9 +34,8 @@ tanda (guardrail en los endpoints `.max(40)` + aviso en la UI).
 
 ## Migrar boleta al período siguiente (2026-07-10)
 
-**Estado: implementado y verificado (typecheck + lint 0 errores + 217 tests + build:jobs OK). Sin
-migración. Sin commitear (lo hace el owner → deploy automático). Falta verificación manual del owner
-(`npm run dev`).**
+**Estado: implementado, verificado (typecheck + lint 0 errores + 226 tests + build:jobs OK) y
+probado en producción por el owner (movió 3 boletas OK). Commiteado/deployado. Sin migración.**
 
 Acción masiva nueva en `/admin/boletas`: seleccionar boletas y moverlas al **período siguiente (+1 mes)**
 de su consorcio, resolviendo DB + Google Sheets + PDF en Drive + obligaciones de gastos fijos. Resuelve el
@@ -58,13 +57,18 @@ caso "me olvidé de cerrar el período y entraron boletas en el mes equivocado" 
 - **UI**: botón "Mover al período siguiente" + modal de 2 pasos (preview con "se moverán / se saltearán"
   → resultado con contadores) en `admin/boletas/page.tsx`.
 - **DRY**: `DEFAULT_SHEETS_MAPPING` exportado de `invoiceDeletion.ts`.
+- **Tope de 40 boletas por tanda**: cada boleta hace varias llamadas a Google → un lote grande pegaría
+  el timeout de ~100s del túnel Cloudflare (mismo 524 del incidente de `close-all`). Guardrail `.max(40)`
+  en los endpoints + aviso en la UI; el resto se hace en la siguiente tanda.
+- **Formato de la celda PERIODO**: se escribe con `updateInvoicePeriodCell` (`USER_ENTERED`), no con
+  `updateInvoicePaymentInfo` (RAW, para los montos), así Sheets la muestra igual que el resto de la hoja
+  ("julio-2026") en vez del literal "07/2026".
 
-Spec/plan: `docs/superpowers/{specs,plans}/2026-07-10-migrar-boleta-periodo*`. Decisión en
-`docs/decisiones.md` (2026-07-10).
+Spec/plan: `docs/superpowers/{specs,plans}/2026-07-10-migrar-boleta-periodo*` (el spec/plan son el
+snapshot inicial: decían tope 200 y `updateInvoicePaymentInfo`; los ajustes de arriba son posteriores,
+detallados en `docs/decisiones.md` 2026-07-10/2026-07-12).
 
-**Pendiente de verificación manual (owner, `npm run dev`):** mover boletas de un consorcio con período
-siguiente ACTIVE → verificar celda PERIODO en Sheets + PDF renombrado/movido en Drive; y probar el skip
-cuando el período siguiente no existe.
+**Verificado en producción (owner):** movió 3 boletas (1 en una tanda, 2 en otra) a julio con éxito.
 
 ## UX vista de consorcio: limpieza + Configuración con acordeón (2026-07-09)
 

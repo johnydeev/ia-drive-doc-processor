@@ -119,11 +119,11 @@ function fakeSheets(throwFirst = false) {
   let n = 0;
   return {
     calls,
-    updateInvoicePaymentInfo: async (
-      _sheet: string, _map: unknown, _keys: unknown, values: { period?: string }
+    updateInvoicePeriodCell: async (
+      _sheet: string, _map: unknown, _keys: unknown, periodLabel: string
     ) => {
       n += 1;
-      calls.push(`period:${values.period}`);
+      calls.push(`period:${periodLabel}`);
       if (throwFirst && n === 1) throw new Error("sheets fail");
       return true;
     },
@@ -165,7 +165,7 @@ describe("moveOneInvoiceToNextPeriod", () => {
     const sheets = fakeSheets();
     // envolver drive/sheets para registrar el orden global
     const drive2 = { ...drive, moveAndRenameFile: async (...a: [string, string, string, string]) => { order.push("drive"); return drive.moveAndRenameFile(...a); } };
-    const sheets2 = { ...sheets, updateInvoicePaymentInfo: async (...a: [string, unknown, unknown, { period?: string }]) => { order.push("sheets"); return sheets.updateInvoicePaymentInfo(...a); } };
+    const sheets2 = { ...sheets, updateInvoicePeriodCell: async (...a: [string, unknown, unknown, string]) => { order.push("sheets"); return sheets.updateInvoicePeriodCell(...a); } };
     const ctx = makeCtx({ drive: drive2 as never, sheets: sheets2 as never, order });
 
     const res = await moveOneInvoiceToNextPeriod(ctx, "cli1", "inv1");

@@ -1,5 +1,9 @@
 # Migrar boleta al período siguiente — Plan de implementación
 
+> **Estado:** ejecutado y en producción (2026-07-12). **Ajustes vs. este plan:** el tope por tanda es
+> **40** (no `.max(200)` como figura abajo), y la celda PERIODO se escribe con **`updateInvoicePeriodCell`**
+> (`USER_ENTERED`), no con `updateInvoicePaymentInfo`. Ver `docs/decisiones.md` (2026-07-10 / 2026-07-12).
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 > **⚠️ Regla del proyecto (OVERRIDE):** Claude **no** ejecuta `git commit` ni `git push`. Cada

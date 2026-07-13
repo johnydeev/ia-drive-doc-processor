@@ -242,18 +242,16 @@ export async function moveOneInvoiceToNextPeriod(
       }
     }
 
-    // 2. Sheets: celda PERIODO (M) → destino.
-    await ctx.sheets.updateInvoicePaymentInfo(
-      ctx.sheetName, ctx.mapping,
-      { boletaNumber: invoice.boletaNumber, sourceFileUrl: invoice.sourceFileUrl, providerTaxId: invoice.providerTaxId },
-      { period: cls.toLabel }
-    );
+    // 2. Sheets: celda PERIODO (M) → destino. USER_ENTERED para que Sheets lo
+    //    muestre con el mismo formato que el resto de la hoja (ej. "julio-2026").
+    const sheetKeys = {
+      boletaNumber: invoice.boletaNumber,
+      sourceFileUrl: invoice.sourceFileUrl,
+      providerTaxId: invoice.providerTaxId,
+    };
+    await ctx.sheets.updateInvoicePeriodCell(ctx.sheetName, ctx.mapping, sheetKeys, cls.toLabel);
     compensations.push(() =>
-      ctx.sheets.updateInvoicePaymentInfo(
-        ctx.sheetName, ctx.mapping,
-        { boletaNumber: invoice.boletaNumber, sourceFileUrl: invoice.sourceFileUrl, providerTaxId: invoice.providerTaxId },
-        { period: cls.fromLabel }
-      )
+      ctx.sheets.updateInvoicePeriodCell(ctx.sheetName, ctx.mapping, sheetKeys, cls.fromLabel)
     );
 
     // 3. DB (última, transaccional).

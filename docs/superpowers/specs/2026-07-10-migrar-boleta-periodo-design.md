@@ -1,7 +1,12 @@
 # Spec — Migrar boleta al período siguiente
 
 **Fecha:** 2026-07-10
-**Estado:** Diseño aprobado — pendiente de plan de implementación.
+**Estado:** Implementado y probado en producción (2026-07-12).
+
+> **Ajustes posteriores al spec (implementación):** el tope por tanda quedó en **40** (no 200), y la
+> celda PERIODO se escribe con un método dedicado **`updateInvoicePeriodCell`** (`USER_ENTERED`) en vez
+> de `updateInvoicePaymentInfo` (RAW), para que Sheets muestre el formato "julio-2026". Detalle en
+> `docs/decisiones.md` (2026-07-10 y 2026-07-12).
 
 ## Problema
 

@@ -579,6 +579,34 @@ export class GoogleSheetsService {
   }
 
   /**
+   * Actualiza SOLO la celda PERIODO (M) de la fila de una boleta, con
+   * `valueInputOption: "USER_ENTERED"` para que Google Sheets parsee "07/2026"
+   * como fecha y la muestre con el mismo formato que el resto de la hoja
+   * (ej. "julio-2026"). El append del pipeline usa USER_ENTERED; `updateInvoicePaymentInfo`
+   * usa RAW a propósito (para los montos ya formateados), por eso la migración de
+   * período necesita este método aparte. Retorna false si no encuentra la fila.
+   */
+  async updateInvoicePeriodCell(
+    sheetName: string,
+    mapping: SheetsRowMapping,
+    keys: { boletaNumber?: string | null; sourceFileUrl?: string | null; providerTaxId?: string | null },
+    periodLabel: string
+  ): Promise<boolean> {
+    const row = await this.findInvoiceRow(sheetName, mapping, keys);
+    if (row < 2) return false;
+
+    await this.withRetry(() =>
+      this.sheets.spreadsheets.values.update({
+        spreadsheetId: this.spreadsheetId,
+        range: `${sheetName}!${mapping.period}${row}:${mapping.period}${row}`,
+        valueInputOption: "USER_ENTERED",
+        requestBody: { values: [[periodLabel]] },
+      })
+    );
+    return true;
+  }
+
+  /**
    * Borra una fila completa de la hoja (no la blanquea — la elimina con shift up).
    * Usado al eliminar una boleta. Si no encuentra la fila, no hace nada.
    */

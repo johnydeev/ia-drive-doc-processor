@@ -10,7 +10,9 @@
   esté ACTIVE (sino saltea con aviso). Reversión por boleta ante cualquier fallo (orden Drive → Sheets →
   DB con pila de compensación LIFO). Modal de 2 pasos (preview → resultado). **Tope de 40 boletas por
   tanda** (cada una hace varias llamadas a Google → evita el timeout de ~100s del túnel; la UI avisa y
-  el resto se hace en la siguiente tanda). Sin migración de DB.
+  el resto se hace en la siguiente tanda). La celda PERIODO se escribe con `USER_ENTERED`
+  (`updateInvoicePeriodCell`) para que Sheets la muestre con el mismo formato que el resto de la hoja
+  (ej. "julio-2026"), no como texto literal "07/2026". Sin migración de DB.
 
 ### Fixed
 - **`close-all` daba 524 y avanzaba períodos de más (runaway) con muchos consorcios (2026-07-12)**.
