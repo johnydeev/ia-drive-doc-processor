@@ -33,6 +33,37 @@ export interface InsertRowResult {
   updatedRows?: number | null;
 }
 
+/** Índice pre-cargado de filas de la hoja (para no re-leerla por cada boleta). */
+export interface SheetRowIndex {
+  bySource: Map<string, number>;
+  byBoleta: Map<string, { row: number; tax: string }>;
+}
+
+/**
+ * Busca la fila (1-based) en un índice ya cargado. Misma lógica de match que
+ * `findInvoiceRow` (sourceFileUrl con prioridad; luego boletaNumber + tax opcional).
+ * Puro: testeable sin tocar la API de Sheets.
+ */
+export function findRowInIndex(
+  index: SheetRowIndex,
+  keys: { boletaNumber?: string | null; sourceFileUrl?: string | null; providerTaxId?: string | null }
+): number {
+  const source = (keys.sourceFileUrl ?? "").trim();
+  if (source) {
+    const r = index.bySource.get(source);
+    if (r) return r;
+  }
+  const boleta = (keys.boletaNumber ?? "").trim();
+  if (boleta) {
+    const hit = index.byBoleta.get(boleta);
+    if (hit) {
+      const tax = (keys.providerTaxId ?? "").replace(/\D/g, "");
+      if (!tax || !hit.tax || hit.tax === tax) return hit.row;
+    }
+  }
+  return -1;
+}
+
 const HEADER_BY_FIELD: Record<keyof SheetsRowMapping, string> = {
   boletaNumber: "NUMERO DE BOLETA",
   provider: "PROVEEDOR",
@@ -604,6 +635,60 @@ export class GoogleSheetsService {
       })
     );
     return true;
+  }
+
+  /**
+   * Lee la hoja UNA vez y arma un índice fila→claves, para actualizar muchas
+   * boletas sin re-leer la hoja por cada una. Los índices son estables mientras
+   * solo se actualicen celdas (no se inserten/borren filas).
+   */
+  async loadRowIndex(sheetName: string, mapping: SheetsRowMapping): Promise<SheetRowIndex> {
+    const range = this.getRangeFromMapping(sheetName, mapping);
+    const response = await this.withRetry(() =>
+      this.sheets.spreadsheets.values.get({ spreadsheetId: this.spreadsheetId, range })
+    );
+    const rows = response.data.values ?? [];
+    const bySource = new Map<string, number>();
+    const byBoleta = new Map<string, { row: number; tax: string }>();
+    if (rows.length < 2) return { bySource, byBoleta };
+
+    const columnOffsets = Object.values(mapping).map((c) => this.columnToIndex(c));
+    const minIndex = Math.min(...columnOffsets);
+    const idx = (col: string) => this.columnToIndex(col) - minIndex;
+    const boletaIdx = idx(mapping.boletaNumber);
+    const sourceIdx = idx(mapping.sourceFileUrl);
+    const taxIdx = idx(mapping.providerTaxId);
+
+    for (let i = 1; i < rows.length; i += 1) {
+      const row = rows[i];
+      const source = (row[sourceIdx] ?? "").toString().trim();
+      const boleta = (row[boletaIdx] ?? "").toString().trim();
+      const tax = (row[taxIdx] ?? "").toString().replace(/\D/g, "");
+      const rowNum = i + 1;
+      if (source && !bySource.has(source)) bySource.set(source, rowNum);
+      if (boleta && !byBoleta.has(boleta)) byBoleta.set(boleta, { row: rowNum, tax });
+    }
+    return { bySource, byBoleta };
+  }
+
+  /**
+   * Actualiza la celda PERIODO de una fila ya conocida (sin re-leer la hoja),
+   * con USER_ENTERED para mantener el formato de la hoja (ej. "julio-2026").
+   */
+  async updatePeriodCellAtRow(
+    sheetName: string,
+    mapping: SheetsRowMapping,
+    rowNumber: number,
+    periodLabel: string
+  ): Promise<void> {
+    await this.withRetry(() =>
+      this.sheets.spreadsheets.values.update({
+        spreadsheetId: this.spreadsheetId,
+        range: `${sheetName}!${mapping.period}${rowNumber}:${mapping.period}${rowNumber}`,
+        valueInputOption: "USER_ENTERED",
+        requestBody: { values: [[periodLabel]] },
+      })
+    );
   }
 
   /**

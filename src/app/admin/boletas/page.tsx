@@ -9,7 +9,7 @@ import { useAuthGuard } from "@/lib/useAuthGuard";
 type ThemeMode = "dark" | "light";
 const THEME_STORAGE_KEY = "dpp_admin_theme";
 /** Tope de boletas por tanda al mover de período (evita el timeout de ~100s del túnel). */
-const MAX_MOVE_BATCH = 40;
+const MAX_MOVE_BATCH = 20;
 
 type InvoiceRow = {
   id: string;
@@ -27,7 +27,7 @@ type InvoiceRow = {
 
 type Facet = { id: string; name: string };
 
-type MovePreviewItem = { invoiceId: string; consortium: string | null; movable: boolean; fromLabel?: string; toLabel?: string; skip?: string };
+type MovePreviewItem = { invoiceId: string; consortium: string | null; movable: boolean; fromLabel?: string; toLabel?: string; targetPeriodId?: string; skip?: string };
 type MoveSummary = { moved: number; skipped: Array<{ invoiceId: string; reason: string }>; failed: Array<{ invoiceId: string; error: string; reverted: boolean }>; total: number };
 
 function formatAmount(v: number | null) {
@@ -76,9 +76,11 @@ export default function BoletasEntrantesPage() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [deleting, setDeleting] = useState(false);
   const [moving, setMoving] = useState(false);
-  const [moveStep, setMoveStep] = useState<null | "preview" | "result">(null);
+  const [moveStep, setMoveStep] = useState<null | "preview" | "result" | "unknown">(null);
   const [movePreview, setMovePreview] = useState<MovePreviewItem[]>([]);
   const [moveResult, setMoveResult] = useState<MoveSummary | null>(null);
+  const [pendingMoves, setPendingMoves] = useState<Array<{ invoiceId: string; targetPeriodId: string }>>([]);
+  const [pendingItems, setPendingItems] = useState<Array<{ invoiceId: string; toLabel?: string; fromLabel?: string }>>([]);
   const [facets, setFacets] = useState<{ consortiums: Facet[]; providers: Facet[]; periods: Facet[] }>({ consortiums: [], providers: [], periods: [] });
   const [consortiumFilter, setConsortiumFilter] = useState("");
   const [providerFilter, setProviderFilter] = useState("");
@@ -177,6 +179,8 @@ export default function BoletasEntrantesPage() {
     sin_periodo: "sin período asignado",
     destino_inexistente: "el período siguiente no existe todavía (cerrá el período primero)",
     destino_cerrado: "el período siguiente está cerrado",
+    ya_en_destino: "ya estaba en el período destino",
+    destino_invalido: "el período destino ya no es válido (recargá y reintentá)",
   };
 
   const openMoveModal = useCallback(async () => {
@@ -206,27 +210,49 @@ export default function BoletasEntrantesPage() {
     }
   }, [guardedFetch, selected, selectedCount]);
 
-  const confirmMove = useCallback(async () => {
+  const runMove = useCallback(async (moves: Array<{ invoiceId: string; targetPeriodId: string }>) => {
+    if (moves.length === 0) return;
     setMoving(true);
     setError(null);
     try {
       const res = await guardedFetch("/api/client/invoices/bulk-move-period", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ invoiceIds: [...selected] }),
+        body: JSON.stringify({ moves }),
       });
-      const data = await res.json();
-      if (!res.ok || !data.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
-      setMoveResult(data as MoveSummary);
+      let data: MoveSummary | null = null;
+      try { data = (await res.json()) as MoveSummary; } catch { data = null; }
+
+      if (!res.ok || !data || !(data as unknown as { ok?: boolean }).ok) {
+        // Resultado desconocido (timeout 524 / HTML / red). NO romper.
+        setPendingMoves(moves);
+        setSelected(new Set());
+        await fetchInvoices();
+        setMoveStep("unknown");
+        return;
+      }
+
+      setMoveResult(data);
       setMoveStep("result");
       setSelected(new Set());
       await fetchInvoices();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Error al mover");
+    } catch {
+      // Error de red / timeout del fetch.
+      setPendingMoves(moves);
+      setSelected(new Set());
+      await fetchInvoices();
+      setMoveStep("unknown");
     } finally {
       setMoving(false);
     }
-  }, [guardedFetch, selected, fetchInvoices]);
+  }, [guardedFetch, fetchInvoices]);
+
+  const confirmMove = useCallback(async () => {
+    const items = movePreview.filter((i) => i.movable && i.targetPeriodId);
+    const moves = items.map((i) => ({ invoiceId: i.invoiceId, targetPeriodId: i.targetPeriodId! }));
+    setPendingItems(items.map((i) => ({ invoiceId: i.invoiceId, toLabel: i.toLabel, fromLabel: i.fromLabel })));
+    await runMove(moves);
+  }, [movePreview, runMove]);
 
   const closeMoveModal = useCallback(() => {
     setMoveStep(null);
@@ -236,6 +262,12 @@ export default function BoletasEntrantesPage() {
 
   const movableCount = movePreview.filter((i) => i.movable).length;
   const skippablePreview = movePreview.filter((i) => !i.movable);
+
+  // Conteo best-effort tras un timeout: de las que se intentaron, cuántas ya
+  // muestran el destino en la lista refrescada vs. siguen en el origen.
+  const invoiceById = useMemo(() => new Map(invoices.map((i) => [i.id, i])), [invoices]);
+  const doneCount = pendingItems.filter((it) => it.toLabel && invoiceById.get(it.invoiceId)?.period === it.toLabel).length;
+  const stillPendingCount = pendingItems.length - doneCount;
 
   const dangerBtnStyle = useMemo<React.CSSProperties>(() => ({
     background: selectedCount > 0 ? "#b91c1c" : undefined,
@@ -483,6 +515,30 @@ export default function BoletasEntrantesPage() {
                 )}
                 <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 16 }}>
                   <button type="button" className={styles.ghostBtn} onClick={closeMoveModal}>Cerrar</button>
+                </div>
+              </>
+            )}
+            {moveStep === "unknown" && (
+              <>
+                <h2 style={{ marginTop: 0 }}>No pude confirmar el resultado</h2>
+                <p>
+                  Puede que la operación haya terminado igual (los lotes grandes a veces cortan la
+                  conexión pero el proceso sigue). Revisé la lista:
+                </p>
+                <p>
+                  <strong>{doneCount}</strong> ya figuran en el período nuevo ·{" "}
+                  <strong>{stillPendingCount}</strong> podrían seguir en el anterior.
+                </p>
+                <p style={{ color: "#b45309" }}>
+                  Si quedaron pendientes, reintentá — es seguro, no mueve dos veces.
+                </p>
+                <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 16 }}>
+                  <button type="button" className={styles.ghostBtn} onClick={closeMoveModal} disabled={moving}>Cerrar</button>
+                  <button type="button" className={styles.ghostBtn}
+                    style={{ background: "#2563eb", borderColor: "#2563eb", color: "#fff" }}
+                    disabled={moving} onClick={() => void runMove(pendingMoves)}>
+                    {moving ? "Reintentando..." : "Reintentar"}
+                  </button>
                 </div>
               </>
             )}

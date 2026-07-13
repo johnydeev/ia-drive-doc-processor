@@ -1,6 +1,25 @@
 # Progreso del proyecto — drive-doc-processor
 
-Actualizado al 12/07/2026 (sesión 42).
+Actualizado al 13/07/2026 (sesión 43).
+
+## Robustez de `bulk-move-period` ante timeout 524 (2026-07-13)
+
+**Estado: implementado y verificado (typecheck + lint 0 errores + 238 tests + build + build:jobs OK).
+Sin migración. Sin commitear (lo hace el owner).**
+
+Mover ~20 boletas de período pegaba el 524 del túnel (>100s). Cambios:
+- **Sheets 1 lectura/lote:** `loadRowIndex` + `findRowInIndex` (puro) + `updatePeriodCellAtRow` (antes cada
+  boleta re-leía la hoja entera para ubicar la fila). Baja ~9s→~2-3s/boleta.
+- **Move idempotente por destino explícito:** el execute recibe `{ moves: [{invoiceId, targetPeriodId}] }`;
+  `moveOneInvoiceToTarget` "asegura X en P" (si ya está → `ya_en_destino`; valida ACTIVE + mismo consorcio
+  + mes siguiente sino `destino_invalido`). Reintentar la misma lista es seguro (no avanza de más, reconcilia
+  parciales; DB last = fuente de verdad).
+- **Frontend robusto:** ante timeout/respuesta no-JSON, en vez del error crudo muestra el paso "unknown" con
+  conteo best-effort ("N ya en el nuevo, M podrían seguir en el anterior") + botón **Reintentar**. Tope 20.
+- **Logs:** `moveLog` por boleta (paso que falló, duración, `reverted`) + resumen de lote.
+
+`moveOneInvoiceToNextPeriod`/`moveInvoicesToNextPeriod` se reemplazaron por `…Target`/`…Targets`. Spec/plan:
+`docs/superpowers/{specs,plans}/2026-07-13-bulk-move-timeout-robustez*`. Decisión en `docs/decisiones.md`.
 
 ## Fix `close-all`: 524 / runaway al cerrar período general (2026-07-12)
 

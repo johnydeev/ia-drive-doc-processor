@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import type { PrismaClient } from "@prisma/client";
-import { nextPeriod, classifyTarget, previewMove } from "./invoicePeriodMove";
+import { nextPeriod, classifyTarget, previewMove, validateTarget } from "./invoicePeriodMove";
 
 /** Invoice mínimo con los campos que usa la migración. */
 function fakeInvoice(overrides: Record<string, unknown> = {}) {
@@ -86,6 +86,7 @@ describe("previewMove", () => {
       movable: true,
       fromLabel: "06/2026",
       toLabel: "07/2026",
+      targetPeriodId: "perJul",
     });
   });
 
@@ -93,6 +94,46 @@ describe("previewMove", () => {
     const prisma = fakePrisma(fakeInvoice(), { id: "perJul", status: "CLOSED" });
     const [row] = await previewMove(prisma, "cli1", ["inv1"]);
     expect(row).toMatchObject({ invoiceId: "inv1", movable: false, skip: "destino_cerrado" });
+  });
+});
+
+describe("validateTarget", () => {
+  it("skip 'sin_periodo' si la boleta no tiene período", async () => {
+    const prisma = fakePrisma(fakeInvoice({ periodId: null, periodRef: null }), null);
+    const inv = await prisma.invoice.findFirst({} as never);
+    expect(await validateTarget(prisma, inv as never, "perJul")).toEqual({ skip: "sin_periodo" });
+  });
+
+  it("skip 'destino_invalido' si el destino no existe", async () => {
+    const prisma = fakePrisma(fakeInvoice(), null);
+    const inv = await prisma.invoice.findFirst({} as never);
+    expect(await validateTarget(prisma, inv as never, "perJul")).toEqual({ skip: "destino_invalido" });
+  });
+
+  it("skip 'destino_invalido' si el destino no está ACTIVE", async () => {
+    const prisma = fakePrisma(fakeInvoice(), { id: "perJul", status: "CLOSED", consortiumId: "cons1", year: 2026, month: 7 });
+    const inv = await prisma.invoice.findFirst({} as never);
+    expect(await validateTarget(prisma, inv as never, "perJul")).toEqual({ skip: "destino_invalido" });
+  });
+
+  it("skip 'destino_invalido' si el destino es de otro consorcio", async () => {
+    const prisma = fakePrisma(fakeInvoice(), { id: "perJul", status: "ACTIVE", consortiumId: "OTRO", year: 2026, month: 7 });
+    const inv = await prisma.invoice.findFirst({} as never);
+    expect(await validateTarget(prisma, inv as never, "perJul")).toEqual({ skip: "destino_invalido" });
+  });
+
+  it("skip 'destino_invalido' si el destino no es el mes inmediatamente siguiente", async () => {
+    const prisma = fakePrisma(fakeInvoice(), { id: "perAgo", status: "ACTIVE", consortiumId: "cons1", year: 2026, month: 8 });
+    const inv = await prisma.invoice.findFirst({} as never);
+    expect(await validateTarget(prisma, inv as never, "perAgo")).toEqual({ skip: "destino_invalido" });
+  });
+
+  it("destino válido (ACTIVE, mismo consorcio, mes siguiente) → datos del move", async () => {
+    const prisma = fakePrisma(fakeInvoice(), { id: "perJul", status: "ACTIVE", consortiumId: "cons1", year: 2026, month: 7 });
+    const inv = await prisma.invoice.findFirst({} as never);
+    expect(await validateTarget(prisma, inv as never, "perJul")).toEqual({
+      periodId: "perJul", year: 2026, month: 7, fromLabel: "06/2026", toLabel: "07/2026",
+    });
   });
 });
 
@@ -130,6 +171,8 @@ function fakeSheets(throwFirst = false) {
   };
 }
 
+import { moveOneInvoiceToTarget, type InvoiceMoveContext } from "./invoicePeriodMove";
+
 function makeCtx(opts: {
   invoice?: Record<string, unknown>;
   target?: unknown;
@@ -139,8 +182,8 @@ function makeCtx(opts: {
   dbThrows?: boolean;
 }): InvoiceMoveContext {
   const invoice = fakeInvoice(opts.invoice);
-  // "target" in opts distingue null explícito (destino inexistente) de no-provisto.
-  const target = "target" in opts ? opts.target : { id: "perJul", status: "ACTIVE" };
+  // ACTIVE, mismo consorcio (cons1), mes siguiente (07/2026) por default.
+  const target = "target" in opts ? opts.target : { id: "perJul", status: "ACTIVE", consortiumId: "cons1", year: 2026, month: 7 };
   return {
     prisma: fakePrisma(invoice, target),
     drive: opts.drive as never,
@@ -156,35 +199,57 @@ function makeCtx(opts: {
   };
 }
 
-import { moveOneInvoiceToNextPeriod, type InvoiceMoveContext } from "./invoicePeriodMove";
-
-describe("moveOneInvoiceToNextPeriod", () => {
+describe("moveOneInvoiceToTarget", () => {
   it("camino feliz: orden Drive → Sheets → DB y etiquetas correctas", async () => {
     const order: string[] = [];
     const drive = fakeDrive();
     const sheets = fakeSheets();
-    // envolver drive/sheets para registrar el orden global
     const drive2 = { ...drive, moveAndRenameFile: async (...a: [string, string, string, string]) => { order.push("drive"); return drive.moveAndRenameFile(...a); } };
     const sheets2 = { ...sheets, updateInvoicePeriodCell: async (...a: [string, unknown, unknown, string]) => { order.push("sheets"); return sheets.updateInvoicePeriodCell(...a); } };
     const ctx = makeCtx({ drive: drive2 as never, sheets: sheets2 as never, order });
 
-    const res = await moveOneInvoiceToNextPeriod(ctx, "cli1", "inv1");
+    const res = await moveOneInvoiceToTarget(ctx, "cli1", "inv1", "perJul");
 
     expect(res).toEqual({ ok: true, fromLabel: "06/2026", toLabel: "07/2026" });
     expect(order).toEqual(["drive", "sheets", "db"]);
     expect(drive.calls[0]).toBe("move:OLD_FOLDER->NEW_FOLDER:EDESUR - ALMIRANTE BROWN 706 - P07-2026 - 0001-00001234.pdf");
   });
 
-  it("falla Sheets → revierte Drive y reporta reverted:true", async () => {
+  it("idempotencia: si ya está en el destino → skip ya_en_destino sin tocar nada", async () => {
+    const order: string[] = [];
+    const drive = fakeDrive();
+    const sheets = fakeSheets();
+    const ctx = makeCtx({ invoice: { periodId: "perJul" }, drive, sheets, order });
+
+    const res = await moveOneInvoiceToTarget(ctx, "cli1", "inv1", "perJul");
+
+    expect(res).toEqual({ ok: false, skip: "ya_en_destino" });
+    expect(drive.calls).toEqual([]);
+    expect(sheets.calls).toEqual([]);
+    expect(order).toEqual([]);
+  });
+
+  it("destino inválido (otro consorcio) → skip destino_invalido sin tocar nada", async () => {
+    const order: string[] = [];
+    const drive = fakeDrive();
+    const sheets = fakeSheets();
+    const ctx = makeCtx({ target: { id: "perJul", status: "ACTIVE", consortiumId: "OTRO", year: 2026, month: 7 }, drive, sheets, order });
+
+    const res = await moveOneInvoiceToTarget(ctx, "cli1", "inv1", "perJul");
+
+    expect(res).toEqual({ ok: false, skip: "destino_invalido" });
+    expect(drive.calls).toEqual([]);
+  });
+
+  it("falla Sheets → revierte Drive, reverted:true", async () => {
     const order: string[] = [];
     const drive = fakeDrive();
     const sheets = fakeSheets(true); // lanza en la 1ª escritura
     const ctx = makeCtx({ drive, sheets, order });
 
-    const res = await moveOneInvoiceToNextPeriod(ctx, "cli1", "inv1");
+    const res = await moveOneInvoiceToTarget(ctx, "cli1", "inv1", "perJul");
 
     expect(res).toEqual({ ok: false, error: "sheets fail", reverted: true });
-    // Drive: forward + compensación (volver a OLD_FOLDER con nombre viejo)
     expect(drive.calls).toEqual([
       "move:OLD_FOLDER->NEW_FOLDER:EDESUR - ALMIRANTE BROWN 706 - P07-2026 - 0001-00001234.pdf",
       "move:NEW_FOLDER->OLD_FOLDER:EDESUR - ALMIRANTE BROWN 706 - P06-2026 - 0001-00001234.pdf",
@@ -197,12 +262,10 @@ describe("moveOneInvoiceToNextPeriod", () => {
     const sheets = fakeSheets();
     const ctx = makeCtx({ drive, sheets, order, dbThrows: true });
 
-    const res = await moveOneInvoiceToNextPeriod(ctx, "cli1", "inv1");
+    const res = await moveOneInvoiceToTarget(ctx, "cli1", "inv1", "perJul");
 
     expect(res).toEqual({ ok: false, error: "db fail", reverted: true });
-    // Sheets: forward "07/2026" + compensación "06/2026"
     expect(sheets.calls).toEqual(["period:07/2026", "period:06/2026"]);
-    // Drive: forward + compensación
     expect(drive.calls.length).toBe(2);
   });
 
@@ -212,21 +275,8 @@ describe("moveOneInvoiceToNextPeriod", () => {
     const sheets = fakeSheets();
     const ctx = makeCtx({ drive, sheets, order, dbThrows: true });
 
-    const res = await moveOneInvoiceToNextPeriod(ctx, "cli1", "inv1");
+    const res = await moveOneInvoiceToTarget(ctx, "cli1", "inv1", "perJul");
 
     expect(res).toMatchObject({ ok: false, error: "db fail", reverted: false });
-  });
-
-  it("skip se propaga sin tocar Drive/Sheets", async () => {
-    const order: string[] = [];
-    const drive = fakeDrive();
-    const sheets = fakeSheets();
-    const ctx = makeCtx({ drive, sheets, order, target: null }); // destino_inexistente
-
-    const res = await moveOneInvoiceToNextPeriod(ctx, "cli1", "inv1");
-
-    expect(res).toEqual({ ok: false, skip: "destino_inexistente" });
-    expect(drive.calls).toEqual([]);
-    expect(sheets.calls).toEqual([]);
   });
 });

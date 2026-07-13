@@ -4,6 +4,30 @@ Registro de decisiones tomadas ante problemas reales encontrados en producción.
 
 ---
 
+## 2026-07-13 — bulk-move-period: idempotencia por destino explícito + Sheets 1 lectura/lote
+
+**Problema:** mover ~20 boletas superaba los 100s → 524 de Cloudflare (HTML parseado como JSON en el
+front). Además el move no era idempotente (reintentar avanzaba +1 otra vez) y quedaba un riesgo de estado
+parcial si el proceso moría a la mitad.
+
+**Decisión:** (1) **Sheets set-based en la lectura**: leer la hoja una vez por lote (`loadRowIndex`) y
+escribir celda por celda (`updatePeriodCellAtRow`), en vez de re-leer la hoja entera por boleta. (2)
+**Idempotencia por destino explícito**: el execute recibe `targetPeriodId` por boleta; el move "asegura X
+en P" y saltea si ya está (`ya_en_destino`), validando destino ACTIVE + mismo consorcio + mes siguiente
+(`destino_invalido`). Reintentar la misma lista nunca avanza de más y reconcilia parciales (DB last =
+fuente de verdad, pasos idempotentes). (3) **Frontend**: timeout ≠ error crudo → paso "unknown" +
+Reintentar. (4) Tope 20. (5) `moveLog` estructurado (paso que falló, duración, `reverted`).
+
+**Alternativas descartadas:** cola/worker en background (opción 3) — correcto a largo plazo pero más
+trabajo; se dejó anotado. Paralelizar llamadas a Google — riesgo de carreras al crear carpetas.
+
+**Impacto:** `googleSheets.service.ts` (índice `SheetRowIndex`/`findRowInIndex` + `updatePeriodCellAtRow`),
+`invoicePeriodMove.ts` (contrato por destino: `moveOneInvoiceToTarget`/`moveInvoicesToTargets` +
+`validateTarget`), `logger.ts` (`moveLog`), endpoints `bulk-move-period`, UI `boletas/page.tsx`. Sin
+migración.
+
+---
+
 ## 2026-07-12 — `close-all`: reescritura set-based + idempotente (fix de 524 / runaway)
 
 **Problema (incidente en producción):** al apretar "Cerrar Periodo General" con **47 consorcios**,

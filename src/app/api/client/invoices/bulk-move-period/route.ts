@@ -1,27 +1,30 @@
 import { z } from "zod";
 import { apiOk, apiError, withClientAuth } from "@/lib/apiHandler";
-import { resolveMoveContext, moveInvoicesToNextPeriod } from "@/lib/invoicePeriodMove";
+import { resolveMoveContext, moveInvoicesToTargets } from "@/lib/invoicePeriodMove";
 
-// Tope de 40 por tanda: cada boleta hace ~3-4 llamadas a Google (Drive+Sheets),
-// así que un lote grande superaría el timeout de ~100s del túnel Cloudflare (524).
-// La UI también lo valida y avisa; esto es el guardrail del server.
+// Tope de 20 por tanda: cada boleta hace ~3-4 llamadas a Google; un lote más
+// grande superaría el timeout de ~100s del túnel Cloudflare (524). La UI también
+// lo valida y avisa; esto es el guardrail del server.
 const bodySchema = z.object({
-  invoiceIds: z.array(z.string().min(1)).min(1).max(40),
+  moves: z.array(z.object({
+    invoiceId: z.string().min(1),
+    targetPeriodId: z.string().min(1),
+  })).min(1).max(20),
 });
 
 /**
- * POST /api/client/invoices/bulk-move-period  { invoiceIds: string[] }
+ * POST /api/client/invoices/bulk-move-period  { moves: [{ invoiceId, targetPeriodId }] }
  *
- * Mueve cada boleta al período siguiente de su consorcio (DB + Sheets + Drive +
- * obligaciones), con reversión por boleta ante fallo. El contexto de Google se
- * resuelve una vez. Una boleta fallida/salteada no aborta el lote.
+ * Mueve cada boleta a su período destino EXPLÍCITO (idempotente: si ya está ahí,
+ * no-op). Reintentar la misma lista es seguro. Una boleta fallida/salteada no
+ * aborta el lote.
  */
 export const POST = withClientAuth(async ({ request, session }) => {
-  const { invoiceIds } = bodySchema.parse(await request.json());
+  const { moves } = bodySchema.parse(await request.json());
 
   const resolved = await resolveMoveContext(session.clientId);
   if ("error" in resolved) return apiError(new Error(resolved.error), resolved.status);
 
-  const summary = await moveInvoicesToNextPeriod(resolved.ctx, session.clientId, invoiceIds);
+  const summary = await moveInvoicesToTargets(resolved.ctx, session.clientId, moves);
   return apiOk({ ...summary });
 });

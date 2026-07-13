@@ -15,6 +15,10 @@
   (ej. "julio-2026"), no como texto literal "07/2026". Sin migración de DB.
 
 ### Fixed
+- **`bulk-move-period` daba 524 con lotes grandes (2026-07-13)**. Mover ~20 boletas superaba los 100s del
+  túnel. Se optimizó Sheets (1 lectura/lote en vez de re-leer por boleta), el move pasó a ser idempotente
+  por período destino explícito (reintentar es seguro), el frontend maneja el timeout sin romper (paso
+  "unknown" + Reintentar) y se bajó el tope a 20. Logs `moveLog` por boleta y lote.
 - **`close-all` daba 524 y avanzaba períodos de más (runaway) con muchos consorcios (2026-07-12)**.
   "Cerrar Periodo General" con 47 consorcios hacía O(N) transacciones secuenciales → superaba los
   100s → Cloudflare cortaba con 524 (el `<!DOCTYPE` que el front parseaba como JSON), pero el server

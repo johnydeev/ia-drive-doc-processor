@@ -1,10 +1,11 @@
 import type { PrismaClient } from "@prisma/client";
 import { getPrismaClient } from "@/lib/prisma";
 import { GoogleDriveService } from "@/services/googleDrive.service";
-import { GoogleSheetsService, SheetsRowMapping } from "@/services/googleSheets.service";
+import { GoogleSheetsService, SheetsRowMapping, SheetRowIndex, findRowInIndex } from "@/services/googleSheets.service";
 import { resolveStatementsFolders } from "@/services/statementsFolders.service";
 import { buildInvoiceFileName } from "@/lib/statementsNaming";
 import { linkInvoiceToObligation } from "@/services/obligation.service";
+import { moveLog, shortLogId } from "@/lib/logger";
 import {
   loadProcessingClient,
   resolveGoogleConfig,
@@ -14,7 +15,12 @@ import {
 } from "@/lib/clientProcessingConfig";
 import { DEFAULT_SHEETS_MAPPING } from "@/lib/invoiceDeletion";
 
-export type MoveSkipReason = "sin_periodo" | "destino_inexistente" | "destino_cerrado";
+export type MoveSkipReason =
+  | "sin_periodo"
+  | "destino_inexistente"
+  | "destino_cerrado"
+  | "ya_en_destino"
+  | "destino_invalido";
 
 /** Campos de la boleta que usa la migración (proyección del select). */
 export interface InvoiceForMove {
@@ -50,6 +56,7 @@ export interface MovePreviewResult {
   movable: boolean;
   fromLabel?: string;
   toLabel?: string;
+  targetPeriodId?: string;
   skip?: MoveSkipReason;
 }
 
@@ -112,6 +119,41 @@ export async function classifyTarget(
   };
 }
 
+/**
+ * Valida un período destino EXPLÍCITO para el move idempotente (execute). A
+ * diferencia de `classifyTarget` (que calcula "mes siguiente del actual" para el
+ * preview), acá el destino viene dado y se verifica: existe, ACTIVE, mismo
+ * consorcio, y es el mes inmediatamente siguiente al período actual de la boleta.
+ * (El caso "ya está en el destino" lo resuelve el caller antes de llamar acá.)
+ */
+export async function validateTarget(
+  prisma: PrismaClient,
+  invoice: InvoiceForMove,
+  targetPeriodId: string
+): Promise<{ skip: MoveSkipReason } | { periodId: string; year: number; month: number; fromLabel: string; toLabel: string }> {
+  if (!invoice.periodId || !invoice.periodRef || !invoice.consortiumRef) {
+    return { skip: "sin_periodo" };
+  }
+  const target = await prisma.period.findUnique({
+    where: { id: targetPeriodId },
+    select: { id: true, status: true, consortiumId: true, year: true, month: true },
+  });
+  if (!target || target.status !== "ACTIVE" || target.consortiumId !== invoice.consortiumRef.id) {
+    return { skip: "destino_invalido" };
+  }
+  const next = nextPeriod(invoice.periodRef.year, invoice.periodRef.month);
+  if (target.year !== next.year || target.month !== next.month) {
+    return { skip: "destino_invalido" };
+  }
+  return {
+    periodId: target.id,
+    year: target.year,
+    month: target.month,
+    fromLabel: periodLabel(invoice.periodRef.year, invoice.periodRef.month),
+    toLabel: periodLabel(target.year, target.month),
+  };
+}
+
 /** Preview sin efectos: para cada id calcula movible/skip (sólo lecturas de DB). */
 export async function previewMove(
   prisma: PrismaClient,
@@ -132,7 +174,7 @@ export async function previewMove(
     } else {
       results.push({
         invoiceId, consortium: name, movable: true,
-        fromLabel: cls.fromLabel, toLabel: cls.toLabel,
+        fromLabel: cls.fromLabel, toLabel: cls.toLabel, targetPeriodId: cls.periodId,
       });
     }
   }
@@ -151,6 +193,8 @@ export interface InvoiceMoveContext {
   statementsRootId: string;
   sheetName: string;
   mapping: SheetsRowMapping;
+  /** Índice de filas de la hoja, pre-cargado por lote para no re-leer por boleta. */
+  sheetRowIndex?: SheetRowIndex;
   /** Seams inyectables (default a la impl real; se sobreescriben en tests). */
   resolveStatements?: typeof resolveStatementsFolders;
   applyDb?: (invoice: InvoiceForMove, newPeriodId: string) => Promise<void>;
@@ -181,20 +225,36 @@ export async function applyDbMove(
 }
 
 /**
- * Mueve UNA boleta al período siguiente de su consorcio. Orden: Drive → Sheets → DB.
- * Ante cualquier fallo revierte lo ya hecho (pila de compensación LIFO) → la boleta
- * queda como estaba. Nunca lanza: devuelve un resultado discriminado.
+ * Mueve UNA boleta al período destino EXPLÍCITO `targetPeriodId` (idempotente).
+ * Orden: Drive → Sheets → DB, con pila de compensación LIFO por boleta.
+ *  - Si la boleta ya está en el destino → no-op (`ya_en_destino`).
+ *  - Valida el destino (ACTIVE, mismo consorcio, mes siguiente) → sino `destino_invalido`.
+ * Usa `ctx.sheetRowIndex` si está (escritura sin re-leer la hoja); si no, cae al
+ * método que re-lee (`updateInvoicePeriodCell`). Nunca lanza.
  */
-export async function moveOneInvoiceToNextPeriod(
+export async function moveOneInvoiceToTarget(
   ctx: InvoiceMoveContext,
   clientId: string,
-  invoiceId: string
+  invoiceId: string,
+  targetPeriodId: string
 ): Promise<MoveInvoiceResult> {
+  const started = Date.now();
+  const tag = shortLogId(invoiceId);
+
   const invoice = await loadInvoice(ctx.prisma, clientId, invoiceId);
   if (!invoice) return { ok: false, error: "Boleta no encontrada", reverted: true };
 
-  const cls = await classifyTarget(ctx.prisma, invoice);
-  if ("skip" in cls) return { ok: false, skip: cls.skip };
+  // Idempotencia: ya está en el destino → no-op.
+  if (invoice.periodId === targetPeriodId) {
+    moveLog.info(tag, "skip ya_en_destino");
+    return { ok: false, skip: "ya_en_destino" };
+  }
+
+  const v = await validateTarget(ctx.prisma, invoice, targetPeriodId);
+  if ("skip" in v) {
+    moveLog.info(tag, `skip ${v.skip}`);
+    return { ok: false, skip: v.skip };
+  }
 
   const resolveStmts = ctx.resolveStatements ?? resolveStatementsFolders;
   const applyDb = ctx.applyDb ?? ((inv, pid) => applyDbMove(ctx.prisma, inv, pid));
@@ -206,15 +266,22 @@ export async function moveOneInvoiceToNextPeriod(
   });
   const newFileName = buildInvoiceFileName({
     provider: invoice.provider, consortium: invoice.consortium,
-    month: cls.targetMonth, year: cls.targetYear,
+    month: v.month, year: v.year,
     boletaNumber: invoice.boletaNumber, documentHash: invoice.documentHash,
   });
 
+  const sheetKeys = {
+    boletaNumber: invoice.boletaNumber,
+    sourceFileUrl: invoice.sourceFileUrl,
+    providerTaxId: invoice.providerTaxId,
+  };
   const compensations: Array<() => Promise<unknown>> = [];
+  let step = "start";
 
   try {
     // 1. Drive (mover + renombrar). Sólo si la boleta tiene archivo.
     if (invoice.driveFileId) {
+      step = "drive";
       const fileId = invoice.driveFileId;
       const parents = await ctx.drive.getFileParents(fileId);
       const oldParent = parents[0] ?? null;
@@ -226,15 +293,13 @@ export async function moveOneInvoiceToNextPeriod(
           rawName: invoice.consortiumRef!.rawName,
           statementsFolderId: invoice.consortiumRef!.statementsFolderId,
         },
-        month: cls.targetMonth,
-        year: cls.targetYear,
+        month: v.month,
+        year: v.year,
       });
 
       if (oldParent && oldParent !== periodFolderId) {
         await ctx.drive.moveAndRenameFile(fileId, oldParent, periodFolderId, newFileName);
-        compensations.push(() =>
-          ctx.drive.moveAndRenameFile(fileId, periodFolderId, oldParent, oldFileName)
-        );
+        compensations.push(() => ctx.drive.moveAndRenameFile(fileId, periodFolderId, oldParent, oldFileName));
       } else {
         // Misma carpeta o sin parent conocido → sólo renombrar.
         await ctx.drive.renameFile(fileId, newFileName);
@@ -242,22 +307,25 @@ export async function moveOneInvoiceToNextPeriod(
       }
     }
 
-    // 2. Sheets: celda PERIODO (M) → destino. USER_ENTERED para que Sheets lo
-    //    muestre con el mismo formato que el resto de la hoja (ej. "julio-2026").
-    const sheetKeys = {
-      boletaNumber: invoice.boletaNumber,
-      sourceFileUrl: invoice.sourceFileUrl,
-      providerTaxId: invoice.providerTaxId,
-    };
-    await ctx.sheets.updateInvoicePeriodCell(ctx.sheetName, ctx.mapping, sheetKeys, cls.toLabel);
-    compensations.push(() =>
-      ctx.sheets.updateInvoicePeriodCell(ctx.sheetName, ctx.mapping, sheetKeys, cls.fromLabel)
-    );
+    // 2. Sheets: celda PERIODO (M) → destino.
+    step = "sheets";
+    if (ctx.sheetRowIndex) {
+      const rowNumber = findRowInIndex(ctx.sheetRowIndex, sheetKeys);
+      if (rowNumber >= 2) {
+        await ctx.sheets.updatePeriodCellAtRow(ctx.sheetName, ctx.mapping, rowNumber, v.toLabel);
+        compensations.push(() => ctx.sheets.updatePeriodCellAtRow(ctx.sheetName, ctx.mapping, rowNumber, v.fromLabel));
+      }
+    } else {
+      await ctx.sheets.updateInvoicePeriodCell(ctx.sheetName, ctx.mapping, sheetKeys, v.toLabel);
+      compensations.push(() => ctx.sheets.updateInvoicePeriodCell(ctx.sheetName, ctx.mapping, sheetKeys, v.fromLabel));
+    }
 
     // 3. DB (última, transaccional).
-    await applyDb(invoice, cls.periodId);
+    step = "db";
+    await applyDb(invoice, v.periodId);
 
-    return { ok: true, fromLabel: cls.fromLabel, toLabel: cls.toLabel };
+    moveLog.info(tag, `ok ${v.fromLabel}->${v.toLabel} ${Date.now() - started}ms`);
+    return { ok: true, fromLabel: v.fromLabel, toLabel: v.toLabel };
   } catch (err) {
     let reverted = true;
     for (const comp of compensations.reverse()) {
@@ -267,7 +335,9 @@ export async function moveOneInvoiceToNextPeriod(
         reverted = false;
       }
     }
-    return { ok: false, error: err instanceof Error ? err.message : "Error", reverted };
+    const msg = err instanceof Error ? err.message : "Error";
+    moveLog.error(tag, `failed step=${step} reverted=${reverted}: ${msg} (${Date.now() - started}ms)`);
+    return { ok: false, error: msg, reverted };
   }
 }
 
@@ -308,22 +378,37 @@ export async function resolveMoveContext(
   };
 }
 
-/** Recorre las boletas; una fallida/salteada no aborta el resto. */
-export async function moveInvoicesToNextPeriod(
+/**
+ * Mueve un lote de boletas a sus períodos destino explícitos. Pre-carga el índice
+ * de filas de Sheets UNA vez (evita N lecturas completas). Una boleta fallida o
+ * salteada no aborta el resto.
+ */
+export async function moveInvoicesToTargets(
   ctx: InvoiceMoveContext,
   clientId: string,
-  invoiceIds: string[]
+  moves: Array<{ invoiceId: string; targetPeriodId: string }>
 ): Promise<BulkMoveSummary> {
+  const started = Date.now();
+
+  if (!ctx.sheetRowIndex) {
+    try {
+      ctx.sheetRowIndex = await ctx.sheets.loadRowIndex(ctx.sheetName, ctx.mapping);
+    } catch (err) {
+      moveLog.warn("batch", `no se pudo pre-cargar el índice de Sheets: ${err instanceof Error ? err.message : "Error"}`);
+    }
+  }
+
   let moved = 0;
   const skipped: BulkMoveSummary["skipped"] = [];
   const failed: BulkMoveSummary["failed"] = [];
 
-  for (const invoiceId of invoiceIds) {
-    const r = await moveOneInvoiceToNextPeriod(ctx, clientId, invoiceId);
+  for (const { invoiceId, targetPeriodId } of moves) {
+    const r = await moveOneInvoiceToTarget(ctx, clientId, invoiceId, targetPeriodId);
     if (r.ok) moved += 1;
     else if ("skip" in r) skipped.push({ invoiceId, reason: r.skip });
     else failed.push({ invoiceId, error: r.error, reverted: r.reverted });
   }
 
-  return { moved, skipped, failed, total: invoiceIds.length };
+  moveLog.info("batch", `total=${moves.length} moved=${moved} skipped=${skipped.length} failed=${failed.length} ${Date.now() - started}ms`);
+  return { moved, skipped, failed, total: moves.length };
 }

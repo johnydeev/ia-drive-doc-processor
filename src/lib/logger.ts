@@ -10,7 +10,7 @@
 import type { AiProvider } from "@/types/aiUsage.types";
 
 type LogLevel = "info" | "warn" | "error" | "success" | "debug";
-type ProcessTag = "scheduler" | "worker" | "job" | "assign" | "run-cycle" | "repo" | "api";
+type ProcessTag = "scheduler" | "worker" | "job" | "assign" | "run-cycle" | "repo" | "api" | "move";
 
 const LEVEL_PREFIX: Record<LogLevel, string> = {
   info:    "ℹ️ ",
@@ -447,6 +447,18 @@ export const apiLog = {
   info(route: string, message: string) { log("info", "api", message, route); },
   warn(route: string, message: string) { log("warn", "api", message, route); },
   error(route: string, message: string) { log("error", "api", message, route); },
+};
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Move (migración de boletas de período) logs
+// ═══════════════════════════════════════════════════════════════════════════
+
+/** Logger de la migración de período. El primer arg es un tag (invoiceId corto o "batch"). */
+export const moveLog = {
+  debug(tag: string, message: string) { log("debug", "move", message, tag); },
+  info(tag: string, message: string) { log("info", "move", message, tag); },
+  warn(tag: string, message: string) { log("warn", "move", message, tag); },
+  error(tag: string, message: string) { log("error", "move", message, tag); },
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
