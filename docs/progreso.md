@@ -15,7 +15,11 @@ Mover ~20 boletas de período pegaba el 524 del túnel (>100s). Cambios:
   + mes siguiente sino `destino_invalido`). Reintentar la misma lista es seguro (no avanza de más, reconcilia
   parciales; DB last = fuente de verdad).
 - **Frontend robusto:** ante timeout/respuesta no-JSON, en vez del error crudo muestra el paso "unknown" con
-  conteo best-effort ("N ya en el nuevo, M podrían seguir en el anterior") + botón **Reintentar**. Tope 20.
+  conteo best-effort ("N ya en el nuevo, M podrían seguir en el anterior") + botón **Reintentar**.
+- **Tope 10 por tanda:** medido en prod, cada boleta tarda **~8.5s** (dominado por Drive, no por Sheets — un
+  lote de 20 dio 169s → 524). Con 10 (~85s) entra bajo los 100s del túnel. Verificado: un lote de 20 se
+  movió **completo y consistente** (logs `moved=20 failed=0`, DB con las 20 en julio, ninguna a medias) pero
+  con el modal "unknown"; el reintento idempotente confirma sin duplicar.
 - **Logs:** `moveLog` por boleta (paso que falló, duración, `reverted`) + resumen de lote.
 
 `moveOneInvoiceToNextPeriod`/`moveInvoicesToNextPeriod` se reemplazaron por `…Target`/`…Targets`. Spec/plan:

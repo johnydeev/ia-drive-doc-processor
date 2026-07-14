@@ -16,7 +16,15 @@ escribir celda por celda (`updatePeriodCellAtRow`), en vez de re-leer la hoja en
 en P" y saltea si ya está (`ya_en_destino`), validando destino ACTIVE + mismo consorcio + mes siguiente
 (`destino_invalido`). Reintentar la misma lista nunca avanza de más y reconcilia parciales (DB last =
 fuente de verdad, pasos idempotentes). (3) **Frontend**: timeout ≠ error crudo → paso "unknown" +
-Reintentar. (4) Tope 20. (5) `moveLog` estructurado (paso que falló, duración, `reverted`).
+Reintentar. (4) Tope 10 (ver nota de medición abajo). (5) `moveLog` estructurado (paso que falló, duración,
+`reverted`).
+
+**Medición en prod (2026-07-13):** un lote de 20 tardó **169s** (~8.5s/boleta) → cruzó los 100s → 524, pero
+se movió **completo y consistente** (idempotencia + DB last hicieron su trabajo; sin corrupción, sin crash de
+UI). El cuello de botella resultó ser **Drive** (~3 llamadas/boleta a ~1.5-2s), no Sheets — por eso la
+optimización de lectura de Sheets ayudó poco. Se bajó el tope a **10** (~85s) para que sea single-shot bajo
+100s. Pendiente si el volumen crece: paralelizar Drive (con cuidado de carreras al crear carpetas) o job en
+background (opción 3).
 
 **Alternativas descartadas:** cola/worker en background (opción 3) — correcto a largo plazo pero más
 trabajo; se dejó anotado. Paralelizar llamadas a Google — riesgo de carreras al crear carpetas.

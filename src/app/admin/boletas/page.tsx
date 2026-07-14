@@ -9,7 +9,7 @@ import { useAuthGuard } from "@/lib/useAuthGuard";
 type ThemeMode = "dark" | "light";
 const THEME_STORAGE_KEY = "dpp_admin_theme";
 /** Tope de boletas por tanda al mover de período (evita el timeout de ~100s del túnel). */
-const MAX_MOVE_BATCH = 20;
+const MAX_MOVE_BATCH = 10;
 
 type InvoiceRow = {
   id: string;
