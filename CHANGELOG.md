@@ -2,6 +2,23 @@
 
 ## [Unreleased]
 
+### Refactor
+- **Refactor incremental de `consortiums/page.tsx` — Fase 2, Tanda 1 (2026-07-16)**. Se empezó a
+  descomponer el god-component de 3105 líneas / 91 `useState`. Extraídos a `lib/` los tipos, constantes
+  y helpers puros de formato (`format.ts`, +13 tests) y matching (`match.ts`, +9 tests). Los modales
+  **Crear Consorcio** y **Crear Proveedor** pasaron a `hooks/useConsortiumForm` + `hooks/useProviderForm`
+  + `components/ConsortiumFormModal` + `components/ProviderFormModal` (tests tier 1 de hook + tier 2 de
+  componente), y **`PagosView`** se movió a `components/PagosView.tsx`. Patrón: hook por dominio
+  (estado + efectos + handlers, efectos cross-dominio vía callback `onCreated`) + componente
+  presentacional; contrato "mover, no reescribir". `page.tsx` **3105 → 2417 líneas (−688)**, sin cambios
+  de comportamiento. Spec/plan: `docs/superpowers/{specs,plans}/2026-07-16-refactor-consortiums-page*`.
+
+### Testing
+- **Infra de tests de UI (jsdom + testing-library) (2026-07-16)**. `vitest.config.ts` pasó a
+  `test.projects`: proyecto `node` para `*.test.ts` (los 299 previos, intactos) y proyecto `jsdom` para
+  `*.test.tsx` (hooks/componentes) con `vitest.setup.ts`. Nuevas devDeps: `jsdom`,
+  `@testing-library/react`/`user-event`/`jest-dom`. Total de tests: 299 → **339** (+40).
+
 ### Security
 - **Revocación de sesión en ≤60s (2026-07-15)**. Los guards de auth re-verifican `isActive` y rol
   contra la DB con cache en memoria de 60s (`src/lib/sessionRevocation.ts`): un cliente desactivado

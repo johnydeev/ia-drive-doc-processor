@@ -32,6 +32,41 @@ Spec/plan: `docs/superpowers/{specs,plans}/2026-07-15-hardening-seguridad-y-batc
 **Pendiente anotado (spec propio futuro):** job en background para operaciones batch sobre la cola
 ProcessingJob existente — eliminaría la clase entera de 524 y permitiría volver a topes altos.
 
+## Refactor `consortiums/page.tsx` — Fase 2, Tanda 1 completa (2026-07-16)
+
+**Estado: implementado y verificado (typecheck + lint 0 errores + 339 tests + build + build:jobs OK).
+Sin migración. Sin commitear (lo hace el owner con GitLens).**
+
+Primera tanda del refactor incremental del god-component `consortiums/page.tsx` (era 3105 líneas,
+91 useState). Spec/plan: `docs/superpowers/{specs,plans}/2026-07-16-refactor-consortiums-page*`.
+
+Hecho (7 pasos, bajo el contrato "mover, no reescribir" + verificación por paso):
+- **`lib/`**: `types.ts` (13 tipos), `constants.ts`, `format.ts` (+13 tests) y `match.ts` (+9 tests),
+  extraídos del tope del archivo. Grafo sin ciclos: `types` ← `format` ← `constants`; `match` → `types`.
+- **Infra de tests de UI**: jsdom + @testing-library/react/user-event/jest-dom; `vitest.config.ts`
+  pasó a `test.projects` (proyecto `node` → `*.test.ts`, proyecto `jsdom` → `*.test.tsx`) +
+  `vitest.setup.ts`. Los 299 tests previos quedaron intactos (split por extensión).
+- **Modales Crear Consorcio y Crear Proveedor**: extraídos a `hooks/useConsortiumForm` +
+  `components/ConsortiumFormModal` y `hooks/useProviderForm` + `components/ProviderFormModal`, con
+  tests tier 1 (hook: open/close, validación, éxito con `onCreated`, error de backend) + tier 2
+  (componente: render + interacción con `user-event`). Los efectos cross-dominio (refrescar lista /
+  `setProviders`) se inyectan como callback `onCreated`.
+- **`PagosView`**: movido a `components/PagosView.tsx` (mudanza literal, ya era componente con props)
+  + test tier 2.
+
+Resultado: `page.tsx` **3105 → 2417 líneas (−688)**; `lib/` + `hooks/` + `components/` poblados;
+**+40 tests nuevos** (299 → 339). El patrón hook-por-dominio + componente presentacional quedó
+validado end-to-end.
+
+Pendiente (próximas tandas, se planifican con plan propio al abrir cada una):
+- **Tanda 2**: `useConsortiumDetail` (períodos + boletas + selección + activeTab), `useObligations`,
+  modal Cerrar período.
+- **Tanda 3**: modal Boleta (crear/scan/mismatch), modal Configuración (acordeón matchNames/LSP/gastos
+  fijos), modales Pagar/Ver pagos, Cerrar Período General, Sin Asignar, useScheduler, sidebar/tema.
+
+Smoke visual interactivo: pendiente de confirmar por el owner con sesión autenticada post-deploy
+(los tests tier 2 ya cubren render + interacción de los modales y de PagosView).
+
 ## Análisis de refactor (2026-07-15, relevado — spec pendiente en próxima sesión)
 
 **Deploy del hardening (`5e2f6a0`) verificado en prod: contenedores en imagen nueva, web healthy,

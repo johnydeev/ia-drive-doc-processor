@@ -408,7 +408,7 @@ Customizable por cliente en `extractionConfigJson.columnMapping`. Fuente única 
 - **PowerShell:** No usar `&&`. Siempre comandos por separado.
 - **Migraciones:** `npx prisma migrate deploy` → `npx prisma generate`. Nunca modificar tablas en Supabase Studio directamente.
 - **Prisma generate:** Parar todos los procesos antes (el `.dll` queda bloqueado en Windows).
-- **Tests:** Vitest (`npm test` / `npx vitest run`); archivos `src/**/*.test.ts`. El pipeline tiene tests de caracterización (`processPendingDocuments.job.test.ts`): correrlos verdes ANTES y DESPUÉS de tocar el pipeline. Verificación completa: `npm run typecheck` + `npm run lint` + `npm run build:jobs`.
+- **Tests:** Vitest con **dos proyectos** (`test.projects` en `vitest.config.ts`), separados por extensión: proyecto `node` para `src/**/*.test.ts` (lógica pura de librerías/backend) y proyecto `jsdom` para `src/**/*.test.tsx` (hooks y componentes React, con `@testing-library/react`/`user-event`/`jest-dom` y setup en `vitest.setup.ts`). Convención: lógica pura → `.test.ts`; hooks/componentes → `.test.tsx`. `npm test` / `npx vitest run` corren ambos. El pipeline tiene tests de caracterización (`processPendingDocuments.job.test.ts`): correrlos verdes ANTES y DESPUÉS de tocar el pipeline. Verificación completa: `npm run typecheck` + `npm run lint` + `npm run build:jobs`.
 - **Edge Runtime (`middleware.ts`):** Usar Web Crypto API, no `import { createHmac } from "crypto"`.
 - **Tokens de IA:** `extractRelevantLines(text, 80)` — primeras 80 líneas no vacías.
 - **Formato de monto:** siempre `es-AR` con `Intl.NumberFormat`.

@@ -4,6 +4,44 @@ Registro de decisiones tomadas ante problemas reales encontrados en producción.
 
 ---
 
+## 2026-07-16 — Refactor de `consortiums/page.tsx`: hooks por dominio + verificación por tiers + infra de tests de UI
+
+**Problema:** `src/app/admin/consortiums/page.tsx` es un god-component de 3105 líneas con **91 `useState`**
+en un solo scope y ~9 modales inline. El problema real no son las líneas sino el estado concentrado:
+cualquier feature nueva lo engorda y cualquier edición es riesgosa. No tenía tests de UI (Vitest corría
+solo en entorno `node`, `*.test.ts`, lógica pura).
+
+**Decisión A — arquitectura de extracción incremental (hooks por dominio):** cada dominio se extrae a
+un **hook `useX()`** (encapsula su estado + efectos + handlers, cero JSX; los efectos cross-dominio se
+inyectan como callback `onCreated`) + un **componente presentacional** (recibe props explícitas). La
+lógica pura va a `lib/*.ts`. `page.tsx` queda como orquestador. Contrato **"mover, no reescribir"** +
+verificación por paso atómico (typecheck + lint + build + tests + smoke visual), un commit por paso.
+
+**Alternativas descartadas (A):** Context+Provider central (riesgo de re-render storms, más invasivo,
+difícil de extraer incrementalmente sin cambiar comportamiento); `useReducer` por dominio (verboso para
+UI con muchos forms, no parte el archivo por sí solo).
+
+**Decisión B — infra de tests de UI (jsdom) con verificación por tiers:** se montó jsdom +
+`@testing-library/react`/`user-event`/`jest-dom` y `vitest.config.ts` pasó a `test.projects`: proyecto
+`node` para `*.test.ts` (los 299 previos, intactos) y proyecto `jsdom` para `*.test.tsx` (hooks y
+componentes). **Split por extensión** para aislar entornos sin tocar los tests existentes. Tiers por ROI:
+0 = lógica pura (node), 1 = hooks (`renderHook`), 2 = componentes (`render` + `user-event`); tier 3
+(flujos full-page) se omite por frágil y bajo ROI. El **smoke visual** cubre el instante de la extracción
+(el test nace post-extracción); el **test** cubre el futuro — es la red que el proyecto no tenía.
+
+**Alternativas descartadas (B):** seguir sin tests de UI (deja hooks y JSX sin red — el mayor riesgo de
+un refactor sin comportamiento cambiando); `happy-dom` en vez de jsdom (se eligió jsdom por máxima
+compatibilidad/documentación con testing-library; happy-dom es un swap posterior de una línea si molesta
+la velocidad). Nota: no existía una decisión formal previa de "no testear React" — era el estado de-facto
+del `vitest.config.ts` (entorno node).
+
+**Impacto:** Tanda 1 completa — `page.tsx` 3105 → 2417 líneas (−688); nuevos `lib/`, `hooks/`,
+`components/`; `vitest.config.ts` con 2 proyectos + `vitest.setup.ts`; +40 tests (299 → 339). Spec/plan:
+`docs/superpowers/{specs,plans}/2026-07-16-refactor-consortiums-page*`. Detalle de tandas pendientes en
+`docs/progreso.md`.
+
+---
+
 ## 2026-07-15 — Revocación de sesión con cache 60s + bulk-delete a prueba de 524 + hardening
 
 **Problema (hallazgos de un análisis de seguridad/arquitectura de la lógica de negocio):**
