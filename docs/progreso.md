@@ -32,6 +32,33 @@ Spec/plan: `docs/superpowers/{specs,plans}/2026-07-15-hardening-seguridad-y-batc
 **Pendiente anotado (spec propio futuro):** job en background para operaciones batch sobre la cola
 ProcessingJob existente — eliminaría la clase entera de 524 y permitiría volver a topes altos.
 
+## Análisis de refactor (2026-07-15, relevado — spec pendiente en próxima sesión)
+
+**Deploy del hardening (`5e2f6a0`) verificado en prod: contenedores en imagen nueva, web healthy,
+logs limpios.** El owner va a abrir una sesión aparte (Opus 4.8) para el spec+plan del refactor.
+
+Candidatos relevados, por valor/riesgo (detalle discutido en sesión 44):
+1. **`withAuthParams` en `apiHandler.ts`** — los HOF `withAuth`/`withClientAuth` no soportan rutas
+   dinámicas (anotado en el propio docstring): 20 rutas `[id]` hacen guard + try/catch a mano, con
+   89 `NextResponse.json({ ok:false })` ad-hoc que además esquivan la sanitización de 500 nueva.
+   Mecánico, protegido por typecheck + routeAuthGuard.test + 299 tests. **← arrancar por acá**
+2. **Split de prompts de `extraction.ts` (1.180 líneas)** → `lib/prompts/<empresa>.ts` + shared;
+   `extraction.ts` queda como router/barrel. Riesgo bajo (strings puros, 329 líneas de tests).
+3. **`consortiums/page.tsx` (3.105 líneas, 91 useState, ~100 handlers, ~8 modales inline)** —
+   el mayor valor pero alto esfuerzo: extraer modales/solapas a `components/` + hooks por dominio,
+   **incremental (un modal por vez, verificación visual, sin cambio de comportamiento)**. Sin tests
+   de UI → pasos chicos. Estimado 2-3 sesiones dedicadas; NO mezclar con otros refactors.
+4. **`processPendingDocuments.job.ts` (1.395)** — mover los 14 pasos a `jobs/pipeline/steps/*.ts`
+   (protegido por tests de caracterización). Oportunista.
+5. **`googleSheets.service.ts` (1.060)** — split por dominio (filas/pagos/directorio/protección).
+   Oportunista.
+6. **Rutas de pagos (399 líneas)** — lógica de Drive/Sheets inline + upload de recibo duplicado con
+   `receipt/route.ts` → extraer a servicio compartido.
+
+Partición sugerida: sesión próxima = #1 + #2 (+ #6 si sobra); #3 en sesiones dedicadas; #4/#5
+cuando se toque esa área. NO tocar: `logger.ts`, `schedulerControl.service.ts` (largos pero
+cohesivos), repositories, `useAuthGuard` (el `guardedFetch` ya está centralizado — falso positivo).
+
 ## Robustez de `bulk-move-period` ante timeout 524 (2026-07-13)
 
 **Estado: implementado y verificado (typecheck + lint 0 errores + 238 tests + build + build:jobs OK).

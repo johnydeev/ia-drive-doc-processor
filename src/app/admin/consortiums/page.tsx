@@ -7,93 +7,16 @@ import { useAuthGuard } from "@/lib/useAuthGuard";
 import { cuitDigits as normCuit } from "@/lib/cuit";
 import { AsyncButton } from "@/components/AsyncButton";
 import { useAsyncAction } from "@/lib/useAsyncAction";
+import type {
+  Period, Coeficiente, Rubro, Consortium, Provider, Invoice, ScannedData,
+  InvoiceForm, LspService, ThemeMode, CloseAllPreview, FixedExpenseRow, ObligationRow,
+} from "./lib/types";
+import { TIPOS_COMPROBANTE, TIPOS_GASTO, LSP_PROVIDERS, EMPTY_INVOICE_FORM } from "./lib/constants";
+import {
+  MONTH_NAMES, formatPeriod, formatAmount, formatAmountPlain,
+  parseAmountInput, formatDate, toInputDate, todayInputDate,
+} from "./lib/format";
 
-const TIPOS_COMPROBANTE = [
-  "A", "B", "C", "E", "M", "X",
-  "Ticket", "Recibo", "Liq. Serv. Público", "Otro",
-] as const;
-
-const TIPOS_GASTO = [
-  { value: "ORDINARIO",      label: "Ordinario" },
-  { value: "EXTRAORDINARIO", label: "Extraordinario" },
-  { value: "PARTICULAR",     label: "Particular" },
-] as const;
-
-type Period      = { id: string; year: number; month: number; status: "ACTIVE" | "CLOSED"; };
-type Coeficiente = { id: string; name: string; value: number; };
-type Rubro       = { id: string; name: string; };
-type Consortium  = { id: string; canonicalName: string; rawName: string; cuit: string | null; cutoffDay: number; matchNames: string | null; bank: string | null; statementsFolderUrl: string | null; periods: Period[]; _count: { invoices: number }; activePeriodInvoiceCount: number; activePeriodDebt: number; totalDebt: number; };
-type Provider    = { id: string; canonicalName: string; cuit: string | null; paymentAlias: string | null; providerType?: "PROVEEDOR" | "EMPLEADO"; };
-type Invoice     = {
-  id: string; boletaNumber: string | null; provider: string | null; providerTaxId: string | null;
-  detail: string | null; observation: string | null; issueDate: string | null; dueDate: string | null;
-  amount: number | null; isDuplicate: boolean; isManual: boolean; sourceFileUrl: string | null;
-  tipoGasto: string; tipoComprobante: string | null; createdAt: string;
-  coeficienteRef: { id: string; name: string; value: number } | null;
-  rubroRef: { id: string; name: string } | null;
-  isPaid: boolean;
-  remainingBalance: number | null;
-  lspServiceId: string | null;
-  providerType?: "PROVEEDOR" | "EMPLEADO";
-};
-type ScannedData = {
-  boletaNumber: string | null; provider: string | null; providerTaxId: string | null;
-  detail: string | null; observation: string | null; issueDate: string | null;
-  dueDate: string | null; amount: number | null; tipoComprobante: string | null;
-};
-
-const MONTH_NAMES = ["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
-
-function formatPeriod(p: Period | null | undefined) {
-  if (!p) return "Sin período activo";
-  return `${MONTH_NAMES[p.month - 1]} ${p.year}`;
-}
-function formatAmount(v: number | null | undefined) {
-  if (v == null) return "—";
-  return new Intl.NumberFormat("es-AR", { style: "currency", currency: "ARS", minimumFractionDigits: 2 }).format(v);
-}
-// Formato es-AR sin símbolo de moneda — útil para placeholders de inputs.
-function formatAmountPlain(v: number | null | undefined) {
-  if (v == null) return "";
-  return new Intl.NumberFormat("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(v);
-}
-// Acepta lo que el usuario tipea: "97500,40", "97.500,40", "97500.40", "97,500.40".
-// Decide cuál es el separador decimal por el último que aparezca.
-function parseAmountInput(raw: string): number {
-  if (!raw) return NaN;
-  const cleaned = raw.replace(/\s/g, "").replace(/[^\d.,-]/g, "");
-  const lastComma = cleaned.lastIndexOf(",");
-  const lastDot = cleaned.lastIndexOf(".");
-  let normalized: string;
-  if (lastComma > lastDot) {
-    normalized = cleaned.replace(/\./g, "").replace(",", ".");
-  } else if (lastDot > lastComma) {
-    normalized = cleaned.replace(/,/g, "");
-  } else {
-    normalized = cleaned.replace(",", ".");
-  }
-  return Number(normalized);
-}
-function formatDate(iso: string | null | undefined) {
-  if (!iso) return "—";
-  const d = new Date(iso);
-  // Las fechas son "date-only" guardadas a medianoche UTC (issueDate, dueDate,
-  // paymentDate). Se formatean en UTC para no restar el offset de AR (UTC-3),
-  // que mostraría el día anterior.
-  return isNaN(d.getTime()) ? "—" : d.toLocaleDateString("es-AR", { timeZone: "UTC" });
-}
-function toInputDate(iso: string | null | undefined): string {
-  if (!iso) return "";
-  return iso.slice(0, 10);
-}
-function todayInputDate(): string {
-  // Fecha local (no UTC): en la madrugada AR, toISOString() devolvería el día anterior.
-  const d = new Date();
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
-  return `${y}-${m}-${day}`;
-}
 // normCuit: usar la fuente única lib/cuit (los CUITs de DB pueden venir con o sin guiones).
 function normName(v: string | null | undefined): string {
   return (v ?? "").toLowerCase().replace(/[.,\-_]/g, " ").replace(/\s+/g, " ").trim();
@@ -136,62 +59,6 @@ function matchProvider(providers: Provider[], extracted: ScannedData): Provider 
   }
   return undefined;
 }
-
-type InvoiceForm = {
-  providerId: string; boletaNumber: string; providerTaxId: string;
-  detail: string; observation: string; issueDate: string; dueDate: string;
-  amount: string; coeficienteId: string; newCoefName: string; newCoefValue: string;
-  rubroId: string; newRubroName: string;
-  tipoGasto: string; tipoComprobante: string;
-};
-
-const EMPTY_INVOICE_FORM: InvoiceForm = {
-  providerId: "", boletaNumber: "", providerTaxId: "", detail: "", observation: "",
-  issueDate: todayInputDate(), dueDate: "", amount: "",
-  coeficienteId: "", newCoefName: "", newCoefValue: "",
-  rubroId: "", newRubroName: "",
-  tipoGasto: "ORDINARIO", tipoComprobante: "",
-};
-
-type LspService = {
-  id: string; providerName: string; clientNumber: string; description: string | null;
-};
-
-const LSP_PROVIDERS = [
-  { value: "EDESUR",      label: "Edesur" },
-  { value: "AYSA",        label: "AySA" },
-  { value: "EDENOR",      label: "Edenor" },
-  { value: "METROGAS",    label: "Metrogas" },
-  { value: "NATURGY",     label: "Naturgy" },
-  { value: "CAMUZZI",     label: "Camuzzi" },
-  { value: "LITORAL_GAS", label: "Litoral Gas" },
-  { value: "PERSONAL",    label: "Personal" },
-] as const;
-
-type ThemeMode = "dark" | "light";
-
-type CloseAllPreview = {
-  majorityMonth: string | null;
-  nextMonth: string | null;
-  toClose: { id: string; canonicalName: string; currentPeriod: string; pendingObligations?: number }[];
-  toSkip: { id: string; canonicalName: string; currentPeriod: string }[];
-};
-
-type FixedExpenseRow = {
-  id: string; providerId: string | null; lspServiceId: string | null;
-  description: string | null; active: boolean;
-};
-
-type ObligationRow = {
-  id: string;
-  status: "PENDING" | "RECEIVED" | "SKIPPED" | "NOT_RECEIVED";
-  fixedExpense: {
-    description: string | null;
-    provider: { canonicalName: string } | null;
-    lspService: { providerName: string; clientNumber: string } | null;
-  };
-  invoice: { id: string; isPaid: boolean; sourceFileUrl: string | null } | null;
-};
 
 export default function ConsortiumsPage() {
   const router = useRouter();
