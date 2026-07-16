@@ -1,5 +1,9 @@
 # Robustez de `bulk-move-period` (timeout 524) — Plan de implementación
 
+> **Estado:** ejecutado y en producción (2026-07-13/14). **Ajuste vs. este plan:** el tope quedó en **10**
+> (no 20 como figura en las Tasks 4/5): medido en prod ~8.5s/boleta → 20 daba 169s/524, 10 da ~82s
+> single-shot. Además el modal de resultado desglosa los skips por motivo. Ver `docs/decisiones.md`.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 > **⚠️ Regla del proyecto (OVERRIDE):** Claude **no** ejecuta `git commit` ni `git push`. Cada commit a

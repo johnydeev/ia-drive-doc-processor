@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireClientSession } from "@/lib/clientAuth";
-import { GoogleSheetsService, SheetsRowMapping } from "@/services/googleSheets.service";
+import { GoogleSheetsService } from "@/services/googleSheets.service";
 import {
+  DEFAULT_SHEETS_MAPPING,
   loadProcessingClient,
   resolveGoogleConfig,
   resolveMapping,
@@ -9,29 +10,7 @@ import {
 } from "@/lib/clientProcessingConfig";
 import { syncInvoicePaymentsFromSheets, SyncPaymentsError } from "@/lib/syncInvoicePayments";
 
-const DEFAULT_MAPPING: SheetsRowMapping = {
-  boletaNumber: "A",
-  provider: "B",
-  consortium: "C",
-  providerTaxId: "D",
-  detail: "E",
-  observation: "F",
-  dueDate: "G",
-  amount: "H",
-  alias: "I",
-  clientNumber: "J",
-  sourceFileUrl: "K",
-  isDuplicate: "L",
-  period: "M",
-  paymentStatus: "N",
-  bank: "O",
-  remainingBalance: "P",
-  paidAmount: "Q",
-  installmentsCount: "R",
-  paymentDate: "S",
-  receiptUrl: "T",
-  paidWith: "U",
-};
+const DEFAULT_MAPPING = DEFAULT_SHEETS_MAPPING;
 
 function columnToIndex(column: string): number {
   const letters = column.trim().toUpperCase();
@@ -71,7 +50,7 @@ async function loadClientGoogleContext(clientId: string) {
  * falla, NO se aplica la protección (devuelve error con detalle).
  */
 export async function POST(request: NextRequest) {
-  const auth = requireClientSession(request);
+  const auth = await requireClientSession(request);
   if (auth.error) return auth.error;
 
   const clientId = auth.session.clientId;
@@ -164,7 +143,7 @@ export async function POST(request: NextRequest) {
  * — esa acción correrá auto-sync para volcar las ediciones a la DB.
  */
 export async function DELETE(request: NextRequest) {
-  const auth = requireClientSession(request);
+  const auth = await requireClientSession(request);
   if (auth.error) return auth.error;
 
   const clientId = auth.session.clientId;

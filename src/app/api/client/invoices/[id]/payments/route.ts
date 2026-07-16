@@ -7,34 +7,12 @@ import {
   PaymentRepository,
   PaymentError,
 } from "@/repositories/payment.repository";
-import { GoogleSheetsService, SheetsRowMapping } from "@/services/googleSheets.service";
+import { GoogleSheetsService } from "@/services/googleSheets.service";
 import { GoogleDriveService } from "@/services/googleDrive.service";
-import { loadProcessingClient, resolveGoogleConfig, resolveMapping, resolveSheetName, resolveFolders } from "@/lib/clientProcessingConfig";
+import { DEFAULT_SHEETS_MAPPING, loadProcessingClient, resolveGoogleConfig, resolveMapping, resolveSheetName, resolveFolders } from "@/lib/clientProcessingConfig";
 import { isPdf } from "@/lib/fileSignature";
 
-const DEFAULT_MAPPING: SheetsRowMapping = {
-  boletaNumber: "A",
-  provider: "B",
-  consortium: "C",
-  providerTaxId: "D",
-  detail: "E",
-  observation: "F",
-  dueDate: "G",
-  amount: "H",
-  alias: "I",
-  clientNumber: "J",
-  sourceFileUrl: "K",
-  isDuplicate: "L",
-  period: "M",
-  paymentStatus: "N",
-  bank: "O",
-  remainingBalance: "P",
-  paidAmount: "Q",
-  installmentsCount: "R",
-  paymentDate: "S",
-  receiptUrl: "T",
-  paidWith: "U",
-};
+const DEFAULT_MAPPING = DEFAULT_SHEETS_MAPPING;
 
 const MONTH_NAMES = [
   "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio",
@@ -58,7 +36,7 @@ export async function GET(
   request: NextRequest,
   context: { params: Promise<{ id: string }> }
 ) {
-  const auth = requireClientSession(request);
+  const auth = await requireClientSession(request);
   if (auth.error) return auth.error;
 
   const { id: invoiceId } = await context.params;
@@ -127,7 +105,7 @@ export async function POST(
   request: NextRequest,
   context: { params: Promise<{ id: string }> }
 ) {
-  const auth = requireClientSession(request);
+  const auth = await requireClientSession(request);
   if (auth.error) return auth.error;
 
   const { id: invoiceId } = await context.params;

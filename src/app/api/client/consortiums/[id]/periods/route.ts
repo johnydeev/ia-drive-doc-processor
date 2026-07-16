@@ -6,7 +6,7 @@ export async function GET(
   request: NextRequest,
   context: { params: Promise<{ id: string }> }
 ) {
-  const auth = requireAuthenticatedSession(request);
+  const auth = await requireAuthenticatedSession(request);
   if (auth.error) return auth.error;
 
   const { id: consortiumId } = await context.params;

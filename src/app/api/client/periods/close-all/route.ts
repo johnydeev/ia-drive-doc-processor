@@ -11,7 +11,7 @@ import { executeCloseAll } from "@/services/closePeriods.service";
  * del proxy, y un reintento es un no-op seguro (no vuelve a avanzar el período).
  */
 export async function POST(request: Request) {
-  const auth = requireClientSession(request);
+  const auth = await requireClientSession(request);
   if (auth.error) return auth.error;
 
   try {

@@ -13,7 +13,7 @@ import { syncInvoicePaymentsFromSheets, SyncPaymentsError } from "@/lib/syncInvo
  * `/api/client/setup-sheet-protection` para auto-sync antes de re-proteger).
  */
 export async function POST(request: NextRequest) {
-  const auth = requireClientSession(request);
+  const auth = await requireClientSession(request);
   if (auth.error) return auth.error;
 
   const clientId = auth.session.clientId;

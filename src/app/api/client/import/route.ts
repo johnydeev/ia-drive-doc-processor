@@ -15,7 +15,7 @@ import { cuitDigits, cuitsEqual, formatCuit } from "@/lib/cuit";
  * Comportamiento con duplicados: skip (no sobreescribe existentes).
  */
 export async function POST(request: NextRequest) {
-  const auth = requireClientSession(request);
+  const auth = await requireClientSession(request);
   if (auth.error) return auth.error;
 
   const clientId = auth.session.clientId;

@@ -55,7 +55,7 @@ const bodySchema = z
   );
 
 export async function POST(request: Request) {
-  const auth = requireAdminSession(request);
+  const auth = await requireAdminSession(request);
   if (auth.error) return auth.error;
 
   try {

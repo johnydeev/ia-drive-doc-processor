@@ -3,7 +3,7 @@ import { runProcessingCycle } from "@/jobs/runProcessingCycle";
 import { requireAdminSession } from "@/lib/adminAuth";
 
 export async function POST(req: NextRequest) {
-  const auth = requireAdminSession(req);
+  const auth = await requireAdminSession(req);
   if (auth.error) return auth.error;
 
   try {

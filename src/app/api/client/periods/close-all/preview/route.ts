@@ -9,7 +9,7 @@ const MONTH_NAMES = [
 ];
 
 export async function GET(request: Request) {
-  const auth = requireClientSession(request);
+  const auth = await requireClientSession(request);
   if (auth.error) return auth.error;
 
   const clientId = auth.session.clientId;

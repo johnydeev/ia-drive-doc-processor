@@ -6,7 +6,7 @@ export async function DELETE(
   request: NextRequest,
   context: { params: Promise<{ id: string; lspId: string }> }
 ) {
-  const auth = requireClientSession(request);
+  const auth = await requireClientSession(request);
   if (auth.error) {
     return auth.error;
   }

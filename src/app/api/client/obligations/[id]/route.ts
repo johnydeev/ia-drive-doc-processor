@@ -8,7 +8,7 @@ const patchSchema = z.object({
 });
 
 export async function PATCH(request: NextRequest, context: { params: Promise<{ id: string }> }) {
-  const auth = requireClientSession(request);
+  const auth = await requireClientSession(request);
   if (auth.error) return auth.error;
   const { id } = await context.params;
   const clientId = auth.session.clientId;

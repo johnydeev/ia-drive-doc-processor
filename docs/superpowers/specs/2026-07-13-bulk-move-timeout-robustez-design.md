@@ -1,7 +1,11 @@
 # Spec — Robustez de `bulk-move-period` ante el timeout de Cloudflare (524)
 
 **Fecha:** 2026-07-13
-**Estado:** Diseño aprobado — pendiente de plan de implementación.
+**Estado:** Implementado y probado en producción.
+
+> **Ajuste post-testing:** el spec dice tope **20**, pero medido en prod cada boleta tarda ~8.5s (dominado
+> por Drive, no Sheets): 20 dio 169s → 524, y 10 da ~82s single-shot. El tope final quedó en **10**. Además
+> el modal de resultado desglosa los skips por motivo. Detalle en `docs/decisiones.md` (2026-07-13).
 
 ## Problema
 

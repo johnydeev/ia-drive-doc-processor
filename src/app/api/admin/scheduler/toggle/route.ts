@@ -10,7 +10,7 @@ const bodySchema = z.object({
 });
 
 export async function POST(request: Request) {
-  const auth = requireAuthenticatedSession(request);
+  const auth = await requireAuthenticatedSession(request);
   if (auth.error) {
     return auth.error;
   }

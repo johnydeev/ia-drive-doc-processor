@@ -9,7 +9,7 @@ async function assertPeriodOwned(periodId: string, clientId: string) {
 }
 
 export async function GET(request: NextRequest, context: { params: Promise<{ id: string }> }) {
-  const auth = requireClientSession(request);
+  const auth = await requireClientSession(request);
   if (auth.error) return auth.error;
   const { id: periodId } = await context.params;
   const clientId = auth.session.clientId;
@@ -35,7 +35,7 @@ export async function GET(request: NextRequest, context: { params: Promise<{ id:
 }
 
 export async function POST(request: NextRequest, context: { params: Promise<{ id: string }> }) {
-  const auth = requireClientSession(request);
+  const auth = await requireClientSession(request);
   if (auth.error) return auth.error;
   const { id: periodId } = await context.params;
   const clientId = auth.session.clientId;

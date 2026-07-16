@@ -60,6 +60,20 @@ export function resolveSheetName(client: ProcessingClient): string {
   return env.GOOGLE_SHEETS_SHEET_NAME;
 }
 
+/**
+ * Mapeo de columnas por defecto de la hoja de boletas (A–U). FUENTE ÚNICA:
+ * antes estaba copiado en 6 archivos (pipeline, borrado, pagos, protección de
+ * hoja, sync de pagos) con riesgo de divergencia al agregar columnas. Los call
+ * sites hacen `resolveMapping(client) ?? DEFAULT_SHEETS_MAPPING`.
+ */
+export const DEFAULT_SHEETS_MAPPING: SheetsRowMapping = {
+  boletaNumber: "A", provider: "B", consortium: "C", providerTaxId: "D",
+  detail: "E", observation: "F", dueDate: "G", amount: "H", alias: "I",
+  clientNumber: "J", sourceFileUrl: "K", isDuplicate: "L", period: "M",
+  paymentStatus: "N", bank: "O", remainingBalance: "P", paidAmount: "Q",
+  installmentsCount: "R", paymentDate: "S", receiptUrl: "T", paidWith: "U",
+};
+
 export function resolveMapping(client: ProcessingClient): SheetsRowMapping | undefined {
   const raw = client.extractionConfigJson?.columnMapping;
   if (!raw || typeof raw !== "object") {

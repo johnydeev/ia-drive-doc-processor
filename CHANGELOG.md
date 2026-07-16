@@ -2,6 +2,51 @@
 
 ## [Unreleased]
 
+### Security
+- **Revocación de sesión en ≤60s (2026-07-15)**. Los guards de auth re-verifican `isActive` y rol
+  contra la DB con cache en memoria de 60s (`src/lib/sessionRevocation.ts`): un cliente desactivado
+  (o con rol degradado) pierde el acceso a la API en ≤60s, en vez de retenerlo hasta que expire el
+  JWT de 24h. Fail-closed con tolerancia a blips de DB (usa el último estado conocido). Los guards
+  pasaron a async (`await` propagado en las ~40 rutas que los llaman directo).
+- **Errores 500 sanitizados en producción (2026-07-15)**. `apiError` y el catch del login responden
+  "Error interno" en producción y loguean el detalle server-side (los mensajes de Prisma/Google
+  filtraban nombres de tablas, queries e IDs internos). Los errores de negocio con status explícito
+  (<500) y los de validación Zod no cambian.
+- **Login sin enumeración de usuarios (2026-07-15)**. Cuenta inactiva responde "Invalid credentials"
+  401 (igual que credenciales inválidas) en vez de "User is inactive" 403, que confirmaba la
+  existencia del email. El motivo real va al log.
+- **Firma JWT comparada en tiempo constante (2026-07-15)**. `verifySessionToken` usa
+  `timingSafeEqual` en vez de `!==` (que cortocircuita y filtra timing).
+- **Red de regresión de guards (2026-07-15)**. Test nuevo `src/app/api/routeAuthGuard.test.ts`:
+  falla si una ruta API nueva no usa `withAuth`/`withClientAuth`/`require*Session` (allowlist
+  explícita para las 5 rutas públicas intencionales). Verificado que detecta el negativo.
+
+### Fixed
+- **`bulk-delete` tenía el mismo patrón del 524 de close-all/bulk-move (2026-07-15)**. Aceptaba
+  hasta 200 boletas con ~5 llamadas externas secuenciales cada una (Drive + re-lectura de la hoja
+  entera de Sheets POR boleta) → un lote grande superaba con seguridad los ~100s del túnel. Ahora:
+  tope 10 por tanda (server `.max(10)` + aviso en la UI, mismo criterio medido de bulk-move) y la
+  hoja se lee **una vez por lote** (`deleteInvoicesWithIndex`: `loadRowIndex` + `findRowInIndex` +
+  `deleteRowAtNumber`, con `adjustIndexAfterDelete` compensando el corrimiento de filas tras cada
+  borrado). El borrado individual usa el mismo camino.
+
+### Changed
+- **Mapping de columnas de Sheets unificado (2026-07-15)**. `DEFAULT_SHEETS_MAPPING` (A–U) ahora
+  vive SOLO en `src/lib/clientProcessingConfig.ts`; se eliminaron las 6 copias locales idénticas
+  (pipeline, borrado, pagos ×2, protección de hoja, sync de pagos) que iban a divergir al agregar
+  columnas.
+- **Pasada de consistencia de docs (2026-07-15)**. CLAUDE.md al día con el código real: cadena de
+  IA (Cerebras → Gemini → OpenAI → Claude), columnas A–U de Sheets, modelos Payment/FixedExpense/
+  ExpenseObligation/ConsortiumProvider en el schema, matching de proveedor solo-CUIT, estructura de
+  endpoints (boletas, pagos, obligaciones, bulk-*), y pendientes reales (se quitaron 2 ya
+  implementados: URL de recibo y medio de pago en Sheets — columnas T y U).
+- **Catch-up de UI sin documentar (sesión 37, jul 2026 — ya deployado)**. (1) Botón "Sincronizar
+  pagos" **desactivado temporalmente** en el sidebar + botón "Consorcios" redirige a la vista
+  general (`1ddb548`). (2) **Modal de preview de boletas** (iframe de Drive `/preview`) en lugar
+  del link "Ver" en pestaña nueva; badge "Período actual" junto a "Edificios"; barra superior
+  oculta dentro de un consorcio (`ae0791f`). (3) **Cards simplificadas**: sin el período por-card
+  ni la aclaración "(todos los períodos)" en "Deuda total" (`b083eac`).
+
 ### Added
 - **Migrar boletas al período siguiente (2026-07-10)**. Nueva acción masiva en `/admin/boletas`:
   seleccionar boletas y moverlas al período siguiente (+1 mes) de su consorcio, resolviendo DB +
@@ -19,7 +64,8 @@
   túnel. Se optimizó Sheets (1 lectura/lote en vez de re-leer por boleta), el move pasó a ser idempotente
   por período destino explícito (reintentar es seguro), el frontend maneja el timeout sin romper (paso
   "unknown" + Reintentar) y se bajó el tope a 10 (medido en prod: ~8.5s/boleta, dominado por Drive; 20
-  daba 169s → 524). Logs `moveLog` por boleta y lote.
+  daba 169s → 524, 10 da ~82s single-shot). El modal de resultado desglosa los skips por motivo. Logs
+  `moveLog` por boleta y lote.
 - **`close-all` daba 524 y avanzaba períodos de más (runaway) con muchos consorcios (2026-07-12)**.
   "Cerrar Periodo General" con 47 consorcios hacía O(N) transacciones secuenciales → superaba los
   100s → Cloudflare cortaba con 524 (el `<!DOCTYPE` que el front parseaba como JSON), pero el server

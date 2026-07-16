@@ -1,4 +1,4 @@
-import { createHmac } from "crypto";
+import { createHmac, timingSafeEqual } from "crypto";
 import { NextResponse } from "next/server";
 import { ClientRole } from "@prisma/client";
 
@@ -44,7 +44,11 @@ export function verifySessionToken(token: string, secret: string): AuthSessionPa
 
   const [encodedHeader, encodedPayload, signature] = parts;
   const expected = sign(`${encodedHeader}.${encodedPayload}`, secret);
-  if (signature !== expected) {
+  // Comparación constant-time: un `!==` de strings cortocircuita en el primer
+  // byte distinto y filtra información de timing sobre la firma esperada.
+  const sigBuf = Buffer.from(signature);
+  const expectedBuf = Buffer.from(expected);
+  if (sigBuf.length !== expectedBuf.length || !timingSafeEqual(sigBuf, expectedBuf)) {
     return null;
   }
 

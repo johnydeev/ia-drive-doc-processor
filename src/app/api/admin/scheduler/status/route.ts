@@ -5,7 +5,7 @@ import { requireAuthenticatedSession } from "@/lib/adminAuth";
 import { SchedulerControlService } from "@/services/schedulerControl.service";
 
 export async function GET(request: Request) {
-  const auth = requireAuthenticatedSession(request);
+  const auth = await requireAuthenticatedSession(request);
   if (auth.error) {
     return auth.error;
   }

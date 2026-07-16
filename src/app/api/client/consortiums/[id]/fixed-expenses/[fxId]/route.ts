@@ -9,7 +9,7 @@ const patchSchema = z.object({
 });
 
 export async function PATCH(request: NextRequest, context: { params: Promise<{ id: string; fxId: string }> }) {
-  const auth = requireClientSession(request);
+  const auth = await requireClientSession(request);
   if (auth.error) return auth.error;
   const { fxId } = await context.params;
   const clientId = auth.session.clientId;
@@ -31,7 +31,7 @@ export async function PATCH(request: NextRequest, context: { params: Promise<{ i
 }
 
 export async function DELETE(request: NextRequest, context: { params: Promise<{ id: string; fxId: string }> }) {
-  const auth = requireClientSession(request);
+  const auth = await requireClientSession(request);
   if (auth.error) return auth.error;
   const { fxId } = await context.params;
   const clientId = auth.session.clientId;

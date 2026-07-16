@@ -1,6 +1,36 @@
 # Progreso del proyecto — drive-doc-processor
 
-Actualizado al 13/07/2026 (sesión 43).
+Actualizado al 15/07/2026 (sesión 44).
+
+## Hardening de seguridad + robustez batch + pasada de docs (2026-07-15)
+
+**Estado: implementado y verificado (typecheck + lint 0 errores + 299 tests + build + build:jobs OK).
+Sin migración. Sin commitear (lo hace el owner).**
+
+Origen: análisis profundo de lógica de negocio (seguridad + consistencia de docs + arquitectura).
+Spec/plan: `docs/superpowers/{specs,plans}/2026-07-15-hardening-seguridad-y-batch*`.
+
+- **`bulk-delete` a prueba de 524:** tenía el patrón exacto de los incidentes de close-all y
+  bulk-move (tope 200, ~5 llamadas externas secuenciales por boleta, re-lectura de la hoja entera
+  de Sheets POR boleta). Ahora: tope **10** por tanda (server + aviso UI) y **1 lectura de hoja por
+  lote** (`deleteInvoicesWithIndex` + `adjustIndexAfterDelete` que compensa el corrimiento de filas
+  tras cada `deleteRowAtNumber`). El borrado individual usa el mismo camino.
+- **Revocación de sesión en ≤60s:** `sessionRevocation.ts` (cache TTL 60s, fail-closed tolerante a
+  blips); los guards re-verifican `isActive`/rol contra la DB y pasaron a **async** (`await`
+  propagado en ~40 rutas). Antes un cliente desactivado retenía acceso a la API hasta 24h (solo
+  `/api/auth/me` re-chequeaba, y eso protege solo la UI).
+- **Hardening menor:** `apiError` y el catch del login sanitizan los 500 en producción (mensaje
+  genérico + log server-side); login sin enumeración (inactivo → "Invalid credentials" 401); firma
+  JWT comparada con `timingSafeEqual`.
+- **Red de regresión de guards:** `src/app/api/routeAuthGuard.test.ts` (46 rutas verificadas,
+  allowlist de 5 públicas intencionales; probado que detecta el negativo).
+- **DRY:** `DEFAULT_SHEETS_MAPPING` unificado en `clientProcessingConfig.ts` (se borraron 6 copias
+  idénticas A–U). Los tests de caracterización del pipeline pasaron antes y después.
+- **Docs:** CLAUDE.md al día (cadena IA real, columnas A–U, schema con Payment/FixedExpense/
+  ExpenseObligation/ConsortiumProvider, matching solo-CUIT, endpoints nuevos, pendientes reales).
+
+**Pendiente anotado (spec propio futuro):** job en background para operaciones batch sobre la cola
+ProcessingJob existente — eliminaría la clase entera de 524 y permitiría volver a topes altos.
 
 ## Robustez de `bulk-move-period` ante timeout 524 (2026-07-13)
 
@@ -15,7 +45,9 @@ Mover ~20 boletas de período pegaba el 524 del túnel (>100s). Cambios:
   + mes siguiente sino `destino_invalido`). Reintentar la misma lista es seguro (no avanza de más, reconcilia
   parciales; DB last = fuente de verdad).
 - **Frontend robusto:** ante timeout/respuesta no-JSON, en vez del error crudo muestra el paso "unknown" con
-  conteo best-effort ("N ya en el nuevo, M podrían seguir en el anterior") + botón **Reintentar**.
+  conteo best-effort ("N ya en el nuevo, M podrían seguir en el anterior") + botón **Reintentar**. El modal
+  de **resultado** desglosa los skips por motivo (ej. "10 ya estaban en el período destino") — así un "0
+  movidas" nunca es ambiguo.
 - **Tope 10 por tanda:** medido en prod, cada boleta tarda **~8.5s** (dominado por Drive, no por Sheets — un
   lote de 20 dio 169s → 524). Con 10 (~85s) entra bajo los 100s del túnel. Verificado: un lote de 20 se
   movió **completo y consistente** (logs `moved=20 failed=0`, DB con las 20 en julio, ninguna a medias) pero

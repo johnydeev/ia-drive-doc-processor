@@ -16,7 +16,7 @@ export async function GET(
   request: NextRequest,
   context: { params: Promise<{ id: string }> }
 ) {
-  const auth = requireAuthenticatedSession(request);
+  const auth = await requireAuthenticatedSession(request);
   if (auth.error) {
     return auth.error;
   }
@@ -55,7 +55,7 @@ export async function POST(
   request: NextRequest,
   context: { params: Promise<{ id: string }> }
 ) {
-  const auth = requireClientSession(request);
+  const auth = await requireClientSession(request);
   if (auth.error) {
     return auth.error;
   }

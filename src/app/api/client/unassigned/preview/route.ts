@@ -5,7 +5,7 @@ import { resolveGoogleConfig, resolveFolders } from "@/lib/clientProcessingConfi
 import { GoogleDriveService } from "@/services/googleDrive.service";
 
 export async function GET(request: NextRequest) {
-  const auth = requireClientSession(request);
+  const auth = await requireClientSession(request);
   if (auth.error) return auth.error;
 
   try {

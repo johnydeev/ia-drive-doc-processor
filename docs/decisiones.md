@@ -4,6 +4,61 @@ Registro de decisiones tomadas ante problemas reales encontrados en producción.
 
 ---
 
+## 2026-07-15 — Revocación de sesión con cache 60s + bulk-delete a prueba de 524 + hardening
+
+**Problema (hallazgos de un análisis de seguridad/arquitectura de la lógica de negocio):**
+1. El JWT dura 24h y ningún endpoint re-verificaba `isActive`/rol contra la DB (solo `/api/auth/me`,
+   que protege la UI): un cliente desactivado retenía acceso completo a la API hasta 24h.
+2. `bulk-delete` aceptaba 200 boletas con ~5 llamadas externas secuenciales cada una y re-leía la
+   hoja entera de Sheets POR boleta — el patrón exacto de los 524 de close-all (2026-07-12) y
+   bulk-move (2026-07-13), sin mitigar.
+3. `apiError` devolvía `error.message` crudo en los 500 (los errores de Prisma/Google filtran
+   nombres de tablas, queries, IDs); el login confirmaba la existencia de emails ("User is
+   inactive" 403) y comparaba la firma JWT con `!==` (no constant-time).
+4. El guard de auth es opt-in por ruta (el middleware solo cubre páginas `/admin`): una ruta API
+   nueva sin wrapper queda pública en silencio.
+
+**Decisiones:**
+- **Revocación:** re-chequeo de `isActive`/rol en `requireAuthenticatedSession` vía
+  `src/lib/sessionRevocation.ts` — cache en memoria por clientId con TTL **60s**, inyectable para
+  tests. Fail-closed (cliente nunca visto + DB caída → 401) pero tolerante a blips (usa el cache
+  vencido si la DB falla). El rol se toma de la DB (un downgrade también aplica en ≤60s). Los guards
+  pasaron a async (~40 rutas con `await`, cambio mecánico verificado por typecheck).
+  *Alternativas descartadas:* query por request sin cache (1 query extra en TODOS los endpoints);
+  `sessionVersion` en el token (migración de DB + igual paga la query, más complejidad por lo mismo).
+  *Nota:* cache por proceso — válido porque prod corre 1 solo contenedor `web`; anotado en
+  CLAUDE.md como punto a revisar si se escala horizontal.
+- **bulk-delete:** tope **10** por tanda (mismo criterio medido de bulk-move: ~8.5s/boleta dominado
+  por Drive) + **1 lectura de Sheets por lote**: `deleteInvoicesWithIndex` carga `loadRowIndex` una
+  vez y `deleteOneInvoice` busca con `findRowInIndex` + borra con `deleteRowAtNumber`. Como
+  `deleteDimension` corre las filas hacia arriba, la función pura nueva `adjustIndexAfterDelete`
+  (testeada) decrementa los rowNumbers mayores al borrado tras cada delete. El borrado individual
+  (`deleteInvoiceById`) usa el mismo camino con un índice de 1 uso — sin rama especial.
+  *Riesgo aceptado:* escritura concurrente del worker entre el load del índice y el delete
+  (preexistente — la ventana de `findInvoiceRow`→delete ya existía; no se amplía con lotes de 10).
+- **Sanitización de errores:** regla que preserva todos los call sites — ZodError → 400 igual;
+  status explícito <500 (error de negocio) → mensaje visible igual; **500 → "Error interno" en
+  producción** + `console.error` del detalle (en dev se muestra el mensaje real). Mismo criterio en
+  el catch del login (que además devolvía 400 para errores de DB → ahora 500).
+- **Login:** inactivo → "Invalid credentials" 401 (motivo real al log). Firma JWT →
+  `timingSafeEqual` con guard de longitud.
+- **Red de regresión:** test `routeAuthGuard.test.ts` que recorre `src/app/api/**/route.ts` y exige
+  un guard por contenido, con allowlist explícita de las 5 rutas públicas (login/logout/register/
+  health/openapi). Verificado que detecta el negativo (quitar openapi de la allowlist → falla).
+- **DRY del mapping:** `DEFAULT_SHEETS_MAPPING` (A–U) estaba copiado **6 veces** idéntico
+  (pipeline, invoiceDeletion, pagos ×2, setup-sheet-protection, syncInvoicePayments). Fuente única
+  en `clientProcessingConfig.ts` (donde vive `resolveMapping`, que es lo que todos combinan con
+  `?? DEFAULT`); `invoiceDeletion` re-exporta para los importadores existentes.
+
+**Impacto:** `sessionRevocation.ts` (+6 tests), `adminAuth.ts`/`clientAuth.ts`/`apiHandler.ts`
+(async + sanitización, +4 tests), `authSession.ts`, `login/route.ts`, `googleSheets.service.ts`
+(`deleteRowAtNumber` + `adjustIndexAfterDelete`, +2 tests), `invoiceDeletion.ts`
+(`deleteInvoicesWithIndex`, +3 tests), `bulk-delete/route.ts`, `boletas/page.tsx`,
+`routeAuthGuard.test.ts` (+46 asserts), 6 archivos del mapping, ~40 rutas con `await`. 299 tests.
+Sin migración.
+
+---
+
 ## 2026-07-13 — bulk-move-period: idempotencia por destino explícito + Sheets 1 lectura/lote
 
 **Problema:** mover ~20 boletas superaba los 100s → 524 de Cloudflare (HTML parseado como JSON en el

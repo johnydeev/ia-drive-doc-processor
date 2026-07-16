@@ -4,32 +4,10 @@ import { requireClientSession } from "@/lib/clientAuth";
 import { getPrismaClient } from "@/lib/prisma";
 import { PaymentError } from "@/repositories/payment.repository";
 import { GoogleDriveService } from "@/services/googleDrive.service";
-import { GoogleSheetsService, SheetsRowMapping } from "@/services/googleSheets.service";
-import { loadProcessingClient, resolveGoogleConfig, resolveMapping, resolveSheetName } from "@/lib/clientProcessingConfig";
+import { GoogleSheetsService } from "@/services/googleSheets.service";
+import { DEFAULT_SHEETS_MAPPING, loadProcessingClient, resolveGoogleConfig, resolveMapping, resolveSheetName } from "@/lib/clientProcessingConfig";
 
-const DEFAULT_MAPPING: SheetsRowMapping = {
-  boletaNumber: "A",
-  provider: "B",
-  consortium: "C",
-  providerTaxId: "D",
-  detail: "E",
-  observation: "F",
-  dueDate: "G",
-  amount: "H",
-  alias: "I",
-  clientNumber: "J",
-  sourceFileUrl: "K",
-  isDuplicate: "L",
-  period: "M",
-  paymentStatus: "N",
-  bank: "O",
-  remainingBalance: "P",
-  paidAmount: "Q",
-  installmentsCount: "R",
-  paymentDate: "S",
-  receiptUrl: "T",
-  paidWith: "U",
-};
+const DEFAULT_MAPPING = DEFAULT_SHEETS_MAPPING;
 
 /**
  * DELETE /api/client/invoices/[id]/payments/[paymentId]
@@ -54,7 +32,7 @@ export async function DELETE(
   request: NextRequest,
   context: { params: Promise<{ id: string; paymentId: string }> }
 ) {
-  const auth = requireClientSession(request);
+  const auth = await requireClientSession(request);
   if (auth.error) return auth.error;
 
   const { id: invoiceId, paymentId } = await context.params;

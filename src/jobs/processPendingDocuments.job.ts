@@ -1,4 +1,5 @@
 import { env } from "@/config/env";
+import { DEFAULT_SHEETS_MAPPING } from "@/lib/clientProcessingConfig";
 import { normalizeConsortiumName } from "@/lib/consortiumNormalizer";
 import { matchConsortium, matchProvider, normName } from "@/lib/assignmentMatching";
 import { cuitDigits, formatCuit, extractCuitsFromText } from "@/lib/cuit";
@@ -95,29 +96,9 @@ export type ProcessingContext = {
   linkInvoiceToObligation?: LinkInvoiceToObligation;
 };
 
-export const DEFAULT_MAPPING: SheetsRowMapping = {
-  boletaNumber: "A",
-  provider: "B",
-  consortium: "C",
-  providerTaxId: "D",
-  detail: "E",
-  observation: "F",
-  dueDate: "G",
-  amount: "H",
-  alias: "I",
-  clientNumber: "J",
-  sourceFileUrl: "K",
-  isDuplicate: "L",
-  period: "M",
-  paymentStatus: "N",
-  bank: "O",
-  remainingBalance: "P",
-  paidAmount: "Q",
-  installmentsCount: "R",
-  paymentDate: "S",
-  receiptUrl: "T",
-  paidWith: "U",
-};
+// Fuente única del mapping por defecto (ver clientProcessingConfig). Se re-exporta
+// porque el worker y los tests de caracterización lo importan de acá.
+export const DEFAULT_MAPPING: SheetsRowMapping = DEFAULT_SHEETS_MAPPING;
 
 export function createBaseSummary(totalFound: number): ProcessJobSummary {
   return {

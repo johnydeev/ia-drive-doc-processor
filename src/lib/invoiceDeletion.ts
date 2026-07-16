@@ -1,7 +1,14 @@
 import { getPrismaClient } from "@/lib/prisma";
 import { GoogleDriveService } from "@/services/googleDrive.service";
-import { GoogleSheetsService, SheetsRowMapping } from "@/services/googleSheets.service";
 import {
+  GoogleSheetsService,
+  SheetsRowMapping,
+  type SheetRowIndex,
+  findRowInIndex,
+  adjustIndexAfterDelete,
+} from "@/services/googleSheets.service";
+import {
+  DEFAULT_SHEETS_MAPPING,
   loadProcessingClient,
   resolveGoogleConfig,
   resolveMapping,
@@ -31,17 +38,9 @@ export interface InvoiceDeleteResult {
   warning?: string;
 }
 
-/**
- * Mapeo de columnas por defecto de la hoja de boletas (A–U). Se exporta para que
- * otros flujos (migración de período) reusen el mismo default sin duplicarlo.
- */
-export const DEFAULT_SHEETS_MAPPING: SheetsRowMapping = {
-  boletaNumber: "A", provider: "B", consortium: "C", providerTaxId: "D",
-  detail: "E", observation: "F", dueDate: "G", amount: "H", alias: "I",
-  clientNumber: "J", sourceFileUrl: "K", isDuplicate: "L", period: "M",
-  paymentStatus: "N", bank: "O", remainingBalance: "P", paidAmount: "Q",
-  installmentsCount: "R", paymentDate: "S", receiptUrl: "T", paidWith: "U",
-};
+// Re-export para los importadores existentes (invoicePeriodMove, tests). La
+// fuente única del mapping vive en clientProcessingConfig.
+export { DEFAULT_SHEETS_MAPPING };
 
 /**
  * Contexto compartido (config Google del cliente + servicios). Se resuelve UNA
@@ -76,12 +75,18 @@ export async function resolveDeletionContext(
   };
 }
 
-/** Borra una boleta: mueve el PDF al destino, borra recibo, fila de Sheets y DB. */
+/**
+ * Borra una boleta: mueve el PDF al destino, borra recibo, fila de Sheets y DB.
+ * La fila de Sheets se ubica en el `rowIndex` pre-cargado del lote (1 lectura de
+ * hoja por lote, no por boleta); tras borrarla, el índice se ajusta para que las
+ * boletas siguientes del lote apunten a la fila correcta (shift-up).
+ */
 export async function deleteOneInvoice(
   ctx: InvoiceDeletionContext,
   clientId: string,
   invoiceId: string,
-  destination: InvoiceDeleteDestination
+  destination: InvoiceDeleteDestination,
+  rowIndex: SheetRowIndex
 ): Promise<InvoiceDeleteResult> {
   const prisma = getPrismaClient();
 
@@ -134,13 +139,19 @@ export async function deleteOneInvoice(
     }
   }
 
-  // Fila de Sheets.
+  // Fila de Sheets: buscar en el índice del lote (sin re-leer la hoja).
   try {
-    await ctx.sheetsService.deleteInvoiceRow(ctx.sheetName, ctx.mapping, {
+    const rowNumber = findRowInIndex(rowIndex, {
       boletaNumber: invoice.boletaNumber,
       sourceFileUrl: invoice.sourceFileUrl,
       providerTaxId: invoice.providerTaxId,
     });
+    if (rowNumber >= 2) {
+      const deleted = await ctx.sheetsService.deleteRowAtNumber(ctx.sheetName, rowNumber);
+      if (deleted) adjustIndexAfterDelete(rowIndex, rowNumber);
+    }
+    // rowNumber -1: la fila no está en la hoja (desincronización previa) → se sigue
+    // igual que antes (deleteInvoiceRow devolvía false sin cortar el borrado).
   } catch (err) {
     return { ok: false, status: 502, error: `Sheets falló al borrar la fila: ${err instanceof Error ? err.message : "Error"}` };
   }
@@ -160,6 +171,25 @@ export async function deleteOneInvoice(
   return { ok: true, status: 200, warning };
 }
 
+/**
+ * Borra un lote de boletas cargando el índice de la hoja UNA sola vez.
+ * Una boleta fallida no aborta el resto. Devuelve un resultado por invoiceId
+ * en el mismo orden de entrada.
+ */
+export async function deleteInvoicesWithIndex(
+  ctx: InvoiceDeletionContext,
+  clientId: string,
+  invoiceIds: string[],
+  destination: InvoiceDeleteDestination
+): Promise<InvoiceDeleteResult[]> {
+  const rowIndex = await ctx.sheetsService.loadRowIndex(ctx.sheetName, ctx.mapping);
+  const results: InvoiceDeleteResult[] = [];
+  for (const invoiceId of invoiceIds) {
+    results.push(await deleteOneInvoice(ctx, clientId, invoiceId, destination, rowIndex));
+  }
+  return results;
+}
+
 /** Conveniencia: resuelve el contexto y borra una sola boleta. */
 export async function deleteInvoiceById(
   clientId: string,
@@ -168,5 +198,6 @@ export async function deleteInvoiceById(
 ): Promise<InvoiceDeleteResult> {
   const resolved = await resolveDeletionContext(clientId);
   if ("error" in resolved) return { ok: false, status: resolved.status, error: resolved.error };
-  return deleteOneInvoice(resolved.ctx, clientId, invoiceId, destination);
+  const [result] = await deleteInvoicesWithIndex(resolved.ctx, clientId, [invoiceId], destination);
+  return result;
 }

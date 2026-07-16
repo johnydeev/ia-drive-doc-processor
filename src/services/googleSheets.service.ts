@@ -64,6 +64,22 @@ export function findRowInIndex(
   return -1;
 }
 
+/**
+ * Ajusta el índice tras borrar una fila de la hoja: la fila borrada sale del
+ * índice y todas las filas siguientes suben una posición (deleteDimension hace
+ * shift-up). MUTA el índice recibido — el caller mantiene la referencia del lote.
+ */
+export function adjustIndexAfterDelete(index: SheetRowIndex, deletedRowNumber: number): void {
+  for (const [key, row] of index.bySource) {
+    if (row === deletedRowNumber) index.bySource.delete(key);
+    else if (row > deletedRowNumber) index.bySource.set(key, row - 1);
+  }
+  for (const [key, hit] of index.byBoleta) {
+    if (hit.row === deletedRowNumber) index.byBoleta.delete(key);
+    else if (hit.row > deletedRowNumber) index.byBoleta.set(key, { ...hit, row: hit.row - 1 });
+  }
+}
+
 const HEADER_BY_FIELD: Record<keyof SheetsRowMapping, string> = {
   boletaNumber: "NUMERO DE BOLETA",
   provider: "PROVEEDOR",
@@ -692,15 +708,11 @@ export class GoogleSheetsService {
   }
 
   /**
-   * Borra una fila completa de la hoja (no la blanquea — la elimina con shift up).
-   * Usado al eliminar una boleta. Si no encuentra la fila, no hace nada.
+   * Borra una fila YA CONOCIDA de la hoja (sin re-leerla; shift up). deleteDimension
+   * corre las filas siguientes una posición hacia arriba: el caller que trabaje con
+   * un índice pre-cargado debe ajustarlo con `adjustIndexAfterDelete`.
    */
-  async deleteInvoiceRow(
-    sheetName: string,
-    mapping: SheetsRowMapping,
-    keys: { boletaNumber?: string | null; sourceFileUrl?: string | null; providerTaxId?: string | null }
-  ): Promise<boolean> {
-    const rowNumber = await this.findInvoiceRow(sheetName, mapping, keys);
+  async deleteRowAtNumber(sheetName: string, rowNumber: number): Promise<boolean> {
     if (rowNumber < 2) return false;
 
     const sheetId = await this.getSheetId(sheetName);
@@ -728,6 +740,21 @@ export class GoogleSheetsService {
       })
     );
     return true;
+  }
+
+  /**
+   * Borra una fila completa de la hoja (no la blanquea — la elimina con shift up)
+   * buscándola por claves. Re-lee la hoja para ubicar la fila: para lotes usar
+   * `loadRowIndex` + `findRowInIndex` + `deleteRowAtNumber` (1 lectura por lote).
+   */
+  async deleteInvoiceRow(
+    sheetName: string,
+    mapping: SheetsRowMapping,
+    keys: { boletaNumber?: string | null; sourceFileUrl?: string | null; providerTaxId?: string | null }
+  ): Promise<boolean> {
+    const rowNumber = await this.findInvoiceRow(sheetName, mapping, keys);
+    if (rowNumber < 2) return false;
+    return this.deleteRowAtNumber(sheetName, rowNumber);
   }
 
   async updateInvoicePaymentInfo(

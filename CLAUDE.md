@@ -1,5 +1,5 @@
 # CLAUDE.md — drive-doc-processor
-Contexto completo del proyecto para Claude Code. Actualizado al 26/03/2026.
+Contexto completo del proyecto para Claude Code. Actualizado al 15/07/2026.
 ---
 ## Al iniciar sesión
 Siempre leer docs/progreso.md antes de empezar para entender el estado actual del proyecto y los próximos pasos.
@@ -28,7 +28,7 @@ Registro cronológico de cambios por fecha. Incluir highlights de lo que se hizo
 ---
 ## Descripción del proyecto
 Sistema multi-tenant en **Next.js + TypeScript + Prisma + PostgreSQL (Supabase)** para administración de consorcios de propiedad horizontal en Argentina.
-Procesa automáticamente PDFs de facturas/boletas desde Google Drive usando IA (Gemini → OpenAI fallback), extrae datos estructurados, los guarda en la DB y los envía a Google Sheets.
+Procesa automáticamente PDFs de facturas/boletas desde Google Drive usando IA (cadena de fallback **Cerebras → Gemini → OpenAI → Claude**; Groq soportado por `createAiExtractionChain` pero fuera de la cadena de producción desde 2026-06-25), extrae datos estructurados, los guarda en la DB y los envía a Google Sheets.
 ---
 
 ## Arquitectura del sistema
@@ -51,16 +51,24 @@ src/
 │   │   │   ├── audit/         # logs de auditoría
 │   │   │   └── scheduler/     # control scheduler
 │   │   └── client/
-│   │       ├── consortiums/   # CRUD + periods + invoices + scan + receipt
+│   │       ├── consortiums/   # CRUD + periods + invoices + scan + receipt + fixed-expenses + lsp-services
 │   │       ├── providers/     # CRUD proveedores
 │   │       ├── rubros/        # CRUD rubros (nivel cliente)
 │   │       ├── coeficientes/  # CRUD coeficientes (nivel cliente)
+│   │       ├── invoices/      # vista global: listado + [id]/payments (pagos)
+│   │       │   ├── bulk-delete/       # POST borrado masivo (tope 10/tanda)
+│   │       │   └── bulk-move-period/  # POST mover al período siguiente (+ preview, tope 10/tanda)
+│   │       ├── obligations/   # PATCH [id]: omitir/reactivar obligación de gasto fijo
 │   │       ├── periods/
+│   │       │   ├── [id]/obligations/  # GET + POST generar obligaciones del período
 │   │       │   └── close-all/ # preview (GET) + execute (POST) cierre general
 │   │       ├── sync-directory/ # POST: sincroniza archivo ALTA (Sheets → DB)
+│   │       ├── sync-payments/  # POST: sincroniza pagos Sheets → DB
+│   │       ├── setup-sheet-protection/ # POST: protege columnas de la hoja Datos
 │   │       └── import/        # importación Excel (+ template)
 │   └── admin/
 │       ├── consortiums/       # UI principal de gestión
+│       ├── boletas/           # UI vista global "Boletas entrantes" (borrado/move masivo)
 │       ├── clients/
 │       │   └── [id]/          # UI edición de configuración de cliente
 │       └── page.tsx           # Panel admin principal
@@ -99,7 +107,14 @@ Client          → Tenant. Roles: ADMIN / CLIENT / VIEWER. consortiumsEnabled (
   │                 lspServiceId / paymentMethod (nullable)
   │                 receiptDriveFileId / receiptDriveFileUrl (recibo de pago)
   │                 tokensInput / tokensOutput / tokensTotal / aiProvider / aiModel (IA tracking)
+  │   └── Payment   → Pago registrado (parcial o total). amount + paymentDate +
+  │                   paymentType (TOTAL/LIBRE/CUOTA) + installmentNumber/totalInstallments +
+  │                   driveFileId/Url (comprobante) + paymentMethod
   ├── Receipt     → Recibo de pago (modelo separado, relacionado 1:1 con Invoice)
+  ├── FixedExpense → Gasto fijo mensual por consorcio. Apunta a Provider? o LspService? + active
+  │   └── ExpenseObligation → Instancia por período. status: PENDING/RECEIVED/SKIPPED/NOT_RECEIVED
+  │                           + invoiceId? (se vincula solo cuando llega la boleta). Unique (periodId, fixedExpenseId)
+  ├── ConsortiumProvider → Relación N:M consorcio↔proveedor. Unique (consortiumId, providerId)
   ├── ProcessingJob → Cola de jobs (PENDING/PROCESSING/COMPLETED/FAILED)
   ├── SchedulerState → Estado runtime del scheduler por cliente
   │                    lastDirectorySyncAt: última sincronización ALTA
@@ -184,7 +199,7 @@ Siempre usar `resolveGoogleConfig(client)` para construir el `GoogleSheetsServic
 1. **Download** PDF desde Drive
 2. **Dedup hash** → SHA256 del binario
 3. **Extracción texto** (`textExtractStep`, sin tokens) → pdf-parse → fallback OCR (tesseract). Luego **triage capa 1** (`documentTriageGate`): heurística `classifyDocumentType` sobre el texto ANTES de la IA → si es claramente no-boleta (oblea, certificado de fumigación, plano…) se renombra `[NO BOLETA]` y va a Revisión **sin gastar tokens** (sesgo conservador: ante la duda, es boleta).
-4. **Extracción IA** (`aiExtractStep`) → Gemini → fallback OpenAI → fallback OCR_ONLY. Luego **triage capa 2** (`isBoletaGate`): si la IA devolvió `isBoleta=false` → `[NO BOLETA]` + Revisión.
+4. **Extracción IA** (`aiExtractStep`) → cadena Cerebras → Gemini → OpenAI → Claude (fallback final OCR_ONLY). Luego **triage capa 2** (`isBoletaGate`): si la IA devolvió `isBoleta=false` → `[NO BOLETA]` + Revisión.
 5. **Dedup business key** → boletaNumber + providerTaxId + dueDate + amount
 6. **Resolve assignment** → match consorcio + proveedor + período activo del consorcio
 7. **Canonización** → reemplazar datos OCR por datos canónicos de DB
@@ -201,10 +216,14 @@ Siempre usar `resolveGoogleConfig(client)` para construir el `GoogleSheetsServic
 1. **Exacto** → `normalizeConsortiumName(rawOcr) === canonicalName`
 2. **Fuzzy** → todos los tokens de `canonicalName` aparecen en `rawOcr`
 3. **Alias** → el rawOcr coincide con algún alias registrado en `consortium.aliases`
-### Matching de proveedor (3 niveles)
-1. **CUIT normalizado** (solo dígitos) — excluye el CUIT del consorcio
-2. **Nombre exacto** o alias normalizado
-3. **Nombre parcial** (substring)
+### Matching de proveedor (SOLO CUIT desde 2026-07-02)
+- **CUIT normalizado** (solo dígitos) — excluye el CUIT del consorcio. Si la boleta no trae el
+  CUIT del proveedor (o está solo en el logo/imagen sin buen OCR) → **Sin Asignar por diseño**.
+- **Excepción:** el match por nombre queda habilitado (parámetro `allowNameMatch`) SOLO para
+  sindicales/ARCA (SUTERH/FATERYH/SERACARH/ARCA), que no tienen CUIT propio en el papel
+  (el CUIT impreso es del consorcio contribuyente).
+- Motivo del cambio: una factura de un proveedor no cargado se asignaba a otro por el
+  fallback de nombre parcial (caso ASCENSORES POTENZA). Ver `docs/decisiones.md` 2026-07-02.
 ---
 ## Extracción IA (src/lib/extraction.ts)
 El sistema detecta automáticamente el tipo de documento con `identifyLSPProvider()` y rutea al prompt específico de cada empresa.
@@ -360,15 +379,16 @@ Diagnóstico consistencia Sheets↔DB: `npx tsx scripts/diag-sheets-consistency.
 ---
 ## Google Sheets — columnas por defecto
 ```
-A = boletaNumber     H = amount  (formato: "$ 118.000,00")
-B = provider         I = alias
-C = consortium       J = clientNumber  (NRO CLIENTE)
-D = providerTaxId    K = sourceFileUrl
-E = detail           L = isDuplicate
-F = observation      M = period  (formato: "MM/YYYY")
-G = dueDate
+A = boletaNumber     H = amount  (formato: "$ 118.000,00")   O = bank
+B = provider         I = alias                               P = remainingBalance (SALDO PENDIENTE)
+C = consortium       J = clientNumber  (NRO CLIENTE)         Q = paidAmount (MONTO PAGADO)
+D = providerTaxId    K = sourceFileUrl                       R = installmentsCount (CANT CUOTAS)
+E = detail           L = isDuplicate                         S = paymentDate (FECHA PAGO)
+F = observation      M = period  (formato: "MM/YYYY")        T = receiptUrl (URL COMPROBANTE)
+G = dueDate          N = paymentStatus (ESTADO PAGO)         U = paidWith (MEDIO PAGO)
 ```
-Customizable por cliente en `extractionConfigJson.columnMapping`.
+Customizable por cliente en `extractionConfigJson.columnMapping`. Fuente única del default:
+`DEFAULT_SHEETS_MAPPING` en `src/lib/clientProcessingConfig.ts` (no crear copias locales).
 ---
 ## UI del panel cliente (`/admin/consortiums`)
 ### Estructura visual
@@ -400,10 +420,13 @@ Customizable por cliente en `extractionConfigJson.columnMapping`.
 ### Features pendientes
 - [ ] UI de gestión de carpetas Drive por cliente desde el panel
 - [ ] Resincronización automática con Sheets cuando Google falla
-- [ ] Agregar URL de recibo a columna de Google Sheets
 - [ ] UI para asignar Rubro y Coeficiente a invoices individuales desde el panel (Stage 2)
-- [ ] Columna paymentMethod en Sheets (Stage 2)
 - [ ] UI de gestión de LspServices desde el panel (hoy solo via archivo ALTA)
+- [ ] Job en background para operaciones batch (bulk-move / bulk-delete): hoy van por request
+      con tope 10/tanda por el timeout de ~100s del túnel; la cola ProcessingJob + worker ya
+      existen — spec propio pendiente
+- [ ] Revocación de sesión: si algún día el `web` escala a más de 1 instancia, revisar el
+      cache por proceso de `sessionRevocation.ts` (TTL 60s converge solo, evaluar si alcanza)
 ---
 ## Docker (producción)
 ### Imagen

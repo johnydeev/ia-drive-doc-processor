@@ -3,7 +3,7 @@ import { requireAuthenticatedSession } from "@/lib/adminAuth";
 import { getPrismaClient } from "@/lib/prisma";
 
 export async function GET(request: Request) {
-  const auth = requireAuthenticatedSession(request);
+  const auth = await requireAuthenticatedSession(request);
   if (auth.error) {
     return auth.error;
   }

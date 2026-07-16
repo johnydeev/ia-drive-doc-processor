@@ -5,8 +5,8 @@ import { ExtractedDocumentData } from "@/types/extractedDocument.types";
 /**
  * Contrato común de un extractor de datos estructurados por IA.
  *
- * Los tres servicios (Gemini / OpenAI / Claude) ya exponían esta misma forma
- * de manera implícita; declararla explícitamente permite tratarlos de forma
+ * Todos los servicios (Cerebras / Groq / Gemini / OpenAI / Claude) exponen esta
+ * misma forma; declararla explícitamente permite tratarlos de forma
  * intercambiable (Strategy) y encadenarlos como fallback (Chain of
  * Responsibility) sin duplicar la lógica de reintento en cada caller.
  */
@@ -24,8 +24,9 @@ export interface AiProviderCredentials {
 
 /**
  * Configuración para construir la cadena. El orden de fallback es fijo:
- * Gemini → OpenAI → Claude. Solo se incluyen los proveedores que tienen
- * `apiKey` presente.
+ * Cerebras → Groq → Gemini → OpenAI → Claude (ver `createAiExtractionChain`).
+ * Solo se incluyen los proveedores que tienen `apiKey` presente; en producción
+ * Groq está fuera de la cadena (sin API key) desde 2026-06-25.
  */
 export interface AiExtractionChainConfig {
   cerebras?: AiProviderCredentials;

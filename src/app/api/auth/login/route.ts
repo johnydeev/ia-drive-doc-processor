@@ -43,7 +43,9 @@ export async function POST(request: Request) {
     }
 
     if (!user.isActive) {
-      return NextResponse.json({ ok: false, error: "User is inactive" }, { status: 403 });
+      // Misma respuesta que credenciales inválidas: no confirmar que el email existe.
+      console.warn(`[login] intento de login de cuenta inactiva: ${user.id}`);
+      return NextResponse.json({ ok: false, error: "Invalid credentials" }, { status: 401 });
     }
 
     const valid = await verifyPassword(body.password, user.passwordHash);
@@ -73,13 +75,21 @@ export async function POST(request: Request) {
 
     return response;
   } catch (error) {
+    if (error instanceof z.ZodError) {
+      return NextResponse.json(
+        { ok: false, error: error.issues.map((issue) => issue.message).join(", ") },
+        { status: 400 }
+      );
+    }
+
+    // Error inesperado (DB caída, etc.): no filtrar el mensaje interno al cliente.
+    console.error("[login] error interno:", error);
     const message =
-      error instanceof z.ZodError
-        ? error.issues.map((issue) => issue.message).join(", ")
+      process.env.NODE_ENV === "production"
+        ? "Error interno"
         : error instanceof Error
           ? error.message
           : "Unknown error";
-
-    return NextResponse.json({ ok: false, error: message }, { status: 400 });
+    return NextResponse.json({ ok: false, error: message }, { status: 500 });
   }
 }

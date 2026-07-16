@@ -26,7 +26,10 @@ export function apiOk(data: Record<string, unknown> = {}, status = 200): NextRes
 /**
  * Respuesta de error normalizada.
  * - `ZodError` → 400 con los mensajes de validación concatenados.
- * - Resto → `fallbackStatus` (500 por defecto) con el message del Error.
+ * - Status explícito < 500 (error de negocio intencional) → mensaje visible.
+ * - Status 500 (error inesperado): en producción responde genérico y loguea el
+ *   detalle server-side — los mensajes de Prisma/Google traen nombres de tablas,
+ *   queries e IDs internos que no deben llegar al cliente.
  */
 export function apiError(error: unknown, fallbackStatus = 500): NextResponse {
   if (error instanceof z.ZodError) {
@@ -37,6 +40,11 @@ export function apiError(error: unknown, fallbackStatus = 500): NextResponse {
   }
 
   const message = error instanceof Error ? error.message : "Unknown error";
+  if (fallbackStatus >= 500) {
+    console.error("[apiError] error interno:", error);
+    const publicMessage = process.env.NODE_ENV === "production" ? "Error interno" : message;
+    return NextResponse.json({ ok: false, error: publicMessage }, { status: fallbackStatus });
+  }
   return NextResponse.json({ ok: false, error: message }, { status: fallbackStatus });
 }
 
@@ -51,7 +59,7 @@ type ApiHandler = (ctx: {
  */
 export function withAuth(handler: ApiHandler) {
   return async (request: Request): Promise<NextResponse> => {
-    const auth = requireAuthenticatedSession(request);
+    const auth = await requireAuthenticatedSession(request);
     if (auth.error) return auth.error;
     try {
       return await handler({ request, session: auth.session });
@@ -67,7 +75,7 @@ export function withAuth(handler: ApiHandler) {
  */
 export function withClientAuth(handler: ApiHandler) {
   return async (request: Request): Promise<NextResponse> => {
-    const auth = requireClientSession(request);
+    const auth = await requireClientSession(request);
     if (auth.error) return auth.error;
     try {
       return await handler({ request, session: auth.session });

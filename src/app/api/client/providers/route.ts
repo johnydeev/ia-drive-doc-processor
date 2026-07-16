@@ -11,7 +11,7 @@ const createSchema = z.object({
 });
 
 export async function GET(request: Request) {
-  const auth = requireAuthenticatedSession(request);
+  const auth = await requireAuthenticatedSession(request);
   if (auth.error) return auth.error;
 
   try {
@@ -30,7 +30,7 @@ export async function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
-  const auth = requireAuthenticatedSession(request);
+  const auth = await requireAuthenticatedSession(request);
   if (auth.error) return auth.error;
 
   if (auth.session.role !== "CLIENT" && auth.session.role !== "ADMIN") {

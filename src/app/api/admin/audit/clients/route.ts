@@ -3,7 +3,7 @@ import { requireAdminSession } from "@/lib/adminAuth";
 import { getPrismaClient } from "@/lib/prisma";
 
 export async function GET(request: Request) {
-  const auth = requireAdminSession(request);
+  const auth = await requireAdminSession(request);
   if (auth.error) return auth.error;
 
   try {

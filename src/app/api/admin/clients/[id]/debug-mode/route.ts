@@ -12,7 +12,7 @@ export async function PATCH(
   request: NextRequest,
   context: { params: Promise<{ id: string }> }
 ) {
-  const auth = requireAdminSession(request);
+  const auth = await requireAdminSession(request);
   if (auth.error) return auth.error;
 
   const { id } = await context.params;

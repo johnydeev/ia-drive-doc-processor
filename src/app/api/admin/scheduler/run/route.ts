@@ -3,7 +3,7 @@ import { requireAuthenticatedSession } from "@/lib/adminAuth";
 import { runProcessingCycle } from "@/jobs/runProcessingCycle";
 
 export async function POST(request: Request) {
-  const auth = requireAuthenticatedSession(request);
+  const auth = await requireAuthenticatedSession(request);
   if (auth.error) {
     return auth.error;
   }

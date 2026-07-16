@@ -5,10 +5,10 @@ import { requireAuthenticatedSession, type AuthenticatedSession } from "@/lib/ad
  * Verifica que el request tenga una sesión autenticada con rol CLIENT o ADMIN.
  * Los VIEWER no tienen acceso a endpoints de cliente que mutan datos.
  */
-export function requireClientSession(
+export async function requireClientSession(
   request: Request
-): { session: AuthenticatedSession; error: null } | { session: null; error: NextResponse } {
-  const auth = requireAuthenticatedSession(request);
+): Promise<{ session: AuthenticatedSession; error: null } | { session: null; error: NextResponse }> {
+  const auth = await requireAuthenticatedSession(request);
   if (auth.error) {
     return auth;
   }

@@ -16,7 +16,7 @@ export async function POST(
   request: NextRequest,
   context: { params: Promise<{ id: string; invoiceId: string }> }
 ) {
-  const auth = requireClientSession(request);
+  const auth = await requireClientSession(request);
   if (auth.error) return auth.error;
 
   const { id: consortiumId, invoiceId } = await context.params;

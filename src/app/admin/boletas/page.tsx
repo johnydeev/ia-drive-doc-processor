@@ -10,6 +10,8 @@ type ThemeMode = "dark" | "light";
 const THEME_STORAGE_KEY = "dpp_admin_theme";
 /** Tope de boletas por tanda al mover de período (evita el timeout de ~100s del túnel). */
 const MAX_MOVE_BATCH = 10;
+/** Tope de boletas por tanda al borrar (mismo motivo: varias llamadas a Drive/Sheets por boleta). */
+const MAX_DELETE_BATCH = 10;
 
 type InvoiceRow = {
   id: string;
@@ -144,6 +146,10 @@ export default function BoletasEntrantesPage() {
 
   const handleDeleteSelected = useCallback(async () => {
     if (selectedCount === 0) return;
+    if (selectedCount > MAX_DELETE_BATCH) {
+      setError(`No se pueden borrar más de ${MAX_DELETE_BATCH} boletas por tanda. Seleccioná hasta ${MAX_DELETE_BATCH} y hacé el resto en la siguiente tanda.`);
+      return;
+    }
     const ok = window.confirm(
       `¿Borrar ${selectedCount} boleta(s)?\n\n` +
       `Se quitan del Sheet y de la base, y los PDFs vuelven a Pendientes para reprocesarse.`
@@ -504,6 +510,18 @@ export default function BoletasEntrantesPage() {
                 <p>
                   <strong>{moveResult.moved}</strong> movida(s) · <strong>{moveResult.skipped.length}</strong> salteada(s) · <strong>{moveResult.failed.length}</strong> con error
                 </p>
+                {moveResult.skipped.length > 0 && (
+                  <ul style={{ maxHeight: 140, overflowY: "auto", paddingLeft: 18, color: "#b45309" }}>
+                    {Object.entries(
+                      moveResult.skipped.reduce((acc, s) => {
+                        acc[s.reason] = (acc[s.reason] ?? 0) + 1;
+                        return acc;
+                      }, {} as Record<string, number>)
+                    ).map(([reason, count]) => (
+                      <li key={reason}>{count} {SKIP_LABELS[reason] ?? reason}</li>
+                    ))}
+                  </ul>
+                )}
                 {moveResult.failed.length > 0 && (
                   <ul style={{ maxHeight: 180, overflowY: "auto", paddingLeft: 18, color: "#b91c1c" }}>
                     {moveResult.failed.map((f) => (

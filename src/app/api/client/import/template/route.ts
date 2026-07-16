@@ -7,7 +7,7 @@ import { requireClientSession } from "@/lib/clientAuth";
  * (Edificios y Proveedores) con sus encabezados correctos.
  */
 export async function GET(request: NextRequest) {
-  const auth = requireClientSession(request);
+  const auth = await requireClientSession(request);
   if (auth.error) return auth.error;
 
   const XLSX = await import("xlsx");

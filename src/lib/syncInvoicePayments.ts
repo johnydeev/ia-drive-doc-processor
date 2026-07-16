@@ -2,9 +2,9 @@ import { Prisma } from "@prisma/client";
 import { getPrismaClient } from "@/lib/prisma";
 import {
   GoogleSheetsService,
-  SheetsRowMapping,
 } from "@/services/googleSheets.service";
 import {
+  DEFAULT_SHEETS_MAPPING,
   loadProcessingClient,
   resolveGoogleConfig,
   resolveMapping,
@@ -12,29 +12,7 @@ import {
 } from "@/lib/clientProcessingConfig";
 import { normalizeBusinessAmount } from "@/lib/businessKey";
 
-const DEFAULT_MAPPING: SheetsRowMapping = {
-  boletaNumber: "A",
-  provider: "B",
-  consortium: "C",
-  providerTaxId: "D",
-  detail: "E",
-  observation: "F",
-  dueDate: "G",
-  amount: "H",
-  alias: "I",
-  clientNumber: "J",
-  sourceFileUrl: "K",
-  isDuplicate: "L",
-  period: "M",
-  paymentStatus: "N",
-  bank: "O",
-  remainingBalance: "P",
-  paidAmount: "Q",
-  installmentsCount: "R",
-  paymentDate: "S",
-  receiptUrl: "T",
-  paidWith: "U",
-};
+const DEFAULT_MAPPING = DEFAULT_SHEETS_MAPPING;
 
 export interface SyncInvoicePaymentsResult {
   paymentsCreated: number;
