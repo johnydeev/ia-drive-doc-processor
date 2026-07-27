@@ -32,6 +32,89 @@ Spec/plan: `docs/superpowers/{specs,plans}/2026-07-15-hardening-seguridad-y-batc
 **Pendiente anotado (spec propio futuro):** job en background para operaciones batch sobre la cola
 ProcessingJob existente — eliminaría la clase entera de 524 y permitiría volver a topes altos.
 
+## ⏭️ PRÓXIMA SESIÓN — Tanda 3e (Config) · arranque documentado (2026-07-16)
+
+**Es la ÚLTIMA sub-tanda del refactor de `consortiums/page.tsx` y la más delicada** (disuelve el fan-out de
+la Tanda 2). Hacer brainstorm corto → mini-spec → plan → ejecución inline, igual que las anteriores. Todo lo
+necesario está acá para arrancar sin releer todo el archivo.
+
+### Baseline de partida (verificado, sin commitear al escribir esto)
+- `page.tsx`: **1268 líneas**, tests: **394** verdes, typecheck/lint/build OK.
+- Patrón ya validado 7 veces: hook por dominio + componente presentacional + tests (tier 1 hook / tier 2
+  componente) + destructuración con nombres idénticos para no tocar el JSX que se queda.
+- Infra: Vitest `test.projects` (node `*.test.ts` / jsdom `*.test.tsx`). Mover-no-reescribir. Owner commitea (GitLens, inglés).
+
+### Qué extraer (dominio Config)
+**Estado (en `page.tsx`, sección "matchNames/config", aprox. líneas 73-95):**
+`editingMatchNames`, `matchNamesValue`, `savingMatchNames`/`runMatchNames` (useAsyncAction), `matchNamesMsg`,
+`showConfigModal`, `fixedExpenses`, `fxTarget`, `fxError`, `lspServices`, `lspForm`, `lspError`,
+`confirmDeleteLspId`, `openConfigSection` (acordeón: `"matchNames" | "lsp" | "fixed" | null`).
+**Handlers:** `handleSaveMatchNames`, `handleAddLsp`, `handleDeleteLsp`, `handleAddFixedExpense`,
+`handleToggleFixedExpense`, `handleDeleteFixedExpense`. **Fetches config-específicos:** `fetchLspServices`,
+`fetchFixedExpenses` (mover al `load` del hook).
+**Modal JSX:** acordeón de 3 secciones en **líneas ~958-1143** (`{showConfigModal && selectedConsortium && (`).
+**Trigger de apertura:** botón en ~línea 715 (`setShowConfigModal(true)` + resets asociados — leerlo exacto).
+
+### Qué NO tocar (se queda en page.tsx)
+- **Datos de referencia:** `coeficientes`, `rubros` + `fetchCoeficientes`, `fetchRubros` → los usa `InvoiceModal`
+  (Tanda 3d), NO son solo de config. Se quedan; sus fetches siguen en el fan-out. (Opcional: aislarlos en un
+  `useReferenceData` como primer paso, pero YAGNI salvo que convenga.)
+- **`confirmDeleteInvoiceId`** (~línea 92): es el confirm de borrar boleta de la pestaña Boletas, NO de config.
+- Los repositories / logger / schedulerControl (falsos positivos del análisis original).
+
+### Cirugía cruzada a tener en cuenta
+- `handleSaveMatchNames` hace `setSelectedConsortium((prev) => ...)` — `setSelectedConsortium` viene de
+  `useConsortiumDetail` (destructurado en page). El hook de config debe recibir un callback
+  `onMatchNamesSaved(matchNames)` y page.tsx hace el `setSelectedConsortium`. (Mismo patrón "callback cross-dominio"
+  que veníamos usando.)
+
+### La disolución del fan-out (el corazón de 3e)
+El callback `onConsortiumSelected` de `useConsortiumDetail` (hoy ~líneas 162-173) contiene:
+```tsx
+onConsortiumSelected: (c, activePeriodId) => {
+  setEditingMatchNames(false); setMatchNamesMsg(null); setMatchNamesValue(c.matchNames ?? "");
+  setLspServices([]); setLspError(null); setLspForm({ provider: "", clientNumber: "", description: "" });
+  setConfirmDeleteLspId(null); setConfirmDeleteInvoiceId(null);
+  setFixedExpenses([]); setFxTarget(""); setFxError(null);
+  void fetchCoeficientes(c.id); void fetchRubros(c.id);
+  void fetchLspServices(c.id); void fetchFixedExpenses(c.id);
+  clearObligations();
+  if (activePeriodId) void loadObligations(activePeriodId);
+},
+```
+Tras 3e debe quedar (el bloque de config colapsa a `config.load(c)`):
+```tsx
+onConsortiumSelected: (c, activePeriodId) => {
+  void fetchCoeficientes(c.id); void fetchRubros(c.id);  // reference data (se queda)
+  setConfirmDeleteInvoiceId(null);                        // confirm de boletas (se queda)
+  config.load(c);                                         // matchNames reset + LSP + gastos fijos
+  clearObligations();
+  if (activePeriodId) void loadObligations(activePeriodId);
+},
+```
+Donde `config.load(c)` reproduce EXACTO los resets de matchNames/LSP/fixed + `fetchLspServices(c.id)` +
+`fetchFixedExpenses(c.id)`. **Preservar el orden** (los fetches son fire-and-forget; el estado final es lo que
+importa). `config` se debe declarar DESPUÉS de `detail` (usa `selectedId`) pero el callback lo referencia — igual
+que en Tanda 2 con `closePeriod`, cuidar el orden de declaración (o usar el mismo truco de que el callback corre
+en tiempo de ejecución, no de declaración).
+
+### Interfaz propuesta del hook
+`useConsortiumConfig({ consortiumId, onMatchNamesSaved })` → `{ isOpen, open, close, openSection, setOpenSection,
+matchNames: { editing, value, msg, saving, startEdit, setValue, save }, lsp: { services, form, error, confirmDeleteId,
+setForm, add, remove, setConfirmDeleteId }, fixed: { list, target, error, setTarget, add, toggle, remove }, load }`.
+(Ajustar en el brainstorm; el acordeón `openSection` + los 3 sub-dominios son la parte a diseñar.)
+
+### Verificación al terminar
+typecheck + lint (0 errores; el único warning baseline es `uploadingReceiptId`) + `vitest run` + build:jobs +
+build. Smoke visual del owner: abrir Config, editar matchNames (verificar que persiste en la tarjeta), agregar/
+borrar LSP, agregar/togglear/borrar gasto fijo, y que al **cambiar de consorcio** el acordeón se resetee y cargue
+lo del nuevo. Al cerrar: actualizar progreso/CHANGELOG (y decisiones.md con la disolución del fan-out).
+
+### Resultado esperado
+`page.tsx` baja a ~**1050-1100 líneas** y el fan-out queda disuelto → cierra el refactor completo (era 3105).
+
+---
+
 ## Refactor `consortiums/page.tsx` — Fase 2, Tanda 3d (modal Boleta) completa (2026-07-16)
 
 **Estado: verificado (typecheck + lint 0 errores + 394 tests + build + build:jobs OK). Sin commitear.**
