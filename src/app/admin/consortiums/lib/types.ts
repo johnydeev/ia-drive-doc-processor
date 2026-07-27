@@ -73,3 +73,7 @@ export type PayForm = {
   amount: string; paymentDate: string; totalInstallments: string;
   paymentMethod: string; observation: string;
 };
+
+// Dominio Config (Tanda 3e): sección abierta del acordeón + form de alta de LSP.
+export type ConfigSection = "matchNames" | "lsp" | "fixed";
+export type LspForm = { provider: string; clientNumber: string; description: string };

@@ -5,12 +5,7 @@ import { useRouter } from "next/navigation";
 import styles from "./page.module.css";
 import { useAuthGuard } from "@/lib/useAuthGuard";
 import { AsyncButton } from "@/components/AsyncButton";
-import { useAsyncAction } from "@/lib/useAsyncAction";
-import type {
-  Coeficiente, Rubro, Consortium, Provider,
-  LspService, FixedExpenseRow,
-} from "./lib/types";
-import { LSP_PROVIDERS } from "./lib/constants";
+import type { Coeficiente, Rubro, Consortium, Provider } from "./lib/types";
 import {
   MONTH_NAMES, formatPeriod, formatAmount, formatDate,
 } from "./lib/format";
@@ -39,6 +34,8 @@ import { useScheduler } from "./hooks/useScheduler";
 import { useInvoiceModal } from "./hooks/useInvoiceModal";
 import { InvoiceModal } from "./components/InvoiceModal";
 import { MismatchModal } from "./components/MismatchModal";
+import { useConsortiumConfig } from "./hooks/useConsortiumConfig";
+import { ConfigModal } from "./components/ConfigModal";
 
 export default function ConsortiumsPage() {
   const router = useRouter();
@@ -69,29 +66,8 @@ export default function ConsortiumsPage() {
 
 
 
-  // matchNames editing (inside config modal)
-  const [editingMatchNames, setEditingMatchNames] = useState(false);
-  const [matchNamesValue, setMatchNamesValue] = useState("");
-  const { pending: savingMatchNames, run: runMatchNames } = useAsyncAction();
-  const [matchNamesMsg, setMatchNamesMsg] = useState<string | null>(null);
-  const [showConfigModal, setShowConfigModal] = useState(false);
-
-  // Gastos fijos + obligaciones del período
-  const [fixedExpenses, setFixedExpenses] = useState<FixedExpenseRow[]>([]);
-  const [fxTarget, setFxTarget] = useState("");
-  const [fxError, setFxError] = useState<string | null>(null);
-
-  // LspServices
-  const [lspServices, setLspServices] = useState<LspService[]>([]);
-  const [lspForm, setLspForm] = useState({ provider: "", clientNumber: "", description: "" });
-  const [lspError, setLspError] = useState<string | null>(null);
-  const [confirmDeleteLspId, setConfirmDeleteLspId] = useState<string | null>(null);
-
   // Eliminar boleta (pestaña Boletas)
   const [confirmDeleteInvoiceId, setConfirmDeleteInvoiceId] = useState<string | null>(null);
-  // Acordeón del modal de Configuración: una sola sección abierta a la vez
-  // (Nombres alternativos / LSP / Gastos fijos). null = todas colapsadas.
-  const [openConfigSection, setOpenConfigSection] = useState<"matchNames" | "lsp" | "fixed" | null>(null);
 
   const fetchConsortiums = useCallback(async () => {
     setLoadingList(true); setListError(null);
@@ -137,22 +113,6 @@ export default function ConsortiumsPage() {
     } catch { /* silent */ }
   }, [guardedFetch]);
 
-  const fetchLspServices = useCallback(async (consortiumId: string) => {
-    try {
-      const res = await guardedFetch(`/api/client/consortiums/${consortiumId}/lsp-services`);
-      const data = await res.json();
-      if (data.ok) setLspServices(data.lspServices ?? []);
-    } catch { /* silent */ }
-  }, [guardedFetch]);
-
-  const fetchFixedExpenses = useCallback(async (consortiumId: string) => {
-    try {
-      const res = await guardedFetch(`/api/client/consortiums/${consortiumId}/fixed-expenses`);
-      const data = await res.json();
-      if (data.ok) setFixedExpenses(data.fixedExpenses ?? []);
-    } catch { /* silent */ }
-  }, [guardedFetch]);
-
   // ── Núcleo de detalle (Tanda 2): obligaciones + cascada + cerrar período ──
   const { obligations, load: loadObligations, generate: generateObligations, setStatus: setObligationStatus, clear: clearObligations } = useObligations();
 
@@ -160,13 +120,11 @@ export default function ConsortiumsPage() {
     consortiums,
     loadingList,
     onConsortiumSelected: (c, activePeriodId) => {
-      // Fan-out hacia el estado de config (Tanda 3) que sigue en page.tsx:
-      setEditingMatchNames(false); setMatchNamesMsg(null); setMatchNamesValue(c.matchNames ?? "");
-      setLspServices([]); setLspError(null); setLspForm({ provider: "", clientNumber: "", description: "" });
-      setConfirmDeleteLspId(null); setConfirmDeleteInvoiceId(null);
-      setFixedExpenses([]); setFxTarget(""); setFxError(null);
+      // Datos de referencia (los consume el modal Boleta, no son de config):
       void fetchCoeficientes(c.id); void fetchRubros(c.id);
-      void fetchLspServices(c.id); void fetchFixedExpenses(c.id);
+      setConfirmDeleteInvoiceId(null);
+      // Config del consorcio (Tanda 3e): resets + LSP + gastos fijos.
+      config.load(c);
       // Obligaciones (Tanda 2):
       clearObligations();
       if (activePeriodId) void loadObligations(activePeriodId);
@@ -183,6 +141,16 @@ export default function ConsortiumsPage() {
     consortiumId: selectedId,
     periodId: selectedPeriod?.id ?? null,
     onClosed: () => { void fetchConsortiums(); void reloadAfterClose(); },
+  });
+
+  // Configuración del consorcio (Tanda 3e): acordeón matchNames / LSP / gastos fijos.
+  // Se declara después de `detail` porque necesita `selectedId`; el callback
+  // `onConsortiumSelected` de arriba lo referencia sin TDZ (corre en un handler
+  // posterior al render, con `config` ya inicializado).
+  const config = useConsortiumConfig({
+    consortiumId: selectedId,
+    onMatchNamesSaved: (matchNames) =>
+      setSelectedConsortium((prev) => prev ? { ...prev, matchNames } : prev),
   });
 
   // Pagos (Tanda 3a): modal Pagar + modal Ver pagos (disparados desde PagosView).
@@ -215,93 +183,6 @@ export default function ConsortiumsPage() {
     addRubro: (r) => setRubros((prev) => [...prev, r]),
     setToolbarInfo, setToolbarError,
   });
-
-  const handleAddFixedExpense = async () => {
-    if (!selectedId || !fxTarget) return;
-    setFxError(null);
-    const [kind, targetId] = fxTarget.split(":");
-    const body = kind === "provider" ? { providerId: targetId } : { lspServiceId: targetId };
-    try {
-      const res = await guardedFetch(`/api/client/consortiums/${selectedId}/fixed-expenses`, {
-        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
-      });
-      const data = await res.json();
-      if (!res.ok || !data.ok) { setFxError(data.error ?? `HTTP ${res.status}`); return; }
-      setFxTarget("");
-      await fetchFixedExpenses(selectedId);
-    } catch (err) {
-      setFxError(err instanceof Error ? err.message : "Error al agregar");
-    }
-  };
-
-  const handleToggleFixedExpense = async (fx: FixedExpenseRow) => {
-    if (!selectedId) return;
-    await guardedFetch(`/api/client/consortiums/${selectedId}/fixed-expenses/${fx.id}`, {
-      method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ active: !fx.active }),
-    });
-    await fetchFixedExpenses(selectedId);
-  };
-
-  const handleDeleteFixedExpense = async (id: string) => {
-    if (!selectedId) return;
-    await guardedFetch(`/api/client/consortiums/${selectedId}/fixed-expenses/${id}`, { method: "DELETE" });
-    await fetchFixedExpenses(selectedId);
-  };
-
-
-  const handleSaveMatchNames = async () => {
-    if (!selectedId) return;
-    setMatchNamesMsg(null);
-    try {
-      const res = await guardedFetch(`/api/client/consortiums/${selectedId}`, {
-        method: "PATCH", headers: { "content-type": "application/json" },
-        body: JSON.stringify({ matchNames: matchNamesValue.trim() || null }),
-      });
-      const data = await res.json();
-      if (!res.ok || !data.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
-      setSelectedConsortium((prev) => prev ? { ...prev, matchNames: data.consortium.matchNames } : prev);
-      setEditingMatchNames(false);
-      setMatchNamesMsg("Guardado correctamente");
-      setTimeout(() => setMatchNamesMsg(null), 3000);
-    } catch (err) {
-      setMatchNamesMsg(err instanceof Error ? err.message : "Error al guardar");
-    }
-  };
-
-  const handleAddLsp = async () => {
-    if (!selectedId) return;
-    if (!lspForm.provider) { setLspError("Seleccioná una empresa"); return; }
-    if (!lspForm.clientNumber.trim()) { setLspError("El número de cliente es obligatorio"); return; }
-    setLspError(null);
-    try {
-      const res = await guardedFetch(`/api/client/consortiums/${selectedId}/lsp-services`, {
-        method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          provider: lspForm.provider,
-          clientNumber: lspForm.clientNumber.trim(),
-          description: lspForm.description.trim() || undefined,
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok || !data.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
-      setLspServices((prev) => [data.lspService, ...prev]);
-      setLspForm({ provider: "", clientNumber: "", description: "" });
-    } catch (err) {
-      setLspError(err instanceof Error ? err.message : "Error al agregar servicio");
-    }
-  };
-
-  const handleDeleteLsp = async (lspId: string) => {
-    if (!selectedId) return;
-    try {
-      const res = await guardedFetch(`/api/client/consortiums/${selectedId}/lsp-services/${lspId}`, { method: "DELETE" });
-      const data = await res.json();
-      if (!res.ok || !data.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
-      setLspServices((prev) => prev.filter((s) => s.id !== lspId));
-    } catch (err) {
-      setLspError(err instanceof Error ? err.message : "Error al eliminar servicio");
-    } finally { setConfirmDeleteLspId(null); }
-  };
 
   // Elimina la boleta + recibo asociado + mueve el PDF en Drive scanned→pending +
   // borra fila de Sheets. Bloqueado si tiene pagos (el backend responde 409).
@@ -707,13 +588,7 @@ export default function ConsortiumsPage() {
                   <button type="button" className={styles.addInvoiceBtn} onClick={invoiceModal.open}>
                     + Cargar boleta
                   </button>
-                  <button type="button" className={styles.configBtn} onClick={() => {
-                    setMatchNamesValue(selectedConsortium.matchNames ?? "");
-                    setEditingMatchNames(false);
-                    setMatchNamesMsg(null);
-                    setOpenConfigSection(null);
-                    setShowConfigModal(true);
-                  }}>
+                  <button type="button" className={styles.configBtn} onClick={() => config.open(selectedConsortium)}>
                     Configuración
                   </button>
                 </div>
@@ -955,191 +830,43 @@ export default function ConsortiumsPage() {
       </div>{/* close contentCol */}
 
       {/* ── Config modal ── */}
-      {showConfigModal && selectedConsortium && (
-        <div className={styles.modalOverlay} onClick={() => !savingMatchNames && setShowConfigModal(false)}>
-          <div className={styles.modalLarge} onClick={(e) => e.stopPropagation()}>
-            <h3 className={styles.modalTitle}>Configuración — {selectedConsortium.rawName}</h3>
-            <p className={styles.modalSubtitle}>Ajustes de matching y datos internos del consorcio</p>
-
-            {/* ── Acordeón: una sola sección abierta a la vez ── */}
-            <div className={styles.configSection}>
-              <button
-                type="button"
-                className={styles.lspToggle}
-                onClick={() => setOpenConfigSection((s) => (s === "matchNames" ? null : "matchNames"))}
-                aria-expanded={openConfigSection === "matchNames"}
-              >
-                <span className={styles.lspToggleChevron} aria-hidden="true">{openConfigSection === "matchNames" ? "▾" : "▸"}</span>
-                <span className={styles.lspTitle}>Nombres alternativos (matching interno)</span>
-              </button>
-              {openConfigSection === "matchNames" && (
-                <div className={styles.lspContent}>
-                  <p className={styles.configSectionDesc}>
-                    Separar con | (pipe). Estos nombres se usan internamente para identificar el consorcio en facturas.
-                  </p>
-                  {!editingMatchNames ? (
-                    <>
-                      <p className={styles.matchNamesValue}>
-                        {matchNamesValue || <span style={{ opacity: 0.4 }}>Sin nombres alternativos</span>}
-                      </p>
-                      <div className={styles.matchNamesActions} style={{ marginTop: 8 }}>
-                        <button type="button" className={styles.matchNamesEditBtn} onClick={() => setEditingMatchNames(true)}>Editar</button>
-                      </div>
-                    </>
-                  ) : (
-                    <div className={styles.matchNamesEdit}>
-                      <input
-                        className={styles.formInput}
-                        value={matchNamesValue}
-                        onChange={(e) => setMatchNamesValue(e.target.value)}
-                        placeholder="NOMBRE ALT 1|NOMBRE ALT 2|NOMBRE ALT 3"
-                      />
-                      <div className={styles.matchNamesActions}>
-                        <button type="button" className={styles.ghostBtn} onClick={() => setEditingMatchNames(false)} disabled={savingMatchNames}>Cancelar</button>
-                        <button type="button" className={styles.addInvoiceBtn} onClick={() => runMatchNames(handleSaveMatchNames)} disabled={savingMatchNames}>
-                          {savingMatchNames ? "Guardando..." : "Guardar"}
-                        </button>
-                      </div>
-                    </div>
-                  )}
-                  {matchNamesMsg && <p className={styles.infoMsg} style={{ marginTop: 6 }}>{matchNamesMsg}</p>}
-                </div>
-              )}
-            </div>
-
-            <div className={styles.configSection}>
-              <button
-                type="button"
-                className={styles.lspToggle}
-                onClick={() => setOpenConfigSection((s) => (s === "lsp" ? null : "lsp"))}
-                aria-expanded={openConfigSection === "lsp"}
-              >
-                <span className={styles.lspToggleChevron} aria-hidden="true">{openConfigSection === "lsp" ? "▾" : "▸"}</span>
-                <span className={styles.lspTitle}>Servicios públicos (LSP)</span>
-                {lspServices.length > 0 && <span className={styles.lspToggleCount}>{lspServices.length}</span>}
-              </button>
-              {openConfigSection === "lsp" && (
-                <div className={styles.lspContent}>
-                  {lspServices.length > 0 ? (
-                    <div className={styles.lspTableWrap}>
-                      <table className={styles.lspTable}>
-                        <thead>
-                          <tr><th>Empresa</th><th>Nro. Cliente</th><th>Descripción</th><th>Acciones</th></tr>
-                        </thead>
-                        <tbody>
-                          {lspServices.map((s) => (
-                            <tr key={s.id}>
-                              <td>{LSP_PROVIDERS.find((p) => p.value === s.providerName)?.label ?? s.providerName}</td>
-                              <td className={styles.tdMono}>{s.clientNumber}</td>
-                              <td>{s.description ?? "—"}</td>
-                              <td>
-                                {confirmDeleteLspId === s.id ? (
-                                  <span className={styles.lspConfirmDelete}>
-                                    ¿Confirmar?{" "}
-                                    <AsyncButton type="button" className={styles.lspConfirmYes} onClick={() => handleDeleteLsp(s.id)} pendingLabel="…">Sí</AsyncButton>
-                                    <button type="button" className={styles.lspConfirmNo} onClick={() => setConfirmDeleteLspId(null)}>No</button>
-                                  </span>
-                                ) : (
-                                  <button type="button" className={styles.lspDeleteBtn} onClick={() => setConfirmDeleteLspId(s.id)}>Eliminar</button>
-                                )}
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  ) : (
-                    <p className={styles.lspEmpty}>No hay servicios públicos cargados para este consorcio.</p>
-                  )}
-                  <div className={styles.lspAddForm}>
-                    <select className={styles.formSelect} value={lspForm.provider} onChange={(e) => setLspForm((f) => ({ ...f, provider: e.target.value }))}>
-                      <option value="">Empresa...</option>
-                      {LSP_PROVIDERS.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
-                    </select>
-                    <input className={styles.formInput} value={lspForm.clientNumber} onChange={(e) => setLspForm((f) => ({ ...f, clientNumber: e.target.value }))} placeholder="Nro. de cliente" />
-                    <input className={styles.formInput} value={lspForm.description} onChange={(e) => setLspForm((f) => ({ ...f, description: e.target.value }))} placeholder="Descripción (opcional)" />
-                    <AsyncButton type="button" className={styles.addInvoiceBtn} onClick={handleAddLsp} pendingLabel="Agregando…">Agregar</AsyncButton>
-                  </div>
-                  {lspError && <p className={styles.errorMsg}>{lspError}</p>}
-                </div>
-              )}
-            </div>
-
-            <div className={styles.configSection}>
-              <button
-                type="button"
-                className={styles.lspToggle}
-                onClick={() => setOpenConfigSection((s) => (s === "fixed" ? null : "fixed"))}
-                aria-expanded={openConfigSection === "fixed"}
-              >
-                <span className={styles.lspToggleChevron} aria-hidden="true">{openConfigSection === "fixed" ? "▾" : "▸"}</span>
-                <span className={styles.lspTitle}>Gastos fijos</span>
-                {fixedExpenses.length > 0 && <span className={styles.lspToggleCount}>{fixedExpenses.length}</span>}
-              </button>
-              {openConfigSection === "fixed" && (
-                <div className={styles.lspContent}>
-                  {fixedExpenses.length > 0 ? (
-                    <div className={styles.lspTableWrap}>
-                      <table className={styles.lspTable}>
-                        <thead>
-                          <tr><th>Gasto fijo</th><th>Estado</th><th>Acciones</th></tr>
-                        </thead>
-                        <tbody>
-                          {fixedExpenses.map((fx) => {
-                            const lsp = lspServices.find((l) => l.id === fx.lspServiceId);
-                            const prov = providers.find((p) => p.id === fx.providerId);
-                            const label = lsp
-                              ? `${LSP_PROVIDERS.find((p) => p.value === lsp.providerName)?.label ?? lsp.providerName} (${lsp.clientNumber})`
-                              : prov?.canonicalName ?? fx.description ?? "—";
-                            return (
-                              <tr key={fx.id}>
-                                <td>{label}</td>
-                                <td>{fx.active ? "Activo" : "Inactivo"}</td>
-                                <td>
-                                  <AsyncButton type="button" className={styles.ghostBtn} style={{ padding: "4px 10px", fontSize: 12 }} onClick={() => handleToggleFixedExpense(fx)}>
-                                    {fx.active ? "Desactivar" : "Activar"}
-                                  </AsyncButton>{" "}
-                                  <AsyncButton type="button" className={styles.lspDeleteBtn} onClick={() => handleDeleteFixedExpense(fx.id)} pendingLabel="…">Quitar</AsyncButton>
-                                </td>
-                              </tr>
-                            );
-                          })}
-                        </tbody>
-                      </table>
-                    </div>
-                  ) : (
-                    <p className={styles.lspEmpty}>No hay gastos fijos cargados para este consorcio.</p>
-                  )}
-                  <div className={styles.lspAddForm}>
-                    <select className={styles.formSelect} value={fxTarget} onChange={(e) => setFxTarget(e.target.value)}>
-                      <option value="">Elegir proveedor o servicio...</option>
-                      {providers.length > 0 && (
-                        <optgroup label="Proveedores">
-                          {providers.map((p) => <option key={`p-${p.id}`} value={`provider:${p.id}`}>{p.canonicalName}</option>)}
-                        </optgroup>
-                      )}
-                      {lspServices.length > 0 && (
-                        <optgroup label="Servicios (LSP)">
-                          {lspServices.map((l) => (
-                            <option key={`l-${l.id}`} value={`lsp:${l.id}`}>
-                              {LSP_PROVIDERS.find((p) => p.value === l.providerName)?.label ?? l.providerName} ({l.clientNumber})
-                            </option>
-                          ))}
-                        </optgroup>
-                      )}
-                    </select>
-                    <AsyncButton type="button" className={styles.addInvoiceBtn} onClick={handleAddFixedExpense} disabled={!fxTarget} pendingLabel="Agregando…">Agregar</AsyncButton>
-                  </div>
-                  {fxError && <p className={styles.errorMsg}>{fxError}</p>}
-                </div>
-              )}
-            </div>
-
-            <div className={styles.modalActions}>
-              <button type="button" className={styles.ghostBtn} onClick={() => setShowConfigModal(false)}>Cerrar</button>
-            </div>
-          </div>
-        </div>
+      {config.isOpen && selectedConsortium && (
+        <ConfigModal
+          consortiumName={selectedConsortium.rawName}
+          saving={config.matchNames.saving}
+          openSection={config.openSection}
+          onToggleSection={config.toggleSection}
+          onClose={config.close}
+          providers={providers}
+          matchNames={{
+            editing: config.matchNames.editing,
+            value: config.matchNames.value,
+            msg: config.matchNames.msg,
+            onChangeValue: config.matchNames.setValue,
+            onStartEdit: config.matchNames.startEdit,
+            onCancelEdit: config.matchNames.cancelEdit,
+            onSave: config.matchNames.save,
+          }}
+          lsp={{
+            services: config.lsp.services,
+            form: config.lsp.form,
+            error: config.lsp.error,
+            confirmDeleteId: config.lsp.confirmDeleteId,
+            onChangeForm: config.lsp.setForm,
+            onConfirmDelete: config.lsp.setConfirmDeleteId,
+            onAdd: config.lsp.add,
+            onDelete: config.lsp.remove,
+          }}
+          fixed={{
+            list: config.fixed.list,
+            target: config.fixed.target,
+            error: config.fixed.error,
+            onChangeTarget: config.fixed.setTarget,
+            onAdd: config.fixed.add,
+            onToggle: config.fixed.toggle,
+            onDelete: config.fixed.remove,
+          }}
+        />
       )}
 
       {/* ── Consortium mismatch modal — z-index 200 ── */}

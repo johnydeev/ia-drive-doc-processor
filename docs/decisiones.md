@@ -4,6 +4,48 @@ Registro de decisiones tomadas ante problemas reales encontrados en producción.
 
 ---
 
+## 2026-07-27 — Tanda 3e: disolución del fan-out (cierre del refactor de `consortiums/page.tsx`)
+
+**Problema:** la costura temporal que la Tanda 2 introdujo a propósito (ver entrada del 2026-07-16) seguía
+viva: el callback `onConsortiumSelected` de `useConsortiumDetail` era un bloque de **11 setters + 4 fetches
+de tres dominios distintos** viviendo en `page.tsx`. Mientras existiera, el estado del modal de
+Configuración (matchNames + LSP + gastos fijos) no podía salir del god-component, y cualquier cambio en el
+ciclo de vida "cambiar de consorcio" había que hacerlo en ese amasijo. Era, por diseño, el último nudo.
+
+**Decisión:** extraer el dominio Config a **`useConsortiumConfig` + `ConfigModal`** y reducir el bloque de
+config del callback a una sola línea, **`config.load(c)`**. `load(c)` es el punto de entrada del ciclo de
+vida del dominio: reproduce literalmente los resets del consorcio anterior y dispara los dos fetches
+(`lsp-services`, `fixed-expenses`). El callback queda con lo que genuinamente no es config: los datos de
+referencia (`fetchCoeficientes`/`fetchRubros`, que consume el modal Boleta), el confirm de la pestaña
+Boletas y las obligaciones.
+
+Dos costuras cruzadas resueltas con el patrón ya usado en 3a-3d:
+- **`onMatchNamesSaved(matchNames)`** — guardar nombres alternativos tiene que actualizar el consorcio
+  seleccionado, que es estado de `useConsortiumDetail`. El hook de config emite el callback; `page.tsx` hace
+  el `setSelectedConsortium`. El hook de config no conoce al de detalle.
+- **Orden de declaración** — `config` se declara *después* de `detail` (necesita `selectedId`), pero el
+  callback que `detail` recibe lo referencia. No hay TDZ: el arrow se ejecuta en un handler posterior al
+  render, con `const config` ya inicializado, y `selectConsortium` está memoizado con `onConsortiumSelected`
+  en sus deps, así que siempre corre el arrow más reciente. Verificado por `typecheck` + tests.
+
+**Alternativas descartadas:**
+- **3 sub-hooks** (`useMatchNames`/`useLspServices`/`useFixedExpenses`) compuestos: las 3 secciones **no son
+  independientes** — la de gastos fijos consume `lspServices` para los labels de fila y para el `<optgroup>`
+  del select, y el `openSection` del acordeón es un estado compartido por las tres. Separarlas obliga a
+  re-componerlas igual, con 4 archivos en vez de 1 y el `load` armado a mano.
+- **`useReferenceData`** para `coeficientes`/`rubros`/`providers`: dejaría el fan-out aún más corto, pero
+  mezcla dos ciclos de vida distintos (`providers` carga al montar; los otros dos por consorcio) y obliga a
+  tocar el wiring de `useProviderForm` y de `addCoeficiente`/`addRubro` del `InvoiceModal` — cirugía fuera
+  del dominio Config, en la sub-tanda más delicada. YAGNI: se quedan en `page.tsx`.
+
+**Impacto:** cierra el refactor completo. Nuevos `hooks/useConsortiumConfig.ts` + `components/ConfigModal.tsx`
+(+ sus tests tier 1/2); `lib/types.ts` gana `ConfigSection` y `LspForm`. `page.tsx` **1268 → 995 líneas**,
+**12 `useState`**; +10 tests (394 → 404). Balance del refactor entero: **3105 → 995 líneas, 91 → 12
+`useState`, 299 → 404 tests**. Sin cambios de comportamiento (mover-no-reescribir). Spec/plan:
+`docs/superpowers/{specs,plans}/2026-07-16-refactor-consortiums-tanda3e-config*`.
+
+---
+
 ## 2026-07-16 — Tanda 2 del refactor: costura fan-out para extraer un dominio acoplado
 
 **Problema:** el "núcleo de detalle" de `consortiums/page.tsx` (cascada selección→períodos→boletas +

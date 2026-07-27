@@ -1,6 +1,6 @@
 # Progreso del proyecto — drive-doc-processor
 
-Actualizado al 15/07/2026 (sesión 44).
+Actualizado al 27/07/2026 (sesión 52 — cierre del refactor de `consortiums/page.tsx`).
 
 ## Hardening de seguridad + robustez batch + pasada de docs (2026-07-15)
 
@@ -31,6 +31,50 @@ Spec/plan: `docs/superpowers/{specs,plans}/2026-07-15-hardening-seguridad-y-batc
 
 **Pendiente anotado (spec propio futuro):** job en background para operaciones batch sobre la cola
 ProcessingJob existente — eliminaría la clase entera de 524 y permitiría volver a topes altos.
+
+## ✅ Refactor `consortiums/page.tsx` — Tanda 3e (Config) completa · REFACTOR CERRADO (2026-07-27)
+
+**Estado: implementado y verificado (typecheck + lint 0 errores + 404 tests + build + build:jobs OK).
+Sin migración. Sin commitear (lo hace el owner con GitLens).**
+
+Última sub-tanda de la Tanda 3 y cierre del refactor completo. Spec/plan:
+`docs/superpowers/{specs,plans}/2026-07-16-refactor-consortiums-tanda3e-config*`.
+
+Hecho:
+- **`hooks/useConsortiumConfig`** — dominio Config completo en un solo hook, con el estado agrupado en
+  sub-objetos (`matchNames` / `lsp` / `fixed`) + `openSection`/`toggleSection` (el acordeón) + `load(c)`.
+  Contiene los 6 handlers (`saveMatchNames`, `addLsp`/`removeLsp`, `addFixedExpense`/`toggleFixedExpense`/
+  `removeFixedExpense`) y los fetches `lsp-services` / `fixed-expenses`.
+- **`components/ConfigModal`** — el acordeón de 3 secciones, presentacional puro. Recibe `providers` por
+  props (los sigue teniendo `page.tsx`; los usa el `<optgroup>` de gastos fijos y los labels de fila).
+- **Fan-out disuelto**: el bloque de config del callback `onConsortiumSelected` (11 setters + 2 fetches)
+  colapsó a **`config.load(c)`**. En el callback solo quedan los datos de referencia (`fetchCoeficientes`/
+  `fetchRubros`, que consume el modal Boleta), `setConfirmDeleteInvoiceId(null)` (pestaña Boletas) y las
+  obligaciones. Ver `docs/decisiones.md` (2026-07-27).
+- Tipos `ConfigSection` y `LspForm` movidos a `lib/types.ts`.
+- Tests: +6 tier 1 (open/close, acordeón, `load` reseteando y recargando, save de matchNames, validación de
+  `lsp.add`, `fixed.add` con `{ providerId }`) y +4 tier 2 (render del acordeón, toggle, tabla LSP + Agregar,
+  Cerrar). **394 → 404**.
+
+Resultado: `page.tsx` **1268 → 995 líneas (−273)**, **12 `useState`**. Sin cambios de comportamiento.
+
+### 🏁 Refactor completo — números finales
+| | Inicio (2026-07-16) | Fin (2026-07-27) |
+|---|---|---|
+| `page.tsx` | **3105 líneas** | **995 líneas** (−68%) |
+| `useState` en el componente | **91** | **12** |
+| Tests | 299 (solo node, sin UI) | **404** (node + jsdom) |
+| Piezas extraídas | — | 15 hooks + 11 componentes + `lib/` (types/constants/format/match) |
+
+Decisión de alcance mantenida hasta el final: `coeficientes`/`rubros`/`providers` (datos de referencia) se
+quedan en `page.tsx` — los consumen varios dominios, no son de config. No se creó `useReferenceData` (YAGNI).
+
+**⏳ Pendiente del owner:** smoke visual post-deploy (sesión autenticada) — abrir Config; editar nombres
+alternativos y verificar que persiste en la tarjeta; agregar/borrar un LSP; agregar/togglear/borrar un gasto
+fijo; **cambiar de consorcio** y confirmar que el acordeón se resetea y carga los datos del nuevo.
+
+<details>
+<summary>Nota de arranque original de la Tanda 3e (histórica, ya ejecutada)</summary>
 
 ## ⏭️ PRÓXIMA SESIÓN — Tanda 3e (Config) · arranque documentado (2026-07-16)
 
@@ -112,6 +156,10 @@ lo del nuevo. Al cerrar: actualizar progreso/CHANGELOG (y decisiones.md con la d
 
 ### Resultado esperado
 `page.tsx` baja a ~**1050-1100 líneas** y el fan-out queda disuelto → cierra el refactor completo (era 3105).
+
+*(Resultado real: 995 líneas — mejor que lo estimado.)*
+
+</details>
 
 ---
 

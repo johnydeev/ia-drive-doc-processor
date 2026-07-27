@@ -3,6 +3,15 @@
 ## [Unreleased]
 
 ### Refactor
+- **Refactor `consortiums/page.tsx` — Fase 2, Tanda 3e Config · REFACTOR CERRADO (2026-07-27)**. Última
+  sub-tanda: extraídos `useConsortiumConfig` (dominio Config completo — acordeón matchNames/LSP/gastos
+  fijos, con el estado agrupado en sub-objetos y `load(c)` como punto de entrada del ciclo de vida) y
+  `ConfigModal` (presentacional; recibe `providers` por props). **Disuelto el fan-out** de la Tanda 2: el
+  bloque de config de `onConsortiumSelected` (11 setters + 2 fetches) colapsó a `config.load(c)`; el
+  `setSelectedConsortium` post-guardado va por callback `onMatchNamesSaved`. Tipos `ConfigSection`/`LspForm`
+  a `lib/types.ts`. `page.tsx` **1268 → 995 líneas (−273)**, **12 `useState`**, +10 tests (394 → 404).
+  Sin cambios de comportamiento. **Balance del refactor completo: 3105 → 995 líneas, 91 → 12 `useState`,
+  299 → 404 tests.** Ver `docs/decisiones.md` (2026-07-27) para la disolución del fan-out.
 - **Refactor `consortiums/page.tsx` — Fase 2, Tanda 3d modal Boleta (2026-07-16)**. Extraído el modal más
   complejo: `useInvoiceModal` (scan IA + prefill + save con creación inline de coeficiente/rubro) +
   `InvoiceModal` + `MismatchModal`. Acciones de fila (borrar/recibo) quedan en page.tsx. `page.tsx`
