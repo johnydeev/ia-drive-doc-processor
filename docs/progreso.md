@@ -32,6 +32,104 @@ Spec/plan: `docs/superpowers/{specs,plans}/2026-07-15-hardening-seguridad-y-batc
 **Pendiente anotado (spec propio futuro):** job en background para operaciones batch sobre la cola
 ProcessingJob existente — eliminaría la clase entera de 524 y permitiría volver a topes altos.
 
+## Refactor `consortiums/page.tsx` — Fase 2, Tanda 3d (modal Boleta) completa (2026-07-16)
+
+**Estado: verificado (typecheck + lint 0 errores + 394 tests + build + build:jobs OK). Sin commitear.**
+
+Extraído el modal más complejo del archivo (crear/scan/mismatch):
+- **`useInvoiceModal`** — estado + scan IA (prefill del form + match de proveedor) + save (con creación
+  inline de coeficiente/rubro + carga multipart si hay PDF). Recibe callbacks `onCreated` (agrega a la
+  lista), `addCoeficiente`/`addRubro` (datos de referencia), setters del toast; inputs consortiumId/periodId/
+  providers.
+- **`InvoiceModal`** — form presentacional (~12 campos, selects de proveedor/rubro/coeficiente con "+ Nuevo").
+- **`MismatchModal`** — aviso de boleta de otro consorcio.
+
+Las acciones de fila (borrar boleta, subir recibo) quedan en page.tsx (decisión de alcance). `page.tsx`
+**1560 → 1268 líneas (−292)**; +8 tests (386 → 394). Sin cambios de comportamiento.
+Pendiente de Tanda 3: **3e** Config (acordeón matchNames/LSP/gastos fijos; disuelve el fan-out de la Tanda 2).
+
+## Refactor `consortiums/page.tsx` — Fase 2, Tanda 3c (Shell) completa (2026-07-16)
+
+**Estado: verificado (typecheck + lint 0 errores + 386 tests + build + build:jobs OK). Sin commitear.**
+
+Extraída la lógica del shell a 4 hooks (el JSX del sidebar/toolbar queda en page.tsx, decisión de brainstorming):
+- **`useSession`** — auth check `/me` + userName/role/consortiumsEnabled + logout.
+- **`useTheme`** — lee/sincroniza `data-theme` (el toggle vive en /admin).
+- **`useToolbarToast`** — toast info/error con autodismiss (lo usa scheduler y `handleDeleteInvoice`).
+- **`useScheduler`** — estado scheduler + busyAction + 6 acciones (toggle/run/sync directorio/sync pagos/
+  proteger/desproteger hoja). Recibe callbacks `onDirectorySynced`=fetchConsortiums, `onInvoicesReload`=
+  reloadInvoices, y los setters del toast.
+
+`page.tsx` **1726 → 1560 líneas (−166)**; +7 tests (379 → 386). Sin cambios de comportamiento.
+Pendientes de Tanda 3: **3d** modal Boleta (crear/scan/mismatch), **3e** Config (acordeón; disuelve el fan-out).
+
+## Refactor `consortiums/page.tsx` — Fase 2, Tanda 3b (modales globales) completa (2026-07-16)
+
+**Estado: verificado (typecheck + lint 0 errores + 379 tests + build + build:jobs OK). Sin commitear.**
+
+Extraídos los dos modales globales de toolbar (2 pasos preview/result):
+- **`useCloseAllModal` + `CloseAllModal`** — Cerrar Período General. `onExecuted: fetchConsortiums`.
+- **`useUnassignedModal` + `UnassignedModal`** — Sin Asignar (preview de Drive → mover a Pendientes).
+
+`page.tsx` **1913 → 1726 líneas (−187)**; +10 tests (369 → 379). Sin cambios de comportamiento.
+Pendientes de Tanda 3: 3c Shell, 3d Boleta, 3e Config.
+
+## Refactor `consortiums/page.tsx` — Fase 2, Tanda 3a (Pagos) completa (2026-07-16)
+
+**Estado: implementado y verificado (typecheck + lint 0 errores + 369 tests + build + build:jobs OK).
+Sin migración. Sin commitear (lo hace el owner con GitLens).**
+
+Primera sub-tanda de la Tanda 3 (los modales/dominios que quedaban). Spec/plan:
+`docs/superpowers/{specs,plans}/2026-07-16-refactor-consortiums-tanda3*`.
+
+Hecho:
+- **`hooks/usePayModal` + `components/PayModal`** — modal Registrar pago con sus dos modos (cuotas fijas /
+  pago libre); la lógica derivada del modo (montos computados, cuota actual, última cuota) vive en el hook.
+  El POST usa `fetch` plano (preservado). Recarga vía `reloadInvoices`. Tests tier 1 (open carga existentes,
+  submit libre/cuotas, validación) + tier 2.
+- **`hooks/useViewPayments` + `components/ViewPaymentsModal`** — historial de pagos read-only. Tests tier 1 + 2.
+- Tipos `PaymentMode`/`PaymentRecord`/`PayForm` movidos a `lib/types.ts`.
+- Ambos modales se disparan desde los callbacks que `PagosView` ya exponía (`onPagar`/`onVerPagos`).
+
+Resultado: `page.tsx` **2297 → 1913 líneas (−384)**; +14 tests (355 → 369). Sin cambios de comportamiento.
+
+**Orden de la Tanda 3 (menor a mayor por acoplamiento):** 3a Pagos ✓ · pendientes: **3b** globales
+(Cerrar Período General + Sin Asignar), **3c** Shell (scheduler/toolbar/sidebar/tema/auth), **3d** modal
+Boleta (crear/scan/mismatch, usa datos de referencia), **3e** Config (acordeón; disuelve el fan-out de la
+Tanda 2). 3d/3e llevarán mini-spec si aparecen forks.
+
+## Refactor `consortiums/page.tsx` — Fase 2, Tanda 2 completa (2026-07-16)
+
+**Estado: implementado y verificado (typecheck + lint 0 errores + 355 tests + build + build:jobs OK).
+Sin migración. Sin commitear (lo hace el owner con GitLens).**
+
+Segunda tanda: el **núcleo de detalle** (la cascada selección→períodos→boletas + obligaciones + cierre de
+período). Spec/plan: `docs/superpowers/{specs,plans}/2026-07-16-refactor-consortiums-tanda2*`.
+
+Hecho (contrato "mover, no reescribir" + verificación por paso):
+- **`hooks/useConsortiumDetail`** — dueño de la cascada (selección, períodos, `selectedPeriod`, boletas,
+  `activeTab`, búsqueda, navegación de período, restauración por deep-link `?c=`). **Elimina el hack
+  `handleSelectConsortiumRef`** (el efecto de restauración ahora vive dentro del hook). Expone
+  `reloadInvoices`/`reloadAfterClose` para los recargos post-acción. Tests tier 1 (cascada, quirk de
+  cambio de período, back).
+- **`hooks/useObligations`** — solapa de obligaciones (load/generate/setStatus/clear). Tests tier 1.
+- **`hooks/useClosePeriod` + `components/ClosePeriodModal`** — modal Cerrar período. `closeError`/
+  `closeSuccess` viven en el hook y se resetean por efecto sobre `consortiumId` (evita la dependencia
+  circular con el detalle). Tests tier 1 + tier 2.
+- **Costura fan-out** (`onConsortiumSelected`): `selectConsortium` dispara en `page.tsx` los resets/fetches
+  del estado de config (Tanda 3, que NO se movió) + obligaciones. Es temporal: se disuelve en la Tanda 3.
+
+Resultado: `page.tsx` **2418 → 2297 líneas**, **79 → 65 useState**; +16 tests (339 → 355). La ganancia es
+estructural (cascada testeable en aislamiento, hack eliminado), no de líneas.
+
+**Quirk preservado a propósito:** cambiar de período recarga boletas pero **no** obligaciones (igual que el
+original). **Diferencia benigna documentada:** el fan-out corre después del `await` de períodos (para pasar
+el período activo), así que durante ~100ms de carga la solapa muestra brevemente datos del consorcio
+anterior; estado final idéntico. Pendiente de smoke visual del owner (post-deploy, sesión autenticada).
+
+Pendiente: **Tanda 3** — modal Boleta (crear/scan/mismatch), modal Configuración (acordeón matchNames/LSP/
+gastos fijos), modales Pagar/Ver pagos, Cerrar Período General, Sin Asignar, useScheduler, sidebar/tema.
+
 ## Refactor `consortiums/page.tsx` — Fase 2, Tanda 1 completa (2026-07-16)
 
 **Estado: implementado y verificado (typecheck + lint 0 errores + 339 tests + build + build:jobs OK).

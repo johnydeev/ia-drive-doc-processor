@@ -3,6 +3,31 @@
 ## [Unreleased]
 
 ### Refactor
+- **Refactor `consortiums/page.tsx` — Fase 2, Tanda 3d modal Boleta (2026-07-16)**. Extraído el modal más
+  complejo: `useInvoiceModal` (scan IA + prefill + save con creación inline de coeficiente/rubro) +
+  `InvoiceModal` + `MismatchModal`. Acciones de fila (borrar/recibo) quedan en page.tsx. `page.tsx`
+  **1560 → 1268 líneas (−292)**, +8 tests (386 → 394). Sin cambios de comportamiento.
+- **Refactor `consortiums/page.tsx` — Fase 2, Tanda 3c Shell (2026-07-16)**. Extraída la lógica del shell a
+  4 hooks: `useSession` (auth/logout), `useTheme`, `useToolbarToast` (toast con autodismiss) y `useScheduler`
+  (scheduler + 6 acciones de toolbar). El JSX del sidebar queda en `page.tsx`. `page.tsx` **1726 → 1560
+  líneas (−166)**, +7 tests (379 → 386). Sin cambios de comportamiento.
+- **Refactor `consortiums/page.tsx` — Fase 2, Tanda 3b modales globales (2026-07-16)**. Extraídos
+  `useCloseAllModal` + `CloseAllModal` (Cerrar Período General) y `useUnassignedModal` + `UnassignedModal`
+  (Sin Asignar), ambos modales de 2 pasos preview/result. `page.tsx` **1913 → 1726 líneas (−187)**, +10
+  tests (369 → 379). Sin cambios de comportamiento.
+- **Refactor `consortiums/page.tsx` — Fase 2, Tanda 3a Pagos (2026-07-16)**. Extraídos los modales de pago:
+  `hooks/usePayModal` + `components/PayModal` (dos modos cuotas/libre, lógica derivada en el hook) y
+  `hooks/useViewPayments` + `components/ViewPaymentsModal` (historial read-only). Tipos de pago a
+  `lib/types.ts`. Disparados desde los callbacks de `PagosView`; recargan vía `reloadInvoices`. `page.tsx`
+  **2297 → 1913 líneas (−384)**, +14 tests (355 → 369). Sin cambios de comportamiento. Primera de 5
+  sub-tandas de la Tanda 3. Spec/plan: `docs/superpowers/{specs,plans}/2026-07-16-refactor-consortiums-tanda3*`.
+- **Refactor `consortiums/page.tsx` — Fase 2, Tanda 2 (2026-07-16)**. Extraído el núcleo de detalle:
+  `hooks/useConsortiumDetail` (cascada selección→períodos→boletas + `activeTab` + búsqueda + navegación +
+  restauración por deep-link, **elimina el hack `handleSelectConsortiumRef`**), `hooks/useObligations`, y
+  `hooks/useClosePeriod` + `components/ClosePeriodModal`. Costura **fan-out** (`onConsortiumSelected`) para
+  disparar el estado de Tanda 3 que sigue en `page.tsx` sin adueñárselo. `page.tsx` **2418 → 2297 líneas**,
+  **79 → 65 `useState`**, +16 tests (339 → 355). Sin cambios de comportamiento. Spec/plan:
+  `docs/superpowers/{specs,plans}/2026-07-16-refactor-consortiums-tanda2*`.
 - **Refactor incremental de `consortiums/page.tsx` — Fase 2, Tanda 1 (2026-07-16)**. Se empezó a
   descomponer el god-component de 3105 líneas / 91 `useState`. Extraídos a `lib/` los tipos, constantes
   y helpers puros de formato (`format.ts`, +13 tests) y matching (`match.ts`, +9 tests). Los modales

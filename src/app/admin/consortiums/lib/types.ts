@@ -61,3 +61,15 @@ export type ObligationRow = {
   };
   invoice: { id: string; isPaid: boolean; sourceFileUrl: string | null } | null;
 };
+
+export type PaymentMode = "cuotas" | "libre";
+export type PaymentRecord = {
+  id: string; amount: string | number; paymentDate: string;
+  installmentNumber: number | null; totalInstallments: number | null;
+  paymentType: "TOTAL" | "LIBRE" | "CUOTA" | null;
+  paymentMethod: string | null; driveFileUrl: string | null; observation: string | null;
+};
+export type PayForm = {
+  amount: string; paymentDate: string; totalInstallments: string;
+  paymentMethod: string; observation: string;
+};

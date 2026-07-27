@@ -4,6 +4,34 @@ Registro de decisiones tomadas ante problemas reales encontrados en producción.
 
 ---
 
+## 2026-07-16 — Tanda 2 del refactor: costura fan-out para extraer un dominio acoplado
+
+**Problema:** el "núcleo de detalle" de `consortiums/page.tsx` (cascada selección→períodos→boletas +
+obligaciones + cierre) está acoplado con estado que pertenece a otro dominio aún sin extraer (config del
+modal de Configuración = Tanda 3): `handleSelectConsortium` reseteaba y recargaba, en una sola función,
+estado de detalle, de config y de obligaciones. Extraer el detalle sin arrastrar el estado de Tanda 3 exige
+una costura.
+
+**Decisión:** `useConsortiumDetail` expone un callback **`onConsortiumSelected(c, activePeriodId)`** que
+`page.tsx` implementa para disparar los resets/fetches del estado que sigue viviendo ahí (config de Tanda 3
++ obligaciones). El hook se adueña solo de su cascada; el fan-out es el único punto de contacto. Es
+**temporal y decreciente**: cuando la Tanda 3 extraiga el modal de Configuración a su propio hook, el bloque
+de config del callback se reduce a un `config.load(c.id)`. Además, `useClosePeriod` resetea sus mensajes
+(`error`/`success`) por **efecto sobre `consortiumId`** en vez de por callback desde el detalle — evita una
+dependencia circular (el hook de cierre se crea después del detalle porque depende de su `selectedId`).
+
+**Alternativas descartadas:** que `useConsortiumDetail` se adueñara del estado de config/referencia —
+recrea el god-component en versión hook, rompe la frontera, y obliga a sacarle ese estado de nuevo en la
+Tanda 3 (churn + riesgo). Hooks granulares para la cascada — la cadena select→periods→invoices habría que
+recablearla entre hooks vía callbacks, reintroduciendo el acoplamiento por la puerta de atrás.
+
+**Impacto:** Tanda 2 completa. Nuevos `useConsortiumDetail`/`useObligations`/`useClosePeriod` +
+`ClosePeriodModal`; eliminado el hack `handleSelectConsortiumRef`. `page.tsx` 2418→2297 líneas, 79→65
+useState, +16 tests. Diferencia benigna documentada: el fan-out corre tras el `await` de períodos (transitorio
+~100ms). Spec/plan: `docs/superpowers/{specs,plans}/2026-07-16-refactor-consortiums-tanda2*`.
+
+---
+
 ## 2026-07-16 — Refactor de `consortiums/page.tsx`: hooks por dominio + verificación por tiers + infra de tests de UI
 
 **Problema:** `src/app/admin/consortiums/page.tsx` es un god-component de 3105 líneas con **91 `useState`**
