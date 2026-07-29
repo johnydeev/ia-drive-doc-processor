@@ -319,6 +319,52 @@ describe("refineExtractionWithRawText — consorcio receptor en facturas comunes
   });
 });
 
+describe("refineExtractionWithRawText — guard de IVA contenido (Ley 27.743)", () => {
+  // Caso real: boleta 0003-00161074 (RANKO). Los rótulos del régimen quedan vacíos
+  // y sus valores caen sueltos más abajo — así lineariza pdf-parse este PDF.
+  const FACTURA_LEY_27743 = [
+    "Régimen de Transparencia Fiscal al Consumidor (Ley 27.743)",
+    "IVA Contenido: $",
+    "Otros Impuestos Nacionales Indirectos: $",
+    "FACTURA",
+    "CONSORCIO DE PROPIETARIOS BARTOLOME MITRE 1225",
+    "1.00 SERVICIO DE MANTENIMIENTO ANUAL DE LOS EXTINTORES 360706.09 360706.09",
+    "62601.88",
+    "0.00 360706.09",
+  ].join("\n");
+
+  it("corrige el monto cuando la IA tomó el IVA contenido como total", () => {
+    const refined = refineExtractionWithRawText(
+      makeExtracted({ amount: 62601.88 }),
+      FACTURA_LEY_27743
+    );
+    expect(refined.amount).toBe(360706.09);
+  });
+
+  it("no toca el monto si la IA extrajo el total correcto", () => {
+    const refined = refineExtractionWithRawText(
+      makeExtracted({ amount: 360706.09 }),
+      FACTURA_LEY_27743
+    );
+    expect(refined.amount).toBe(360706.09);
+  });
+
+  it("NO aplica el guard a boletas LSP (ahí el monto correcto es el 1er vencimiento, no el máximo)", () => {
+    // Boleta de servicio público con dos vencimientos: el correcto (menor) NO debe
+    // ser reemplazado por el del segundo vencimiento con recargo.
+    const lsp = [
+      "EDESUR S.A.",
+      "Régimen de Transparencia Fiscal al Consumidor (Ley 27.743)",
+      "IVA Contenido: $",
+      "NUMERO DE CLIENTE: 12345",
+      "Total a pagar hasta 18/02/2026 121670.97",
+      "Fecha límite de pago en banco 23/02/2026 122078.88",
+    ].join("\n");
+    const refined = refineExtractionWithRawText(makeExtracted({ amount: 121670.97 }), lsp);
+    expect(refined.amount).toBe(121670.97);
+  });
+});
+
 describe("buildInvoicePrompt — identificación del consorcio receptor", () => {
   it("instruye reconocer 'CONSORCIO DE PROPIETARIOS' + dirección como el receptor", () => {
     // Input neutro que NO contiene la frase, para que el assert valide la

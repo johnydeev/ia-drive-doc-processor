@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { formatCuit } from "@/lib/cuit";
+import { correctVatContainedAmount } from "@/lib/vatContainedAmountGuard";
 import { ExtractedDocumentData } from "@/types/extractedDocument.types";
 
 /**
@@ -615,6 +616,14 @@ function buildInvoicePrompt(relevantText: string): string {
 
     "- amount: monto TOTAL a pagar ('Importe Total', 'Total a pagar'). Nunca un subtotal.",
     "  Formato numérico sin símbolos (ej: 34400.01).",
+    "  ATENCIÓN — Régimen de Transparencia Fiscal al Consumidor (Ley 27.743): las cifras",
+    "  rotuladas 'IVA Contenido' y 'Otros Impuestos Nacionales Indirectos' son INFORMATIVAS.",
+    "  Están CONTENIDAS dentro del total (no se suman a él) y NUNCA son el amount.",
+    "  Estos rótulos suelen aparecer VACÍOS (el PDF los separa de su valor) y sus números",
+    "  quedan sueltos varias líneas más abajo. En ese caso: el amount es la cifra MAYOR",
+    "  del bloque de totales, que además coincide con el total de los ítems facturados.",
+    "  Jamás elijas una cifra suelta menor cuando existe otra mayor que coincide con el",
+    "  total de los ítems: esa cifra menor casi siempre es el IVA contenido.",
 
     DUE_DATE_RULE,
 
@@ -1100,33 +1109,61 @@ function inferConsortiumFromText(text: string): string | null {
   return prefix;
 }
 
+/**
+ * Guard del IVA contenido (Ley 27.743): si la IA tomó el IVA como monto total, lo
+ * corrige. No aplica a boletas LSP — ver la nota en `refineExtractionWithRawText`.
+ */
+function applyVatContainedGuard(
+  extracted: ExtractedDocumentData,
+  rawText: string
+): ExtractedDocumentData {
+  const result = correctVatContainedAmount(extracted.amount ?? null, rawText);
+  if (!result.corrected) {
+    return extracted;
+  }
+
+  console.warn(
+    `[vat-guard] IVA contenido tomado como total (Ley 27.743): ` +
+    `${result.original} → ${result.amount} (IVA ${((result.rate ?? 0) * 100).toFixed(1)}%)`
+  );
+
+  return { ...extracted, amount: result.amount };
+}
+
 export function refineExtractionWithRawText(
   extracted: ExtractedDocumentData,
   rawText: string
 ): ExtractedDocumentData {
   // Para LSPs no aplicar el refinamiento de consorcio por "Razón Social:"
-  // porque esa sección puede pertenecer al cliente, no al consorcio
+  // porque esa sección puede pertenecer al cliente, no al consorcio.
+  //
+  // El guard de IVA contenido también queda afuera para LSPs, y a propósito: en esas
+  // boletas el monto correcto es el del PRIMER vencimiento, que NO es el máximo del
+  // documento (el segundo, con recargo, es mayor) — justo la forma que el guard usa
+  // como señal. Sus prompts son por empresa y extraen de un "Total a pagar" rotulado.
   if (isUtilityBill(rawText)) {
     return extracted;
   }
 
+  const refined = applyVatContainedGuard(extracted, rawText);
+
   const inferredConsortium = inferConsortiumFromText(rawText);
   if (!inferredConsortium) {
-    return extracted;
+    return refined;
   }
 
-  const currentConsortium = extracted.consortium ? normalizeLine(extracted.consortium) : null;
+  const currentConsortium = refined.consortium ? normalizeLine(refined.consortium) : null;
   const shouldReplace =
     needsConsortiumEnrichment(currentConsortium) ||
     !currentConsortium ||
     inferredConsortium.length > currentConsortium.length;
 
   if (!shouldReplace) {
-    return extracted;
+    return refined;
   }
 
   return {
-    ...extracted,
+    ...refined,
     consortium: inferredConsortium,
   };
 }

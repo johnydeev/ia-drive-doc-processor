@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+### Fixed
+- **Monto crítico mal extraído: IVA contenido (Ley 27.743) tomado como total (2026-07-27)**. La boleta
+  `0003-00161074` (RANKO S.R.L.) se registró con $62.601,88 cuando el total era $360.706,09 — el monto
+  guardado era exactamente el IVA contenido. Causa: el total no tiene rótulo textual en el PDF (la
+  palabra "TOTAL" es parte del formulario preimpreso) y `pdf-parse` separa `IVA Contenido: $` de su
+  valor por 16 líneas, dejando a la IA con rótulos vacíos y números sueltos. Nuevo guard determinista
+  `src/lib/vatContainedAmountGuard.ts`, puro e idempotente, cableado en `refineExtractionWithRawText`
+  (punto único de los 5 extractores + rama cacheada): auto-corrige solo si se cumplen 4 condiciones
+  (marcador del régimen + identidad aritmética exacta para IVA 21%/10,5% + el candidato es la cifra
+  máxima + el monto de la IA no lo es). No aplica a boletas LSP a propósito. Además se endureció el
+  prompt de facturas con reglas explícitas del Régimen de Transparencia Fiscal. +15 tests (404 → 419).
+  Ver `docs/decisiones.md` (2026-07-27).
+
 ### Refactor
 - **Refactor `consortiums/page.tsx` — Fase 2, Tanda 3e Config · REFACTOR CERRADO (2026-07-27)**. Última
   sub-tanda: extraídos `useConsortiumConfig` (dominio Config completo — acordeón matchNames/LSP/gastos

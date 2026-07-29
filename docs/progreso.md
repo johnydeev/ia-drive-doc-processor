@@ -32,6 +32,44 @@ Spec/plan: `docs/superpowers/{specs,plans}/2026-07-15-hardening-seguridad-y-batc
 **Pendiente anotado (spec propio futuro):** job en background para operaciones batch sobre la cola
 ProcessingJob existente — eliminaría la clase entera de 524 y permitiría volver a topes altos.
 
+## 🐛 Fix crítico — IVA contenido (Ley 27.743) tomado como monto total (2026-07-27)
+
+**Estado: implementado y verificado (typecheck + lint 0 errores + 419 tests + build + build:jobs OK).
+Sin migración. Sin commitear (lo hace el owner).**
+
+Boleta `0003-00161074` (RANKO S.R.L. → BARTOLOME MITRE 1225, 07/2026) registrada con **$62.601,88**
+cuando el total real es **$360.706,09**. El monto guardado era exactamente el IVA contenido
+(`360.706,09 × 21/121`). Causa: el total no tiene rótulo textual en el PDF (la palabra "TOTAL" es parte
+del formulario preimpreso) y `pdf-parse` separa `IVA Contenido: $` de su valor por 16 líneas → la IA
+recibe rótulos vacíos y números sueltos. Detalle completo en `docs/decisiones.md` (2026-07-27) y spec:
+`docs/superpowers/specs/2026-07-27-guard-iva-contenido-ley-27743-design.md`.
+
+Hecho:
+- **`src/lib/vatContainedAmountGuard.ts`** — guard determinista puro e idempotente. Auto-corrige solo
+  si se cumplen 4 condiciones (marcador del régimen + identidad aritmética exacta ±0,05 para IVA 21% o
+  10,5% + el candidato es la cifra máxima + el monto de la IA no lo es). Loguea `[vat-guard]` al
+  corregir.
+- Cableado en **`refineExtractionWithRawText`** — punto único de los 5 extractores + la rama cacheada.
+  **No aplica a boletas LSP** a propósito (ahí el monto correcto es el 1er vencimiento, que no es el
+  máximo).
+- **Prompt de facturas endurecido** con reglas explícitas del Régimen de Transparencia Fiscal, como
+  primera línea de defensa donde la aritmética no cierra (IVA mixto, otro layout).
+- Tests: +12 tier 0 del guard (incluido el texto literal de la boleta real) y +3 de integración.
+  **404 → 419**.
+
+**⏳ Pendiente del owner (remediación de la boleta ya cargada):** no hay endpoint `PATCH` de boleta, el
+monto no es editable desde la UI. Tras deployar el fix: borrar la boleta `0003-00161074` desde la UI
+(el borrado ya mueve el PDF a `pending` y elimina la fila de Sheets) y dejar que el scheduler la
+reprocese.
+
+### ⏭️ PRÓXIMA SESIÓN — Auditoría de boletas históricas (spec propio pendiente)
+Decisión del owner: documentarla, no construirla ahora. El texto del PDF **no se persiste** en la DB,
+así que no hay forma de detectar casos viejos con una query. Sí con un **script de solo lectura** que
+por cada boleta: descargue el PDF desde Drive (`sourceFileUrl` está guardado), extraiga el texto con
+`PdfTextExtractorService`, aplique `correctVatContainedAmount` sobre el `amount` almacenado y reporte
+dónde dispararía. **No escribe en DB ni Sheets** — emite una tabla de sospechosos para revisión manual.
+Costo: ~883 descargas de Drive, 0 tokens de IA; conviene correrlo fuera del horario del scheduler.
+
 ## ✅ Refactor `consortiums/page.tsx` — Tanda 3e (Config) completa · REFACTOR CERRADO (2026-07-27)
 
 **Estado: implementado y verificado (typecheck + lint 0 errores + 404 tests + build + build:jobs OK).

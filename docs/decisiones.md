@@ -4,6 +4,59 @@ Registro de decisiones tomadas ante problemas reales encontrados en producción.
 
 ---
 
+## 2026-07-27 — Monto crítico mal extraído: guard del IVA contenido (Ley 27.743)
+
+**Problema:** la boleta `0003-00161074` (RANKO S.R.L. → BARTOLOME MITRE 1225, período 07/2026) se
+registró con **$62.601,88** cuando el total de la factura es **$360.706,09**. El monto guardado es
+exactamente el **IVA contenido**: `360.706,09 × 21/121 = 62.601,88`. Error crítico: se persistió en DB
+y se escribió en Sheets.
+
+Reconstruido el layout real de la página 1 (coordenadas vía pdfjs, no orden del texto), la causa son
+dos cosas que se combinan:
+1. **El importe total no tiene rótulo de texto.** La palabra "TOTAL" pertenece al formulario
+   preimpreso de RANKO (imagen). En el texto extraído, `360706.09` es un número suelto sin nada que
+   lo identifique.
+2. **`pdf-parse` lineariza el PDF huerfanizando los valores.** En el PDF, `IVA Contenido: $` y
+   `62601.88` están en la misma línea física (y=60); en el texto quedan a **16 líneas** de distancia
+   (rótulo vacío en la línea 5, número en la 21).
+
+La IA recibe rótulos vacíos y números sueltos, sin forma de atarlos. El prompt tampoco la ayudaba: su
+única regla de monto era *"Importe Total / Total a pagar, nunca un subtotal"* — y el IVA contenido **no
+es un subtotal**, así que la regla no lo excluía. El bloque de la Ley 27.743 es obligatorio en toda
+factura a consumidor final desde 2025 y los consorcios reciben facturas así de forma habitual: la
+trampa se iba a repetir.
+
+**Decisión:** **guard determinista que auto-corrige** (`src/lib/vatContainedAmountGuard.ts`), invocado
+desde `refineExtractionWithRawText` — el punto único por el que pasan los 5 extractores de la cadena
+IA más la rama cacheada por hash. Corrige solo si se cumplen **las cuatro condiciones a la vez**:
+(1) el texto tiene un marcador del régimen (`Ley 27.743` / `IVA Contenido` / `Otros Impuestos
+Nacionales Indirectos`); (2) la identidad aritmética cierra: `|amount − max × r/(1+r)| ≤ 0,05` para
+`r ∈ {0,21; 0,105}`; (3) el candidato es la cifra máxima del documento; (4) el monto de la IA no es la
+máxima. Si alguna falla, no-op y se respeta lo que extrajo la IA. Es una función **pura e idempotente**
+que no adivina layout: usa una identidad aritmética que es prácticamente una prueba. Cuando corrige,
+emite `console.warn` con prefijo `[vat-guard]` (monto original → corregido + tasa). Se endureció además
+el prompt de facturas con reglas explícitas sobre el régimen, como primera línea de defensa para los
+casos donde la aritmética no cierra (IVA mixto, otro layout).
+
+**Alternativas descartadas:** **derivar a Revisión con tag "MONTO DUDOSO"** — riesgo cero de escribir
+un número inventado, pero suma trabajo manual sobre un volumen que va a crecer. **Solo endurecer el
+prompt** — queda dependiendo de que el modelo obedezca, sin red determinista si un proveedor de la
+cadena falla o cambia el layout. **Aplicar el guard también a boletas LSP** — descartado a propósito:
+ahí el monto correcto es el del PRIMER vencimiento, que NO es el máximo del documento (el segundo, con
+recargo, es mayor), justo la forma que el guard usa como señal; se habría roto una regla que ya
+funciona. **Incluir la tasa del 27%** — aplica a servicios a responsables inscriptos, no al régimen de
+transparencia a consumidor final, y cada tasa extra amplía la superficie de falso positivo.
+
+**Impacto:** nuevos `src/lib/vatContainedAmountGuard.ts` + su test (12 casos, incluido el texto literal
+de la boleta real); `src/lib/extraction.ts` (guard cableado + prompt endurecido) y 3 tests de
+integración en `extraction.test.ts` (aplica en facturas, no aplica en LSP). 404 → 419 tests. Sin
+migración. **Remediación de la boleta ya cargada:** no existe endpoint `PATCH` de boleta (el monto no
+es editable desde la UI), así que el camino es borrarla desde la UI —el borrado ya mueve el PDF a
+`pending` y elimina la fila de Sheets— y dejar que el scheduler la reprocese con el fix deployado.
+Spec: `docs/superpowers/specs/2026-07-27-guard-iva-contenido-ley-27743-design.md`.
+
+---
+
 ## 2026-07-27 — Tanda 3e: disolución del fan-out (cierre del refactor de `consortiums/page.tsx`)
 
 **Problema:** la costura temporal que la Tanda 2 introdujo a propósito (ver entrada del 2026-07-16) seguía
