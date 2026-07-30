@@ -336,6 +336,26 @@ Sube PDF de recibo a Drive en:
 Si no hay `receipts` folder → usa `scanned` como raíz.
 Los campos `receiptDriveFileId` y `receiptDriveFileUrl` se guardan en Invoice.
 ---
+## Borrado de UNA boleta — dos destinos según la vista
+Ambas vistas comparten la lógica de `src/lib/invoiceDeletion.ts` (`deleteInvoiceById` /
+`deleteInvoicesWithIndex`): borran el Invoice + el recibo asociado + la fila de Sheets. Lo que cambia es
+**dónde queda el PDF en Drive** (parámetro `InvoiceDeleteDestination`):
+
+| Vista | Endpoint | Destino del PDF | ¿Se reprocesa? |
+|---|---|---|---|
+| Pestaña **Boletas** del consorcio | `DELETE /api/client/consortiums/[id]/invoices/[invoiceId]` | **Revisión** (`failed`) | **No** — queda para inspección manual |
+| **Boletas entrantes** (`/admin/boletas`) | `POST /api/client/invoices/bulk-delete` | **Pendientes** (`pending`) | **Sí** — el worker la procesa de nuevo |
+
+El destino `pending` es el camino para **corregir una boleta mal procesada** (ej. monto mal extraído): al
+borrarse el Invoice y la fila del Sheet no queda duplicado, el scheduler la re-encola y el pipeline la
+vuelve a extraer. El scheduler solo saltea archivos con un job en `PENDING`/`PROCESSING` — un job
+`COMPLETED` viejo NO bloquea el reprocesamiento. Si la boleta tiene pagos registrados, el borrado se
+rechaza (409).
+
+> No confundir con la **purga por cliente** (abajo): esa es masiva, a nivel admin, y siempre devuelve
+> todo a `pending`.
+
+---
 ## Purga de boletas por cliente (Admin)
 **Preview:** `GET /api/admin/clients/[id]/purge` — retorna `{ ok, count, clientName }`
 **Ejecutar:** `DELETE /api/admin/clients/[id]/purge` — purga completa

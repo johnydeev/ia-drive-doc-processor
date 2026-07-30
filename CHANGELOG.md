@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Docs
+- **Corregida documentación desactualizada del borrado de boletas (2026-07-27)**. El comentario de
+  `handleDeleteInvoice` en `consortiums/page.tsx` afirmaba que el borrado mueve el PDF `scanned→pending`;
+  en realidad el borrado por consorcio lo manda a **Revisión** (`failed`) para que el scheduler no lo
+  reprocese. Nueva sección en `CLAUDE.md` documentando los **dos destinos** según la vista (consorcio →
+  `failed`, Boletas entrantes → `pending`) y que el destino `pending` es el camino para corregir una
+  boleta mal procesada. Solo comentarios y docs — sin cambios de código.
+
 ### Fixed
 - **Monto crítico mal extraído: IVA contenido (Ley 27.743) tomado como total (2026-07-27)**. La boleta
   `0003-00161074` (RANKO S.R.L.) se registró con $62.601,88 cuando el total era $360.706,09 — el monto

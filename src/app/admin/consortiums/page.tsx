@@ -184,8 +184,13 @@ export default function ConsortiumsPage() {
     setToolbarInfo, setToolbarError,
   });
 
-  // Elimina la boleta + recibo asociado + mueve el PDF en Drive scanned→pending +
-  // borra fila de Sheets. Bloqueado si tiene pagos (el backend responde 409).
+  // Elimina la boleta: borra el Invoice + el recibo asociado + la fila de Sheets, y
+  // mueve el PDF a **Revisión** (`failed`) — NO a Pendientes, para que el scheduler no
+  // la reprocese y la recree.
+  // Para CORREGIR una boleta mal procesada hay que borrarla desde "Boletas entrantes"
+  // (/admin/boletas): esa vista borra con destino `pending`, así el worker la vuelve a
+  // procesar. Ver `src/lib/invoiceDeletion.ts` (InvoiceDeleteDestination).
+  // Bloqueado si tiene pagos (el backend responde 409).
   const handleDeleteInvoice = async (invoiceId: string) => {
     if (!selectedId) return;
     try {
