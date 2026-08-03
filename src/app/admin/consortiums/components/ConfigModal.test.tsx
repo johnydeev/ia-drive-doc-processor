@@ -2,9 +2,10 @@ import { describe, it, expect, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ConfigModal } from "./ConfigModal";
-import type { Provider } from "../lib/types";
+import type { Bank, Provider } from "../lib/types";
 
 const providers: Provider[] = [{ id: "pr1", canonicalName: "EDESUR", cuit: "30-65511651-2", paymentAlias: null }];
+const banks: Bank[] = [{ id: "b1", name: "Santander", color: "red" }];
 
 function setup(overrides: Partial<React.ComponentProps<typeof ConfigModal>> = {}) {
   const props: React.ComponentProps<typeof ConfigModal> = {
@@ -14,6 +15,16 @@ function setup(overrides: Partial<React.ComponentProps<typeof ConfigModal>> = {}
     onToggleSection: vi.fn(),
     onClose: vi.fn(),
     providers,
+    banks,
+    bank: {
+      form: {
+        bankId: "", bankAlias: "", cbu: "", accountNumber: "",
+        branch: "", accountType: "", accountHolder: "",
+      },
+      msg: null,
+      onChangeForm: vi.fn(),
+      onSave: vi.fn(),
+    },
     matchNames: {
       editing: false, value: "ALT 1", msg: null,
       onChangeValue: vi.fn(), onStartEdit: vi.fn(), onCancelEdit: vi.fn(), onSave: vi.fn(),
@@ -34,12 +45,35 @@ function setup(overrides: Partial<React.ComponentProps<typeof ConfigModal>> = {}
 }
 
 describe("ConfigModal", () => {
-  it("muestra el consorcio y las 3 secciones del acordeón colapsadas", () => {
+  it("muestra el consorcio y las 4 secciones del acordeón colapsadas", () => {
     setup();
     expect(screen.getByText(/THAMES 647/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Nombres alternativos/ })).toHaveAttribute("aria-expanded", "false");
+    expect(screen.getByRole("button", { name: /Banco y cuenta/ })).toHaveAttribute("aria-expanded", "false");
     expect(screen.getByRole("button", { name: /Servicios públicos/ })).toHaveAttribute("aria-expanded", "false");
     expect(screen.getByRole("button", { name: /Gastos fijos/ })).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("con openSection='bank' muestra el select de bancos y los campos de cuenta", async () => {
+    const props = setup({
+      openSection: "bank",
+      bank: {
+        form: {
+          bankId: "b1", bankAlias: "BROWN.706.CONS", cbu: "0720500220000000294986",
+          accountNumber: "500-002949/8", branch: "016",
+          accountType: "Cuenta Corriente", accountHolder: "Consorcio A. Brown 706",
+        },
+        msg: null,
+        onChangeForm: vi.fn(),
+        onSave: vi.fn(),
+      },
+    });
+    expect(screen.getByDisplayValue("0720500220000000294986")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("500-002949/8")).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "Santander" })).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: /^Guardar$/ }));
+    expect(props.bank.onSave).toHaveBeenCalledTimes(1);
   });
 
   it("click en la cabecera de LSP dispara onToggleSection('lsp')", async () => {

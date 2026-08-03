@@ -93,4 +93,53 @@ describe("useConsortiumConfig", () => {
     expect(JSON.parse((post?.[1] as RequestInit).body as string)).toEqual({ providerId: "p1" });
     expect(result.current.fixed.target).toBe("");
   });
+
+  // ── Sección Banco ──────────────────────────────────────────────────────
+  it("load() carga el banco y los datos de cuenta del consorcio", () => {
+    const { result } = renderHook(() => useConsortiumConfig(deps()));
+
+    act(() => result.current.load({
+      ...consortium,
+      bankId: "b1",
+      bank: { id: "b1", name: "Santander", color: "red" },
+      bankAlias: "BROWN.706.CONS",
+      cbu: "0720500220000000294986",
+      accountNumber: "500-002949/8",
+      branch: "016",
+      accountType: "Cuenta Corriente",
+      accountHolder: "Consorcio A. Brown 706",
+    } as Consortium));
+
+    expect(result.current.bank.form.bankId).toBe("b1");
+    expect(result.current.bank.form.cbu).toBe("0720500220000000294986");
+    expect(result.current.bank.form.branch).toBe("016");
+  });
+
+  it("load() resetea los datos bancarios al cambiar a un consorcio sin banco", () => {
+    const { result } = renderHook(() => useConsortiumConfig(deps()));
+
+    act(() => result.current.load({ ...consortium, bankId: "b1", cbu: "123" } as Consortium));
+    act(() => result.current.load({ ...consortium, id: "c2" } as Consortium));
+
+    expect(result.current.bank.form.bankId).toBe("");
+    expect(result.current.bank.form.cbu).toBe("");
+  });
+
+  it("bank.save() manda el PATCH con los datos normalizados y avisa al padre", async () => {
+    guardedFetch.mockResolvedValue({ ok: true, json: async () => ({ ok: true, consortium: { id: "c1" } }) });
+    const onBankSaved = vi.fn();
+    const { result } = renderHook(() => useConsortiumConfig(deps({ onBankSaved })));
+
+    act(() => result.current.bank.setForm({ bankId: "b1", cbu: " 0720500220000000294986 ", accountHolder: "  " }));
+    await act(async () => { await result.current.bank.save(); });
+
+    const patch = guardedFetch.mock.calls.find((c) => (c[1] as RequestInit | undefined)?.method === "PATCH");
+    expect(patch?.[0]).toBe("/api/client/consortiums/c1");
+    expect(JSON.parse((patch?.[1] as RequestInit).body as string)).toMatchObject({
+      bankId: "b1",
+      cbu: "0720500220000000294986",
+      accountHolder: null,
+    });
+    expect(onBankSaved).toHaveBeenCalled();
+  });
 });

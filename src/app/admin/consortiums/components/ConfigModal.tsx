@@ -1,7 +1,7 @@
 import styles from "../page.module.css";
 import { AsyncButton } from "@/components/AsyncButton";
 import { LSP_PROVIDERS } from "../lib/constants";
-import type { ConfigSection, FixedExpenseRow, LspForm, LspService, Provider } from "../lib/types";
+import type { Bank, BankAccountForm, ConfigSection, FixedExpenseRow, LspForm, LspService, Provider } from "../lib/types";
 
 type Props = {
   consortiumName: string;
@@ -10,6 +10,13 @@ type Props = {
   onToggleSection: (section: ConfigSection) => void;
   onClose: () => void;
   providers: Provider[];
+  banks: Bank[];
+  bank: {
+    form: BankAccountForm;
+    msg: string | null;
+    onChangeForm: (patch: Partial<BankAccountForm>) => void;
+    onSave: () => void;
+  };
   matchNames: {
     editing: boolean;
     value: string;
@@ -41,7 +48,7 @@ type Props = {
 };
 
 export function ConfigModal({
-  consortiumName, saving, openSection, onToggleSection, onClose, providers, matchNames, lsp, fixed,
+  consortiumName, saving, openSection, onToggleSection, onClose, providers, banks, bank, matchNames, lsp, fixed,
 }: Props) {
   return (
     <div className={styles.modalOverlay} onClick={() => !saving && onClose()}>
@@ -91,6 +98,72 @@ export function ConfigModal({
                 </div>
               )}
               {matchNames.msg && <p className={styles.infoMsg} style={{ marginTop: 6 }}>{matchNames.msg}</p>}
+            </div>
+          )}
+        </div>
+
+        <div className={styles.configSection}>
+          <button
+            type="button"
+            className={styles.lspToggle}
+            onClick={() => onToggleSection("bank")}
+            aria-expanded={openSection === "bank"}
+          >
+            <span className={styles.lspToggleChevron} aria-hidden="true">{openSection === "bank" ? "▾" : "▸"}</span>
+            <span className={styles.lspTitle}>Banco y cuenta</span>
+          </button>
+          {openSection === "bank" && (
+            <div className={styles.lspContent}>
+              <p className={styles.configSectionDesc}>
+                Banco donde cobra el consorcio y datos de su cuenta (bloque FORMA DE PAGO).
+              </p>
+              <div className={styles.providerFormGrid}>
+                <div className={`${styles.formField} ${styles.formFieldFull}`}>
+                  <label>Banco</label>
+                  <select
+                    className={styles.formSelect}
+                    value={bank.form.bankId}
+                    onChange={(e) => bank.onChangeForm({ bankId: e.target.value })}
+                  >
+                    <option value="">— Sin banco —</option>
+                    {banks.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+                  </select>
+                </div>
+                <div className={styles.formField}>
+                  <label>Alias</label>
+                  <input className={styles.formInput} value={bank.form.bankAlias} onChange={(e) => bank.onChangeForm({ bankAlias: e.target.value })} placeholder="BROWN.706.CONS" />
+                </div>
+                <div className={styles.formField}>
+                  <label>CBU</label>
+                  <input className={styles.formInput} value={bank.form.cbu} onChange={(e) => bank.onChangeForm({ cbu: e.target.value })} placeholder="0720500220000000294986" />
+                </div>
+                <div className={styles.formField}>
+                  <label>Nº de cuenta</label>
+                  <input className={styles.formInput} value={bank.form.accountNumber} onChange={(e) => bank.onChangeForm({ accountNumber: e.target.value })} placeholder="500-002949/8" />
+                </div>
+                <div className={styles.formField}>
+                  <label>Sucursal</label>
+                  <input className={styles.formInput} value={bank.form.branch} onChange={(e) => bank.onChangeForm({ branch: e.target.value })} placeholder="016" />
+                </div>
+                <div className={styles.formField}>
+                  <label>Tipo de cuenta</label>
+                  <input className={styles.formInput} list="accountTypes" value={bank.form.accountType} onChange={(e) => bank.onChangeForm({ accountType: e.target.value })} placeholder="Cuenta Corriente" />
+                  <datalist id="accountTypes">
+                    <option value="Cuenta Corriente" />
+                    <option value="Caja de Ahorro" />
+                  </datalist>
+                </div>
+                <div className={`${styles.formField} ${styles.formFieldFull}`}>
+                  <label>Titular</label>
+                  <input className={styles.formInput} value={bank.form.accountHolder} onChange={(e) => bank.onChangeForm({ accountHolder: e.target.value })} placeholder="Consorcio de Propietarios A. Brown 706" />
+                </div>
+              </div>
+              <div className={styles.matchNamesActions}>
+                <AsyncButton type="button" className={styles.addInvoiceBtn} onClick={bank.onSave} pendingLabel="Guardando…">
+                  Guardar
+                </AsyncButton>
+              </div>
+              {bank.msg && <p className={styles.infoMsg} style={{ marginTop: 6 }}>{bank.msg}</p>}
             </div>
           )}
         </div>

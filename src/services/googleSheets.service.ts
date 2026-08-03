@@ -125,7 +125,9 @@ function formatAmountARS(value: number | string | null | undefined): string {
 }
 
 export interface DirectoryData {
-  consortiums: { canonicalName: string; cuit: string | null; matchNames: string | null; paymentAlias: string | null }[];
+  // Los consorcios NO traen alias: el alias bancario del consorcio se carga por UI
+  // (sección Banco del modal de Configuración), no por el archivo ALTA.
+  consortiums: { canonicalName: string; cuit: string | null; matchNames: string | null }[];
   providers: { canonicalName: string; cuit: string | null; matchNames: string | null; paymentAlias: string | null; providerType: "PROVEEDOR" | "EMPLEADO" }[];
   rubros: { name: string; description: string | null }[];
   coeficientes: { code: string; name: string }[];
@@ -339,7 +341,8 @@ export class GoogleSheetsService {
     const warnings: string[] = [];
 
     const TABS: { name: string; headers: string[]; cols: string }[] = [
-      { name: "_Consorcios",  headers: ["NOMBRE CANÓNICO", "CUIT", "NOMBRES ALTERNATIVOS", "ALIAS"], cols: "A:D" },
+      // Sin columna ALIAS: el alias bancario del consorcio se carga por UI.
+      { name: "_Consorcios",  headers: ["NOMBRE CANÓNICO", "CUIT", "NOMBRES ALTERNATIVOS"], cols: "A:C" },
       { name: "_Proveedores", headers: ["NOMBRE CANÓNICO", "CUIT", "NOMBRES ALTERNATIVOS", "ALIAS", "TIPO"], cols: "A:E" },
       { name: "_Rubros",      headers: ["NOMBRE", "DESCRIPCIÓN"],              cols: "A:B" },
       { name: "_Coeficientes",headers: ["NOMBRE", "CÓDIGO"],                   cols: "A:B" },
@@ -398,7 +401,7 @@ export class GoogleSheetsService {
     };
 
     const [consortiumRows, providerRows, rubroRows, coeficienteRows, lspServiceRows] = await Promise.all([
-      readTab("_Consorcios", "A:D"),
+      readTab("_Consorcios", "A:C"),
       readTab("_Proveedores", "A:E"),
       readTab("_Rubros", "A:B"),
       readTab("_Coeficientes", "A:B"),
@@ -411,7 +414,6 @@ export class GoogleSheetsService {
           canonicalName: row[0]?.toString().trim().toUpperCase() ?? "",
           cuit: row[1]?.toString().trim() || null,
           matchNames: row[2]?.toString().trim() || null,
-          paymentAlias: row[3]?.toString().trim() || null,
         }))
         .filter((c) => c.canonicalName),
 

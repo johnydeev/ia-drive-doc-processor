@@ -53,6 +53,7 @@ src/
 │   │   └── client/
 │   │       ├── consortiums/   # CRUD + periods + invoices + scan + receipt + fixed-expenses + lsp-services
 │   │       ├── providers/     # CRUD proveedores
+│   │       ├── banks/         # CRUD catálogo de bancos (nivel cliente)
 │   │       ├── rubros/        # CRUD rubros (nivel cliente)
 │   │       ├── coeficientes/  # CRUD coeficientes (nivel cliente)
 │   │       ├── invoices/      # vista global: listado + [id]/payments (pagos)
@@ -97,9 +98,12 @@ src/
 ## Schema de base de datos
 ```
 Client          → Tenant. Roles: ADMIN / CLIENT / VIEWER. consortiumsEnabled (feature gate). batchSize (PDFs por ciclo)
-  ├── Consortium  → Edificio. canonicalName + rawName + cuit + matchNames + paymentAlias
+  ├── Consortium  → Edificio. canonicalName + rawName + cuit + matchNames
+  │                 bankId? → Bank  +  datos de su cuenta (bankAlias/cbu/accountNumber/
+  │                 branch/accountType/accountHolder)
   │   ├── Period    → Período mensual. status: ACTIVE / CLOSED
   │   └── LspService → Servicio de empresa pública. provider + clientNumber + description
+  ├── Bank        → Banco del catálogo (nivel cliente). name + color (slug de paleta)
   ├── Provider    → Proveedor. canonicalName + cuit + matchNames + paymentAlias
   ├── Rubro       → Categoría de gasto (nivel cliente). name + description?
   ├── Coeficiente → Coeficiente de liquidación (nivel cliente). code + name
@@ -140,7 +144,15 @@ Client          → Tenant. Roles: ADMIN / CLIENT / VIEWER. consortiumsEnabled (
 - `matchNames` → nombres alternativos separados por `|` para matching interno con LSP (Edesur, AySA, etc.)
   - Ejemplo: `"BROWN ALMTE AV 708|ALMIRANTE BROWN 708"`
   - Campo interno — **no se muestra en la UI**
-- `paymentAlias` → alias visible en la UI y en la columna "ALIAS" de Google Sheets
+- `bankId` → FK al catálogo `Bank` del cliente (nullable). Reemplazó al viejo `bank String?`, que el
+  pipeline leía hasta la columna O de Sheets pero **nadie escribía** (siempre `null`). Se asigna desde
+  la sección "Banco y cuenta" del modal de Configuración. `onDelete: SetNull` — borrar un banco
+  desasigna edificios, no los borra.
+- **Datos de la cuenta** (bloque FORMA DE PAGO de la liquidación), todos nullable y **cargados sólo
+  por UI**, nunca por el archivo ALTA ni por el import Excel:
+  `bankAlias` (alias CBU — ex `paymentAlias`, que había nacido sin consumidor), `cbu`,
+  `accountNumber`, `branch`, `accountType` (string libre, no enum), `accountHolder`.
+  Una sola cuenta por consorcio.
 - `statementsFolderId` → ID de la carpeta del edificio dentro de "Rendiciones" (`driveFoldersJson.statements`). La crea/comparte la app la 1ª vez que organiza una boleta del consorcio; luego se reutiliza.
 - `statementsFolderUrl` → webViewLink **público** de esa carpeta (para el QR de rendición). Visible en el panel con botón **Copiar**.
 ### Campos importantes en Provider
@@ -175,7 +187,7 @@ Client          → Tenant. Roles: ADMIN / CLIENT / VIEWER. consortiumsEnabled (
 ### Formato del archivo ALTA (5 hojas)
 | Hoja | Col A | Col B | Col C | Col D |
 |---|---|---|---|---|
-| `_Consorcios` | NOMBRE CANÓNICO | CUIT | NOMBRES ALTERNATIVOS (separado por `\|`, interno) | ALIAS (visible en UI) |
+| `_Consorcios` | NOMBRE CANÓNICO | CUIT | NOMBRES ALTERNATIVOS (separado por `\|`, interno) | — |
 | `_Proveedores` | NOMBRE CANÓNICO | CUIT | NOMBRES ALTERNATIVOS (separado por `\|`, interno) | ALIAS (visible en UI) |
 | `_Rubros` | NOMBRE | DESCRIPCIÓN (opcional) | — | — |
 | `_Coeficientes` | NOMBRE | CÓDIGO | — | — |
@@ -313,15 +325,17 @@ WHERE "canonicalName" = 'ALMIRANTE BROWN 706';
 **Endpoint:** `POST /api/client/import`
 **Template:** `GET /api/client/import/template` (descarga .xlsx de ejemplo)
 Hoja `Edificios`:
-| Nombre | CUIT | Aliases | Alias de pago |
-|--------|------|---------|---------------|
-| ARENALES 2154 | 30-52312872-4 | CONS PROP ARENALES\|ARENALES 56 | ARENALES |
+| Nombre | CUIT | Aliases |
+|--------|------|---------|
+| ARENALES 2154 | 30-52312872-4 | CONS PROP ARENALES\|ARENALES 56 |
 Hoja `Proveedores`:
 | Nombre | CUIT | Alias | Alias de pago |
 |--------|------|-------|---------------|
 | TIGRE ASCENSORES S.A. | 27-33906838-6 | TIGRE ASCENSORES | TIGRE |
 - Aliases en edificios/proveedores: separados por `|`, mapean a `matchNames` (interno)
-- Alias de pago: campo único opcional, mapea a `paymentAlias` (visible en UI y Sheets)
+- Alias de pago: **solo proveedores**. Campo único opcional, mapea a `Provider.paymentAlias`
+  (visible en UI y en la columna I de Sheets). Los edificios no importan alias — el alias bancario
+  del consorcio (`bankAlias`) se carga por UI.
 - Duplicados: se omiten (skip), no sobreescriben
 ---
 ## Recibo de pago
@@ -414,9 +428,21 @@ Customizable por cliente en `extractionConfigJson.columnMapping`. Fuente única 
 ### Estructura visual
 - **Sidebar** colapsable en desktop (iconos / iconos + labels), menú hamburguesa en tablet/mobile (≤1024px).
   - Logo placeholder, nombre del cliente, separador.
-  - Botones: Sincronizar directorio, Consorcios (con badge Premium si `consortiumsEnabled` es false), Cerrar Periodo General (solo rol CLIENT), Cerrar sesión.
+  - Botones: Sincronizar directorio, Bancos, Consorcios (con badge Premium si `consortiumsEnabled` es false), Cerrar Periodo General (solo rol CLIENT), Cerrar sesión.
 - **Toolbar superior**: Pausar/Ejecutar scheduler a la izquierda, toggle dark/light (switch con iconos sol/luna) a la derecha.
 - **Toggle de tema**: estado solo de sesión (no persiste en localStorage). Clase `dark` en `<html>`.
+### Vista general: dos niveles (bancos → edificios)
+- **Nivel 0** (landing): grilla de cards de banco (`BankGrid`). Cada card muestra el nombre, la
+  cantidad de edificios y un badge por edificio, con un color sutil según `Bank.color`
+  (`data-bank-color` + variables CSS por tema). Card **"Sin banco"** al final si hay consorcios sin
+  asignar. El buscador matchea nombre de banco **y** de edificio. Click en la card → nivel 1; click
+  en un badge → entra directo a ese consorcio.
+- **Nivel 1**: la grilla de tarjetas de edificio de siempre (boletas / deuda mes / deuda total),
+  filtrada por el banco elegido, con breadcrumb `← Todos los bancos`.
+- **ABM de bancos** (`BanksModal`, botón Bancos del sidebar): alta, renombre, color y borrado. Al
+  borrar avisa cuántos edificios quedarán sin banco (la FK es `SetNull`).
+- Agrupación pura en `lib/groupByBank.ts`; paleta en `lib/bankPalette.ts` (fuente única compartida
+  con el Zod de los endpoints).
 ### Cerrar Periodo General (modal de 2 pasos)
 1. **Preview** (`GET /api/client/periods/close-all/preview`): calcula mes mayoritario entre períodos ACTIVE del cliente. Retorna `{ majorityMonth, nextMonth, toClose, toSkip }`.
 2. **Execute** (`POST /api/client/periods/close-all`): recalcula mes mayoritario server-side, cierra períodos del mes mayoritario (ACTIVE→CLOSED) y crea el siguiente como ACTIVE. Retorna `{ closed, created, skipped, warnings }`.

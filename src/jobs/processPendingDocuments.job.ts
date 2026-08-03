@@ -344,7 +344,7 @@ async function resolveAssignment(
           canonicalProvider: resolvedProvider?.canonicalName ?? LSP_FALLBACK_NAMES[lspProvider] ?? lspProvider,
           canonicalProviderTaxId: resolvedProvider?.cuit ?? extracted.providerTaxId,
           providerPaymentAlias: resolvedProvider?.paymentAlias ?? null,
-          consortiumBank: lspService.consortium.bank ?? null,
+          consortiumBank: lspService.consortium.bank?.name ?? null,
           statementsFolderId: lspService.consortium.statementsFolderId ?? null,
           periodMonth: activePeriod?.month ?? null,
           periodYear: activePeriod?.year ?? null,
@@ -412,7 +412,7 @@ async function resolveAssignment(
   base.periodId = activePeriod?.id;
   base.periodLabel = activePeriod ? formatPeriodLabel(activePeriod.month, activePeriod.year) : null;
   base.canonicalConsortium = consortium.rawName;
-  base.consortiumBank = consortium.bank ?? null;
+  base.consortiumBank = consortium.bank?.name ?? null;
   base.statementsFolderId = consortium.statementsFolderId ?? null;
   base.periodMonth = activePeriod?.month ?? null;
   base.periodYear = activePeriod?.year ?? null;

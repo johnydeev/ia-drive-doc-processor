@@ -8,7 +8,8 @@ import { getPrismaClient } from "@/lib/prisma";
  */
 const LSP_MATCH_INCLUDE = {
   consortium: {
-    select: { id: true, canonicalName: true, rawName: true, bank: true, statementsFolderId: true },
+    // `bank` es la relación al catálogo: alimenta la columna O (BANCO) de Sheets.
+    select: { id: true, canonicalName: true, rawName: true, bank: { select: { name: true } }, statementsFolderId: true },
   },
   providerRef: {
     select: { id: true, canonicalName: true, cuit: true, paymentAlias: true },

@@ -84,9 +84,35 @@ export async function PATCH(
       data.matchNames = body.matchNames || null;
     }
 
+    // Banco asignado: null desasigna. Se valida que pertenezca al mismo cliente
+    // para que un id de otro tenant no pueda enlazarse.
+    if (typeof body.bankId === "string" || body.bankId === null) {
+      if (body.bankId) {
+        const bank = await prisma.bank.findFirst({
+          where: { id: body.bankId, clientId: auth.session.clientId },
+        });
+        if (!bank) {
+          return NextResponse.json({ ok: false, error: "Banco no encontrado" }, { status: 404 });
+        }
+        data.bankId = body.bankId;
+      } else {
+        data.bankId = null;
+      }
+    }
+
+    // Datos de la cuenta del consorcio (bloque FORMA DE PAGO de la liquidación).
+    const accountFields = ["bankAlias", "cbu", "accountNumber", "branch", "accountType", "accountHolder"] as const;
+    for (const field of accountFields) {
+      const value = body[field];
+      if (typeof value === "string" || value === null) {
+        data[field] = typeof value === "string" ? value.trim() || null : null;
+      }
+    }
+
     const updated = await prisma.consortium.update({
       where: { id: consortiumId },
       data,
+      include: { bank: true },
     });
 
     return NextResponse.json({ ok: true, consortium: updated });

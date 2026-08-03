@@ -36,6 +36,10 @@ import { InvoiceModal } from "./components/InvoiceModal";
 import { MismatchModal } from "./components/MismatchModal";
 import { useConsortiumConfig } from "./hooks/useConsortiumConfig";
 import { ConfigModal } from "./components/ConfigModal";
+import { useBanks } from "./hooks/useBanks";
+import { BanksModal } from "./components/BanksModal";
+import { BankGrid } from "./components/BankGrid";
+import { groupByBank, UNASSIGNED_BANK_ID } from "./lib/groupByBank";
 
 export default function ConsortiumsPage() {
   const router = useRouter();
@@ -85,6 +89,11 @@ export default function ConsortiumsPage() {
 
   const consortium = useConsortiumForm(fetchConsortiums);
   const provider = useProviderForm((p) => setProviders((prev) => [...prev, p]));
+
+  // Catálogo de bancos + navegación de 2 niveles de la vista general:
+  // nivel 0 = cards de banco, nivel 1 = grilla de edificios del banco elegido.
+  const banks = useBanks();
+  const [selectedBankId, setSelectedBankId] = useState<string | null>(null);
 
   const fetchProviders = useCallback(async () => {
     try {
@@ -151,6 +160,8 @@ export default function ConsortiumsPage() {
     consortiumId: selectedId,
     onMatchNamesSaved: (matchNames) =>
       setSelectedConsortium((prev) => prev ? { ...prev, matchNames } : prev),
+    // Cambiar el banco reordena los grupos del nivel 0 → recargar la lista.
+    onBankSaved: () => { void fetchConsortiums(); },
   });
 
   // Pagos (Tanda 3a): modal Pagar + modal Ver pagos (disparados desde PagosView).
@@ -299,6 +310,10 @@ export default function ConsortiumsPage() {
           <button type="button" className={styles.navSidebarItem} onClick={() => { handleSyncDirectory(); setNavMobileOpen(false); }} disabled={busyAction !== null}>
             <span className={styles.navSidebarItemIcon}>🔄</span>
             {!navCollapsed && <span className={styles.navSidebarItemLabel}>{busyAction === "sync" ? "Sincronizando..." : "Sincronizar directorio"}</span>}
+          </button>
+          <button type="button" className={styles.navSidebarItem} onClick={() => { banks.open(); setNavMobileOpen(false); }}>
+            <span className={styles.navSidebarItemIcon}>🏦</span>
+            {!navCollapsed && <span className={styles.navSidebarItemLabel}>Bancos</span>}
           </button>
           {isClient && (
             // Desactivado temporalmente (pedido del owner): visible pero inactivo mientras el
@@ -464,7 +479,7 @@ export default function ConsortiumsPage() {
                   <input
                     type="text"
                     className={styles.searchInput}
-                    placeholder="Buscar consorcio..."
+                    placeholder={selectedBankId ? "Buscar consorcio..." : "Buscar banco o consorcio..."}
                     value={consortiumSearch}
                     onChange={(e) => setConsortiumSearch(e.target.value)}
                   />
@@ -480,20 +495,63 @@ export default function ConsortiumsPage() {
               {loadingList && <div className={styles.gridInfo}>Cargando consorcios...</div>}
               {listError && <div className={styles.sidebarError}>{listError}</div>}
 
-              {!loadingList && !listError && (() => {
-                const q = normName(consortiumSearch);
-                const filtered = q
-                  ? consortiums.filter((c) => normName(c.rawName).includes(q) || normName(c.canonicalName).includes(q))
-                  : consortiums;
-
-                if (consortiums.length === 0) {
+              {/* Nivel 0: grilla de bancos con los edificios como badges. */}
+              {!loadingList && !listError && !selectedBankId && (() => {
+                if (consortiums.length === 0 && banks.banks.length === 0) {
                   return <div className={styles.gridInfo}>No hay consorcios cargados.</div>;
                 }
+                const groups = groupByBank(banks.banks, consortiums, consortiumSearch);
+                if (groups.length === 0) {
+                  return <div className={styles.gridInfo}>Nada coincide con &quot;{consortiumSearch}&quot;.</div>;
+                }
+                return (
+                  <BankGrid
+                    groups={groups}
+                    onSelectBank={(bankId) => { setSelectedBankId(bankId); setConsortiumSearch(""); }}
+                    onSelectConsortium={(c) => void selectConsortium(c)}
+                  />
+                );
+              })()}
+
+              {/* Nivel 1: la grilla de edificios de siempre, filtrada por banco. */}
+              {!loadingList && !listError && selectedBankId && (() => {
+                const bankName = selectedBankId === UNASSIGNED_BANK_ID
+                  ? "Sin banco"
+                  : banks.banks.find((b) => b.id === selectedBankId)?.name ?? "Banco";
+                const ofBank = consortiums.filter((c) =>
+                  selectedBankId === UNASSIGNED_BANK_ID ? !c.bankId : c.bankId === selectedBankId
+                );
+                const q = normName(consortiumSearch);
+                const filtered = q
+                  ? ofBank.filter((c) => normName(c.rawName).includes(q) || normName(c.canonicalName).includes(q))
+                  : ofBank;
+
                 if (filtered.length === 0) {
-                  return <div className={styles.gridInfo}>Ningún consorcio coincide con &quot;{consortiumSearch}&quot;.</div>;
+                  return (
+                    <>
+                      <div className={styles.bankBreadcrumb}>
+                        <button type="button" className={styles.backToGrid} onClick={() => { setSelectedBankId(null); setConsortiumSearch(""); }}>
+                          ← Todos los bancos
+                        </button>
+                        <span className={styles.cardName}>{bankName}</span>
+                      </div>
+                      <div className={styles.gridInfo}>
+                        {ofBank.length === 0
+                          ? "Este banco no tiene edificios asignados."
+                          : `Ningún consorcio coincide con "${consortiumSearch}".`}
+                      </div>
+                    </>
+                  );
                 }
 
                 return (
+                  <>
+                  <div className={styles.bankBreadcrumb}>
+                    <button type="button" className={styles.backToGrid} onClick={() => { setSelectedBankId(null); setConsortiumSearch(""); }}>
+                      ← Todos los bancos
+                    </button>
+                    <span className={styles.cardName}>{bankName}</span>
+                  </div>
                   <div className={styles.cardGrid}>
                     {filtered.map((c) => {
                       const hasPeriodDebt = c.activePeriodDebt > 0;
@@ -526,6 +584,7 @@ export default function ConsortiumsPage() {
                       );
                     })}
                   </div>
+                  </>
                 );
               })()}
             </>
@@ -843,6 +902,13 @@ export default function ConsortiumsPage() {
           onToggleSection={config.toggleSection}
           onClose={config.close}
           providers={providers}
+          banks={banks.banks}
+          bank={{
+            form: config.bank.form,
+            msg: config.bank.msg,
+            onChangeForm: config.bank.setForm,
+            onSave: config.bank.save,
+          }}
           matchNames={{
             editing: config.matchNames.editing,
             value: config.matchNames.value,
@@ -871,6 +937,26 @@ export default function ConsortiumsPage() {
             onToggle: config.fixed.toggle,
             onDelete: config.fixed.remove,
           }}
+        />
+      )}
+
+      {/* ── ABM del catálogo de bancos ──
+          Al cerrar se recargan los consorcios: borrar un banco desasigna edificios
+          y eso cambia los grupos del nivel 0. */}
+      {banks.isOpen && (
+        <BanksModal
+          banks={banks.banks}
+          form={banks.form}
+          error={banks.error}
+          confirmDeleteId={banks.confirmDeleteId}
+          editingId={banks.editingId}
+          onChangeForm={banks.setForm}
+          onCreate={banks.create}
+          onUpdate={banks.update}
+          onDelete={banks.remove}
+          onConfirmDelete={banks.setConfirmDeleteId}
+          onEdit={banks.setEditingId}
+          onClose={() => { banks.close(); void fetchConsortiums(); }}
         />
       )}
 

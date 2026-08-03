@@ -1,9 +1,12 @@
 import { useCallback, useState } from "react";
 import { useAuthGuard } from "@/lib/useAuthGuard";
 import { useAsyncAction } from "@/lib/useAsyncAction";
-import type { ConfigSection, Consortium, FixedExpenseRow, LspForm, LspService } from "../lib/types";
+import type { BankAccountForm, ConfigSection, Consortium, FixedExpenseRow, LspForm, LspService } from "../lib/types";
 
 const EMPTY_LSP_FORM: LspForm = { provider: "", clientNumber: "", description: "" };
+const EMPTY_BANK_FORM: BankAccountForm = {
+  bankId: "", bankAlias: "", cbu: "", accountNumber: "", branch: "", accountType: "", accountHolder: "",
+};
 
 /**
  * Dominio Config del consorcio: el modal con el acordeón de 3 secciones
@@ -12,12 +15,15 @@ const EMPTY_LSP_FORM: LspForm = { provider: "", clientNumber: "", description: "
  * `load(c)` es el único punto de entrada del fan-out de `useConsortiumDetail`:
  * resetea el estado del consorcio anterior y recarga LSP + gastos fijos.
  */
-export function useConsortiumConfig({ consortiumId, onMatchNamesSaved }: {
+export function useConsortiumConfig({ consortiumId, onMatchNamesSaved, onBankSaved }: {
   consortiumId: string | null;
   onMatchNamesSaved: (matchNames: string | null) => void;
+  /** Se dispara tras guardar banco/cuenta: la vista por bancos tiene que recargar. */
+  onBankSaved?: () => void;
 }) {
   const { guardedFetch } = useAuthGuard();
   const { pending: savingMatchNames, run: runMatchNames } = useAsyncAction();
+  const { pending: savingBank, run: runBank } = useAsyncAction();
 
   const [isOpen, setIsOpen] = useState(false);
   // Acordeón: una sola sección abierta a la vez. null = todas colapsadas.
@@ -27,6 +33,10 @@ export function useConsortiumConfig({ consortiumId, onMatchNamesSaved }: {
   const [editingMatchNames, setEditingMatchNames] = useState(false);
   const [matchNamesValue, setMatchNamesValue] = useState("");
   const [matchNamesMsg, setMatchNamesMsg] = useState<string | null>(null);
+
+  // Banco + datos de la cuenta del consorcio
+  const [bankForm, setBankForm] = useState<BankAccountForm>(EMPTY_BANK_FORM);
+  const [bankMsg, setBankMsg] = useState<string | null>(null);
 
   // LspServices
   const [lspServices, setLspServices] = useState<LspService[]>([]);
@@ -59,6 +69,16 @@ export function useConsortiumConfig({ consortiumId, onMatchNamesSaved }: {
   // Reemplaza el bloque de config del fan-out de `onConsortiumSelected`.
   const load = (c: Consortium) => {
     setEditingMatchNames(false); setMatchNamesMsg(null); setMatchNamesValue(c.matchNames ?? "");
+    setBankMsg(null);
+    setBankForm({
+      bankId: c.bankId ?? "",
+      bankAlias: c.bankAlias ?? "",
+      cbu: c.cbu ?? "",
+      accountNumber: c.accountNumber ?? "",
+      branch: c.branch ?? "",
+      accountType: c.accountType ?? "",
+      accountHolder: c.accountHolder ?? "",
+    });
     setLspServices([]); setLspError(null); setLspForm(EMPTY_LSP_FORM);
     setConfirmDeleteLspId(null);
     setFixedExpenses([]); setFxTarget(""); setFxError(null);
@@ -92,6 +112,33 @@ export function useConsortiumConfig({ consortiumId, onMatchNamesSaved }: {
       setTimeout(() => setMatchNamesMsg(null), 3000);
     } catch (err) {
       setMatchNamesMsg(err instanceof Error ? err.message : "Error al guardar");
+    }
+  };
+
+  // ── Banco + cuenta ───────────────────────────────────────────────────────
+  const saveBank = async () => {
+    if (!consortiumId) return;
+    setBankMsg(null);
+    try {
+      const res = await guardedFetch(`/api/client/consortiums/${consortiumId}`, {
+        method: "PATCH", headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          bankId: bankForm.bankId || null,
+          bankAlias: bankForm.bankAlias.trim() || null,
+          cbu: bankForm.cbu.trim() || null,
+          accountNumber: bankForm.accountNumber.trim() || null,
+          branch: bankForm.branch.trim() || null,
+          accountType: bankForm.accountType.trim() || null,
+          accountHolder: bankForm.accountHolder.trim() || null,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
+      setBankMsg("Guardado correctamente");
+      setTimeout(() => setBankMsg(null), 3000);
+      onBankSaved?.();
+    } catch (err) {
+      setBankMsg(err instanceof Error ? err.message : "Error al guardar");
     }
   };
 
@@ -176,6 +223,13 @@ export function useConsortiumConfig({ consortiumId, onMatchNamesSaved }: {
       startEdit: () => setEditingMatchNames(true),
       cancelEdit: () => setEditingMatchNames(false),
       save: () => runMatchNames(saveMatchNames),
+    },
+    bank: {
+      form: bankForm,
+      msg: bankMsg,
+      saving: savingBank,
+      setForm: (patch: Partial<BankAccountForm>) => setBankForm((f) => ({ ...f, ...patch })),
+      save: () => runBank(saveBank),
     },
     lsp: {
       services: lspServices,

@@ -107,7 +107,7 @@ export async function POST(request: NextRequest) {
 
         const cuit         = pickCell(row, ["CUIT", "cuit", "Cuit"])?.trim() || null;
         const matchNames   = pickCell(row, ["Aliases", "aliases", "Alias", "alias", "Nombres alternativos"])?.trim() || null;
-        const paymentAlias = pickCell(row, ["Alias de pago", "alias de pago", "PaymentAlias", "paymentAlias"])?.trim() || null;
+        // Los edificios no importan alias: el alias bancario se carga por UI.
 
         // Verificar si ya existe
         const existing = await prisma.consortium.findUnique({
@@ -129,7 +129,6 @@ export async function POST(request: NextRequest) {
               rawName:       nombre,
               cuit:          cuit ? (formatCuit(cuit) ?? cuit) : null,
               matchNames:    matchNames || null,
-              paymentAlias:  paymentAlias || null,
               cutoffDay:     5,
             },
           });

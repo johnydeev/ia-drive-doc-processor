@@ -4,6 +4,80 @@ Registro de decisiones tomadas ante problemas reales encontrados en producción.
 
 ---
 
+## 2026-08-03 — Bancos como catálogo del cliente + una cuenta bancaria por consorcio
+
+**Problema:** la vista general de `/admin/consortiums` era una grilla plana de ~50 edificios sin
+ningún eje de organización — encontrar "los que cobran en Santander" era imposible. Y los datos de la
+cuenta del consorcio (el bloque FORMA DE PAGO de las liquidaciones: banco, sucursal, titular, CBU,
+alias, número y tipo de cuenta) no vivían en el sistema.
+
+### Tres hallazgos que condicionaron el diseño
+
+**1. `Consortium.bank` estaba muerto, pero al revés de lo esperado.** El campo `bank String?`
+(`schema.prisma:313`) lo **leía** el pipeline y lo propagaba hasta la columna **O = BANCO** de Google
+Sheets (`job.ts:415`, `job.ts:347`, `job.ts:1039`, `clientProcessingConfig.ts:73`), pero **ningún
+código lo escribía** — ni la UI, ni el sync ALTA, ni el import Excel. Estaba en `NULL` en todas las
+filas y la columna O salía siempre vacía. O sea: la feature no agregó una columna a Sheets, *destapó*
+una que ya estaba cableada.
+
+**2. La columna I = ALIAS de Sheets es del proveedor.** Sale de `Provider.paymentAlias`
+(`job.ts:1036`, `job.ts:346`, `job.ts:481`) y funciona correctamente. No se tocó.
+
+**3. `Consortium.paymentAlias` nació huérfano.** El commit `aa7784f` (2026-03-23, entrada *"Separar
+matchNames (interno) de paymentAlias (visible)"* de este mismo archivo) partió el viejo campo
+`alias`/`aliases` en `matchNames` + `paymentAlias`, agregando `paymentAlias` a **ambos** modelos por
+simetría. Pero sólo se cableó el del proveedor: el del consorcio se creó junto con su columna D en la
+hoja `_Consorcios` del ALTA y nunca se le dio consumidor. Cuatro meses después seguía sin lectores y
+con la columna vacía en el archivo real.
+
+### Decisión
+
+- **`Bank`** como modelo a nivel `Client` (mismo nivel que `Rubro` y `Coeficiente`): `name` + `color`
+  (slug de paleta fija). Es lo único que se repite entre edificios — los 4 que cobran en Santander
+  comparten nombre y color, y un renombre debe impactarlos a todos.
+- **Los datos de cuenta van en `Consortium`**, no en `Bank`: el CBU y el número de cuenta son propios
+  de cada edificio. En `Bank` obligarían a todos los edificios de un banco a compartir un solo CBU.
+- **`Consortium.bank String?` → `bankId` + relación** (`onDelete: SetNull`). Borrar un banco desasigna
+  edificios, no los borra.
+- **`Consortium.paymentAlias` → `bankAlias`** por rename de columna: pasa a ser el alias CBU de la
+  cuenta, cargado por UI. El alias de pago es un concepto del dominio de proveedores.
+- **El alias del consorcio sale del ALTA y del import Excel.** La hoja `_Consorcios` baja de `A:D` a
+  `A:C` y la hoja Edificios del template pierde "Alias de pago". `_Proveedores` no se toca.
+- **UI de dos niveles:** nivel 0 = cards de banco con los edificios como badges y un color sutil;
+  nivel 1 = la grilla de edificios existente, sin modificar, filtrada por banco.
+
+### Alternativas descartadas
+
+- **Tabla `BankAccount` 1:N** (cuenta de expensas + cuenta de fondo de reserva). Rompe la partición
+  limpia de la vista — un edificio con dos cuentas aparecería en dos grupos, o habría que elegir por
+  cuál agrupar — y obliga a decidir qué banco va a la columna O de Sheets. Decisión del owner: una
+  cuenta por edificio. Si el caso aparece, la migración es acotada.
+- **Color hex libre** (`<input type="color">`). Permite elegir un tono ilegible en dark o en light.
+  La paleta de slugs resuelve el contraste de una vez, con un valor propio por tema en el CSS.
+- **Color automático por hash del nombre.** Cero UI, pero el color sería arbitrario (Santander podría
+  salir verde) y cambiaría al renombrar.
+- **Bloquear el borrado de un banco con 409** si tiene consorcios. Deja al usuario trabado teniendo
+  que desasignar uno por uno.
+- **Dejar `paymentAlias` y agregar `bankAlias` aparte.** Quedarían dos campos de alias en la misma
+  entidad, uno sin fuente de carga y sin lector.
+
+### Impacto
+
+- Migración `20260803000000_bancos_por_consorcio` con backfill defensivo de `Consortium.bank` (se
+  espera 0 filas) antes del `DROP COLUMN`, y rename de `paymentAlias`.
+- Modelo: `Bank` nuevo, `Client.banks`, 7 campos nuevos/renombrados en `Consortium`.
+- Backend: `BankRepository`, `/api/client/banks` (GET/POST) y `/api/client/banks/[id]`
+  (PATCH/DELETE), `bankId` + campos de cuenta en el PATCH de consorcio.
+- Pipeline: `consortium.bank?.name` en `job.ts`, `consortium.repository.ts`,
+  `lspService.repository.ts` e `invoices/route.ts`. La columna O empieza a llenarse.
+- ALTA/import: `googleSheets.service.ts`, `sync-directory/route.ts`, `import/route.ts`,
+  `import/template/route.ts`.
+- UI: `useBanks`, `BanksModal`, `BankGrid`, `groupByBank`, `bankPalette`, sección "Banco y cuenta" en
+  el acordeón de Config, botón Bancos en el sidebar.
+- Tests: 419 → 455 (+36).
+
+---
+
 ## 2026-07-27 — Monto crítico mal extraído: guard del IVA contenido (Ley 27.743)
 
 **Problema:** la boleta `0003-00161074` (RANKO S.R.L. → BARTOLOME MITRE 1225, período 07/2026) se

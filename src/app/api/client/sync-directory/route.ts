@@ -119,7 +119,6 @@ export async function POST(request: NextRequest) {
             rawName: c.canonicalName,
             cuit: formatCuit(c.cuit) ?? c.cuit,
             matchNames: c.matchNames,
-            paymentAlias: c.paymentAlias,
           })),
         });
       }
@@ -128,7 +127,8 @@ export async function POST(request: NextRequest) {
       await Promise.all(existingToUpdate.map(c =>
         tx.consortium.update({
           where: { id: existingConsortiumMap.get(c.canonicalName)! },
-          data: { cuit: formatCuit(c.cuit) ?? c.cuit, matchNames: c.matchNames, paymentAlias: c.paymentAlias },
+          // Sin alias: el alias bancario del consorcio se edita por UI y el sync no lo pisa.
+          data: { cuit: formatCuit(c.cuit) ?? c.cuit, matchNames: c.matchNames },
         })
       ));
 

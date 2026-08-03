@@ -94,7 +94,7 @@ export async function POST(
 
     const consortium = await prisma.consortium.findFirst({
       where: { id: consortiumId, clientId: auth.session.clientId },
-      select: { id: true, rawName: true, bank: true, statementsFolderId: true },
+      select: { id: true, rawName: true, bank: { select: { name: true } }, statementsFolderId: true },
     });
     if (!consortium) {
       return NextResponse.json({ ok: false, error: "Consorcio no encontrado" }, { status: 404 });
@@ -327,7 +327,7 @@ export async function POST(
             sourceFileUrl: invoice.sourceFileUrl,
             isDuplicate:   "NO",
             paymentStatus: "Sin pagar",
-            bank: consortium.bank ?? null,
+            bank: consortium.bank?.name ?? null,
           };
           await sheetsService.insertRow(sheetName, sheetData, mapping);
         }

@@ -1,4 +1,4 @@
-import { Consortium, Period, Prisma, PrismaClient } from "@prisma/client";
+import { Bank, Consortium, Period, Prisma, PrismaClient } from "@prisma/client";
 import { getPrismaClient } from "@/lib/prisma";
 import { generateObligationsForPeriod } from "@/services/obligation.service";
 
@@ -15,7 +15,7 @@ export class ConsortiumRepository {
   async findByCanonicalName(
     clientId: string,
     canonicalName: string
-  ): Promise<(Consortium & { periods: Period[] }) | null> {
+  ): Promise<(Consortium & { periods: Period[]; bank: Bank | null }) | null> {
     const prisma = this.prisma;
 
     return prisma.consortium.findUnique({
@@ -25,7 +25,8 @@ export class ConsortiumRepository {
           canonicalName,
         },
       },
-      include: { periods: true },
+      // `bank` alimenta la columna O (BANCO) de Google Sheets.
+      include: { periods: true, bank: true },
     });
   }
 
@@ -112,6 +113,7 @@ export class ConsortiumRepository {
     Array<
       Consortium & {
         periods: Period[];
+        bank: Bank | null;
         _count: { invoices: number };
         activePeriodInvoiceCount: number;
         activePeriodDebt: number;
@@ -125,6 +127,7 @@ export class ConsortiumRepository {
       where: { clientId },
       include: {
         periods: true,
+        bank: true,
         _count: {
           select: { invoices: true },
         },

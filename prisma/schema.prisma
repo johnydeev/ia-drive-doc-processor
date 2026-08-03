@@ -72,6 +72,7 @@ model Client {
   extractionConfigJson Json?
   createdAt            DateTime         @default(now())
   updatedAt            DateTime         @updatedAt
+  banks                Bank[]
   consortiums          Consortium[]
   invoices             Invoice[]
   periods              Period[]
@@ -308,9 +309,19 @@ model Consortium {
   /// el consorcio aunque use una dirección distinta a la canónica.
   /// Campo interno — no se muestra en la UI.
   matchNames             String?
-  /// Alias visible en la UI y en la columna "ALIAS" de Google Sheets.
-  paymentAlias           String?
-  bank                   String?
+  /// Banco del catálogo del cliente. Reemplaza el viejo `bank String?`, que era
+  /// texto suelto y ningún código llenaba (se leía hasta la columna O de Sheets).
+  bankId                 String?
+  bank                   Bank?                @relation(fields: [bankId], references: [id], onDelete: SetNull)
+  /// Datos de la cuenta del consorcio (bloque FORMA DE PAGO de la liquidación).
+  /// Una sola cuenta por consorcio. Se cargan por UI, no por el archivo ALTA.
+  /// `bankAlias` es el alias CBU — ex `paymentAlias`, que nació sin consumidor.
+  bankAlias              String?
+  cbu                    String?
+  accountNumber          String?
+  branch                 String?
+  accountType            String?
+  accountHolder          String?
   suterhKey              String?
   /// ID de la carpeta del edificio dentro de "Rendiciones" (statements).
   /// La crea/comparte la app la primera vez que organiza una boleta de este
@@ -331,6 +342,26 @@ model Consortium {
   obligations            ExpenseObligation[]
 
   @@unique([clientId, canonicalName])
+  @@index([clientId])
+  @@index([bankId])
+}
+
+/// Catálogo de bancos del cliente (mismo nivel que Rubro y Coeficiente).
+/// Cada consorcio se asigna a uno; los datos de la cuenta (CBU, alias, número)
+/// viven en Consortium porque son propios de cada edificio.
+model Bank {
+  id          String       @id @default(cuid())
+  clientId    String
+  name        String
+  /// Slug de la paleta fija (ver src/app/admin/consortiums/lib/bankPalette.ts).
+  /// No es un hex libre: garantiza contraste en dark y light.
+  color       String       @default("slate")
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+  client      Client       @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  consortiums Consortium[]
+
+  @@unique([clientId, name])
   @@index([clientId])
 }
 

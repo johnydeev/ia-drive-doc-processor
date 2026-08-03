@@ -2,6 +2,31 @@
 
 ## [Unreleased]
 
+### Added
+- **Bancos a nivel cliente + cuenta bancaria por consorcio + vista agrupada por banco (2026-08-03)**.
+  Modelo `Bank` nuevo (catálogo por `Client`: nombre + color de una paleta fija de 8 slugs, con valor
+  propio por tema para no romper el contraste). `Consortium` gana `bankId` (relación con
+  `onDelete: SetNull` — borrar un banco desasigna edificios, no los borra) y los datos de su cuenta:
+  `bankAlias` (alias CBU), `cbu`, `accountNumber`, `branch`, `accountType`, `accountHolder`. Una
+  cuenta por edificio. La vista general de `/admin/consortiums` pasa a tener dos niveles: cards de
+  banco con los edificios como badges (nivel 0) → la grilla de edificios existente filtrada por banco
+  (nivel 1, sin cambios). ABM de bancos en modal desde el sidebar y sección "Banco y cuenta" en el
+  acordeón de Configuración del consorcio. Endpoints `/api/client/banks` (GET/POST) y
+  `/api/client/banks/[id]` (PATCH/DELETE). +36 tests (419 → 455). **Requiere migración**
+  (`20260803000000_bancos_por_consorcio`). Ver `docs/decisiones.md` (2026-08-03).
+
+### Changed
+- **La columna O = BANCO de Google Sheets empieza a llenarse (2026-08-03)**. Estaba cableada desde
+  siempre (`DEFAULT_SHEETS_MAPPING` + el pipeline la propagaba), pero salía vacía en todas las
+  boletas: el campo `Consortium.bank` se **leía** y nunca se **escribía** — ni la UI, ni el sync ALTA,
+  ni el import Excel lo tocaban. Ahora sale de la relación al catálogo (`consortium.bank?.name`). Las
+  boletas ya procesadas no se reescriben.
+- **El alias del consorcio ya no se carga por el archivo ALTA ni por el import Excel (2026-08-03)**.
+  `Consortium.paymentAlias` se renombró a `bankAlias` y pasa a ser el alias CBU de la cuenta,
+  editable sólo por UI. La hoja `_Consorcios` del ALTA baja de `A:D` a `A:C` y la hoja Edificios del
+  template pierde la columna "Alias de pago". `Provider.paymentAlias`, la hoja `_Proveedores` y la
+  columna I = ALIAS de Sheets **no cambian**: ahí el alias de pago es del proveedor y funciona.
+
 ### Docs
 - **Corregida documentación desactualizada del borrado de boletas (2026-07-27)**. El comentario de
   `handleDeleteInvoice` en `consortiums/page.tsx` afirmaba que el borrado mueve el PDF `scanned→pending`;

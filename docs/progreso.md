@@ -1,6 +1,45 @@
 # Progreso del proyecto — drive-doc-processor
 
-Actualizado al 27/07/2026 (sesión 52 — cierre del refactor de `consortiums/page.tsx`).
+Actualizado al 03/08/2026 (sesión 53 — bancos por consorcio).
+
+## 🏦 Bancos a nivel cliente + cuenta bancaria por consorcio + vista agrupada (2026-08-03)
+
+**Estado: implementado. Tests 419 → 455 verdes, lint 0 errores.
+⏳ `npm run typecheck` y los builds NO se pudieron verificar todavía: falta correr la migración.
+Sin commitear (lo hace el owner).**
+
+Spec/plan: `docs/superpowers/{specs,plans}/2026-08-03-bancos-por-consorcio*`.
+
+Hecho:
+- **Modelo `Bank`** a nivel `Client` (`name` + `color` de paleta fija), mismo nivel que `Rubro` y
+  `Coeficiente`. `Consortium.bank String?` (campo muerto) → `bankId` + relación con `onDelete: SetNull`.
+- **Cuenta bancaria por consorcio:** `bankAlias` (ex `paymentAlias`, renombrado), `cbu`,
+  `accountNumber`, `branch`, `accountType`, `accountHolder`. Una cuenta por edificio (decisión del
+  owner; ver `docs/decisiones.md`).
+- **Vista general de 2 niveles:** nivel 0 = cards de banco con los edificios como badges y color sutil
+  por banco; nivel 1 = la grilla de edificios **existente sin cambios**, filtrada. El buscador del
+  nivel 0 matchea nombre de banco *y* de edificio. Card "Sin banco" al final.
+- **ABM de bancos** en modal desde el sidebar (alta, renombre, color, borrado con aviso de cuántos
+  edificios quedan sin banco). Endpoints `/api/client/banks` + `/api/client/banks/[id]`.
+- **Sección "Banco y cuenta"** como 4ª del acordeón de Configuración del consorcio.
+- **La columna O = BANCO de Sheets empieza a llenarse.** Estaba cableada desde siempre pero salía
+  vacía porque nada escribía `Consortium.bank` (ver hallazgo en `docs/decisiones.md`).
+- **El alias del consorcio sale del ALTA y del import Excel:** hoja `_Consorcios` de `A:D` → `A:C`;
+  hoja Edificios del template sin "Alias de pago". `_Proveedores` intacta.
+- Piezas nuevas: `lib/bankPalette` + `lib/groupByBank` (tier 0), `hooks/useBanks` (tier 1),
+  `components/BanksModal` + `components/BankGrid` (tier 2), `repositories/bank.repository`.
+
+**⏳ Pendiente del owner (bloqueante):**
+1. `npx prisma migrate deploy` → `npx prisma generate` (migración
+   `20260803000000_bancos_por_consorcio`). Hasta entonces `typecheck` falla: el cliente Prisma no
+   conoce `Bank` ni la relación.
+2. Después: `npm run typecheck`, `npm run build:jobs`, `npm run build`.
+3. Smoke visual: crear/renombrar/borrar bancos; asignar banco + cargar CBU/alias/cuenta a un consorcio
+   y verificar que persiste; navegar nivel 0 → nivel 1 → detalle y volver; buscar por banco y por
+   edificio; correr **Sincronizar directorio** y confirmar que el alias cargado por UI **no se pisa**;
+   procesar una boleta de un consorcio con banco y verificar la columna O en Sheets.
+
+## ✅ Sesión 52 y anteriores
 
 ## Hardening de seguridad + robustez batch + pasada de docs (2026-07-15)
 

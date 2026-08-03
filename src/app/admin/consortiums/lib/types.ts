@@ -3,11 +3,27 @@
 export type Period = { id: string; year: number; month: number; status: "ACTIVE" | "CLOSED" };
 export type Coeficiente = { id: string; name: string; value: number };
 export type Rubro = { id: string; name: string };
+export type Bank = {
+  id: string; name: string; color: string;
+  _count?: { consortiums: number };
+};
 export type Consortium = {
   id: string; canonicalName: string; rawName: string; cuit: string | null; cutoffDay: number;
-  matchNames: string | null; bank: string | null; statementsFolderUrl: string | null;
+  matchNames: string | null; statementsFolderUrl: string | null;
+  bankId: string | null;
+  bank: { id: string; name: string; color: string } | null;
+  bankAlias: string | null; cbu: string | null; accountNumber: string | null;
+  branch: string | null; accountType: string | null; accountHolder: string | null;
   periods: Period[]; _count: { invoices: number };
   activePeriodInvoiceCount: number; activePeriodDebt: number; totalDebt: number;
+};
+/** Grupo de la vista nivel 0. El grupo "Sin banco" usa el id centinela
+ *  `UNASSIGNED_BANK_ID` de `groupByBank.ts`, no null: así el header navega igual. */
+export type BankGroup = {
+  id: string;
+  name: string;
+  color: string;
+  consortiums: Consortium[];
 };
 export type Provider = {
   id: string; canonicalName: string; cuit: string | null; paymentAlias: string | null;
@@ -75,5 +91,16 @@ export type PayForm = {
 };
 
 // Dominio Config (Tanda 3e): sección abierta del acordeón + form de alta de LSP.
-export type ConfigSection = "matchNames" | "lsp" | "fixed";
+export type ConfigSection = "matchNames" | "bank" | "lsp" | "fixed";
 export type LspForm = { provider: string; clientNumber: string; description: string };
+
+/** Sección Banco del acordeón de Config: banco asignado + datos de la cuenta. */
+export type BankAccountForm = {
+  bankId: string;
+  bankAlias: string;
+  cbu: string;
+  accountNumber: string;
+  branch: string;
+  accountType: string;
+  accountHolder: string;
+};

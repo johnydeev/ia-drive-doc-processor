@@ -13,14 +13,15 @@ export async function GET(request: NextRequest) {
   const XLSX = await import("xlsx");
   const wb = XLSX.utils.book_new();
 
-  // Hoja Edificios
+  // Hoja Edificios. Sin "Alias de pago": el alias bancario del consorcio se
+  // carga por UI (sección Banco del modal de Configuración).
   const wsEdificios = XLSX.utils.aoa_to_sheet([
-    ["Nombre", "CUIT", "Aliases", "Alias de pago"],
-    ["ARENALES 2154", "30-52312872-4", "CONS PROP ARENALES 2154|ARENALES 2154 56", "ARENALES"],
-    ["PUEYRREDON 2418", "30-71478725-6", "", ""],
+    ["Nombre", "CUIT", "Aliases"],
+    ["ARENALES 2154", "30-52312872-4", "CONS PROP ARENALES 2154|ARENALES 2154 56"],
+    ["PUEYRREDON 2418", "30-71478725-6", ""],
   ]);
   // Ancho de columnas
-  wsEdificios["!cols"] = [{ wch: 35 }, { wch: 18 }, { wch: 50 }, { wch: 25 }];
+  wsEdificios["!cols"] = [{ wch: 35 }, { wch: 18 }, { wch: 50 }];
   XLSX.utils.book_append_sheet(wb, wsEdificios, "Edificios");
 
   // Hoja Proveedores
