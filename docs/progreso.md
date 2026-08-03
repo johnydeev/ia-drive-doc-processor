@@ -4,9 +4,8 @@ Actualizado al 03/08/2026 (sesión 53 — bancos por consorcio).
 
 ## 🏦 Bancos a nivel cliente + cuenta bancaria por consorcio + vista agrupada (2026-08-03)
 
-**Estado: implementado. Tests 419 → 455 verdes, lint 0 errores.
-⏳ `npm run typecheck` y los builds NO se pudieron verificar todavía: falta correr la migración.
-Sin commitear (lo hace el owner).**
+**Estado: implementado y verificado (typecheck + lint 0 errores + 456 tests + build + build:jobs OK).
+Migración `20260803000000_bancos_por_consorcio` aplicada por el owner. Commiteado.**
 
 Spec/plan: `docs/superpowers/{specs,plans}/2026-08-03-bancos-por-consorcio*`.
 
@@ -29,12 +28,14 @@ Hecho:
 - Piezas nuevas: `lib/bankPalette` + `lib/groupByBank` (tier 0), `hooks/useBanks` (tier 1),
   `components/BanksModal` + `components/BankGrid` (tier 2), `repositories/bank.repository`.
 
-**⏳ Pendiente del owner (bloqueante):**
-1. `npx prisma migrate deploy` → `npx prisma generate` (migración
-   `20260803000000_bancos_por_consorcio`). Hasta entonces `typecheck` falla: el cliente Prisma no
-   conoce `Bank` ni la relación.
-2. Después: `npm run typecheck`, `npm run build:jobs`, `npm run build`.
-3. Smoke visual: crear/renombrar/borrar bancos; asignar banco + cargar CBU/alias/cuenta a un consorcio
+**Gotcha encontrado en el build:** CSS Modules rechaza selectores sin ninguna clase local
+("Selector is not pure"). Los `[data-bank-color="..."]` sueltos rompían `npm run build` (los tests y
+el typecheck pasaban igual — sólo lo detecta el build). Quedaron anclados a `.bankCard`/`.bankDot`.
+Al agregar un color nuevo a la paleta hay que sumar las dos reglas (tema oscuro y claro) con esos
+prefijos.
+
+**⏳ Pendiente del owner:**
+1. Smoke visual: crear/renombrar/borrar bancos; asignar banco + cargar CBU/alias/cuenta a un consorcio
    y verificar que persiste; navegar nivel 0 → nivel 1 → detalle y volver; buscar por banco y por
    edificio; correr **Sincronizar directorio** y confirmar que el alias cargado por UI **no se pisa**;
    procesar una boleta de un consorcio con banco y verificar la columna O en Sheets.

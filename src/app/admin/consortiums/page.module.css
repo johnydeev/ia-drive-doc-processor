@@ -1521,22 +1521,33 @@
 }
 
 /* Paleta de bancos: un par accent/bg por slug y por tema. El texto nunca se
-   colorea — así ningún banco puede quedar ilegible. */
-[data-bank-color="slate"]   { --bank-accent: rgba(148,163,184,0.55); --bank-bg: rgba(148,163,184,0.07); }
-[data-bank-color="red"]     { --bank-accent: rgba(248,113,113,0.55); --bank-bg: rgba(248,113,113,0.07); }
-[data-bank-color="amber"]   { --bank-accent: rgba(251,191,36,0.55);  --bank-bg: rgba(251,191,36,0.07); }
-[data-bank-color="emerald"] { --bank-accent: rgba(52,211,153,0.55);  --bank-bg: rgba(52,211,153,0.07); }
-[data-bank-color="teal"]    { --bank-accent: rgba(45,212,191,0.55);  --bank-bg: rgba(45,212,191,0.07); }
-[data-bank-color="sky"]     { --bank-accent: rgba(56,189,248,0.55);  --bank-bg: rgba(56,189,248,0.07); }
-[data-bank-color="violet"]  { --bank-accent: rgba(167,139,250,0.55); --bank-bg: rgba(167,139,250,0.07); }
-[data-bank-color="rose"]    { --bank-accent: rgba(251,113,133,0.55); --bank-bg: rgba(251,113,133,0.07); }
+   colorea — así ningún banco puede quedar ilegible.
+   Los selectores van anclados a `.bankCard`/`.bankDot`: CSS Modules exige que
+   todo selector tenga al menos una clase local (un `[data-bank-color]` suelto
+   rompe el build con "Selector is not pure"). */
+.bankCard[data-bank-color="slate"],   .bankDot[data-bank-color="slate"]   { --bank-accent: rgba(148,163,184,0.55); --bank-bg: rgba(148,163,184,0.07); }
+.bankCard[data-bank-color="red"],     .bankDot[data-bank-color="red"]     { --bank-accent: rgba(248,113,113,0.55); --bank-bg: rgba(248,113,113,0.07); }
+.bankCard[data-bank-color="amber"],   .bankDot[data-bank-color="amber"]   { --bank-accent: rgba(251,191,36,0.55);  --bank-bg: rgba(251,191,36,0.07); }
+.bankCard[data-bank-color="emerald"], .bankDot[data-bank-color="emerald"] { --bank-accent: rgba(52,211,153,0.55);  --bank-bg: rgba(52,211,153,0.07); }
+.bankCard[data-bank-color="teal"],    .bankDot[data-bank-color="teal"]    { --bank-accent: rgba(45,212,191,0.55);  --bank-bg: rgba(45,212,191,0.07); }
+.bankCard[data-bank-color="sky"],     .bankDot[data-bank-color="sky"]     { --bank-accent: rgba(56,189,248,0.55);  --bank-bg: rgba(56,189,248,0.07); }
+.bankCard[data-bank-color="violet"],  .bankDot[data-bank-color="violet"]  { --bank-accent: rgba(167,139,250,0.55); --bank-bg: rgba(167,139,250,0.07); }
+.bankCard[data-bank-color="rose"],    .bankDot[data-bank-color="rose"]    { --bank-accent: rgba(251,113,133,0.55); --bank-bg: rgba(251,113,133,0.07); }
 
 /* En tema claro los mismos tonos necesitan más saturación para no lavarse. */
-:global([data-theme="light"]) [data-bank-color="slate"]   { --bank-accent: rgba(100,116,139,0.6); --bank-bg: rgba(100,116,139,0.06); }
-:global([data-theme="light"]) [data-bank-color="red"]     { --bank-accent: rgba(220,38,38,0.6);   --bank-bg: rgba(220,38,38,0.05); }
-:global([data-theme="light"]) [data-bank-color="amber"]   { --bank-accent: rgba(180,83,9,0.6);    --bank-bg: rgba(180,83,9,0.05); }
-:global([data-theme="light"]) [data-bank-color="emerald"] { --bank-accent: rgba(5,150,105,0.6);   --bank-bg: rgba(5,150,105,0.05); }
-:global([data-theme="light"]) [data-bank-color="teal"]    { --bank-accent: rgba(13,148,136,0.6);  --bank-bg: rgba(13,148,136,0.05); }
-:global([data-theme="light"]) [data-bank-color="sky"]     { --bank-accent: rgba(2,132,199,0.6);   --bank-bg: rgba(2,132,199,0.05); }
-:global([data-theme="light"]) [data-bank-color="violet"]  { --bank-accent: rgba(124,58,237,0.6);  --bank-bg: rgba(124,58,237,0.05); }
-:global([data-theme="light"]) [data-bank-color="rose"]    { --bank-accent: rgba(225,29,72,0.6);   --bank-bg: rgba(225,29,72,0.05); }
+:global([data-theme="light"]) .bankCard[data-bank-color="slate"],
+:global([data-theme="light"]) .bankDot[data-bank-color="slate"]   { --bank-accent: rgba(100,116,139,0.6); --bank-bg: rgba(100,116,139,0.06); }
+:global([data-theme="light"]) .bankCard[data-bank-color="red"],
+:global([data-theme="light"]) .bankDot[data-bank-color="red"]     { --bank-accent: rgba(220,38,38,0.6);   --bank-bg: rgba(220,38,38,0.05); }
+:global([data-theme="light"]) .bankCard[data-bank-color="amber"],
+:global([data-theme="light"]) .bankDot[data-bank-color="amber"]   { --bank-accent: rgba(180,83,9,0.6);    --bank-bg: rgba(180,83,9,0.05); }
+:global([data-theme="light"]) .bankCard[data-bank-color="emerald"],
+:global([data-theme="light"]) .bankDot[data-bank-color="emerald"] { --bank-accent: rgba(5,150,105,0.6);   --bank-bg: rgba(5,150,105,0.05); }
+:global([data-theme="light"]) .bankCard[data-bank-color="teal"],
+:global([data-theme="light"]) .bankDot[data-bank-color="teal"]    { --bank-accent: rgba(13,148,136,0.6);  --bank-bg: rgba(13,148,136,0.05); }
+:global([data-theme="light"]) .bankCard[data-bank-color="sky"],
+:global([data-theme="light"]) .bankDot[data-bank-color="sky"]     { --bank-accent: rgba(2,132,199,0.6);   --bank-bg: rgba(2,132,199,0.05); }
+:global([data-theme="light"]) .bankCard[data-bank-color="violet"],
+:global([data-theme="light"]) .bankDot[data-bank-color="violet"]  { --bank-accent: rgba(124,58,237,0.6);  --bank-bg: rgba(124,58,237,0.05); }
+:global([data-theme="light"]) .bankCard[data-bank-color="rose"],
+:global([data-theme="light"]) .bankDot[data-bank-color="rose"]    { --bank-accent: rgba(225,29,72,0.6);   --bank-bg: rgba(225,29,72,0.05); }

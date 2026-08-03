@@ -12,7 +12,7 @@
   banco con los edificios como badges (nivel 0) → la grilla de edificios existente filtrada por banco
   (nivel 1, sin cambios). ABM de bancos en modal desde el sidebar y sección "Banco y cuenta" en el
   acordeón de Configuración del consorcio. Endpoints `/api/client/banks` (GET/POST) y
-  `/api/client/banks/[id]` (PATCH/DELETE). +36 tests (419 → 455). **Requiere migración**
+  `/api/client/banks/[id]` (PATCH/DELETE). +37 tests (419 → 456). **Requiere migración**
   (`20260803000000_bancos_por_consorcio`). Ver `docs/decisiones.md` (2026-08-03).
 
 ### Changed

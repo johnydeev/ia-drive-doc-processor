@@ -74,7 +74,13 @@ con la columna vacía en el archivo real.
   `import/template/route.ts`.
 - UI: `useBanks`, `BanksModal`, `BankGrid`, `groupByBank`, `bankPalette`, sección "Banco y cuenta" en
   el acordeón de Config, botón Bancos en el sidebar.
-- Tests: 419 → 455 (+36).
+- Tests: 419 → 456 (+37).
+
+**Detalle de implementación que costó un build:** CSS Modules corre en modo `pure` y rechaza todo
+selector sin al menos una clase local. La paleta escrita como `[data-bank-color="red"] { ... }`
+pasaba typecheck y tests pero rompía `npm run build` con *"Selector is not pure"*. Las reglas quedaron
+ancladas a `.bankCard`/`.bankDot`. Al sumar un color a la paleta hay que agregar las dos reglas (tema
+oscuro y claro) con esos prefijos.
 
 ---
 
