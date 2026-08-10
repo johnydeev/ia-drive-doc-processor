@@ -4,6 +4,122 @@ Registro de decisiones tomadas ante problemas reales encontrados en producción.
 
 ---
 
+## 2026-08-06 — Acciones masivas de boletas: tandas de 5 en el frontend en vez de cola en background
+
+**Problema:** las dos acciones masivas de `/admin/boletas` estaban topeadas en **10 boletas por
+tanda** (`.max(10)` en los Zod de `bulk-delete`, `bulk-move-period` y su `preview`, más el guard de
+la UI). El tope venía de los incidentes de julio: cada boleta cuesta ~8,5 s (dominado por Drive) y
+el túnel Cloudflare corta a ~100 s. Dos consecuencias para el usuario: mover 50 boletas eran **5
+tandas manuales**, y durante los ~85 s de cada tanda **no había ninguna señal de avance** — el botón
+decía "Moviendo..." y nada más.
+
+### Decisión: chunking en el frontend, `RUN_CHUNK = 5`
+
+El frontend parte la selección en tandas de 5 y las manda en secuencia a los endpoints existentes,
+mostrando una barra con el estado real de cada boleta. **Sin migración y sin tocar el backend**: los
+`.max(10)` siguen vigentes y se les mandan 5.
+
+**Por qué 5 y no 1.** La única forma de tener avance *por boleta* sería mandar tandas de 1, pero eso
+deshace la amortización de 2026-07-13: `deleteInvoicesWithIndex` lee la planilla de Sheets **una vez
+por request** (`invoiceDeletion.ts:185`) y resuelve las filas en memoria. Esa lectura completa vale
+~6,5 s por sí sola. Descomponiendo los 8,5 s medidos: 6,5 ÷ 10 = 0,65 s amortizados + ~7,85 s de
+Drive/escritura/DB.
+
+| Tanda | Costo/boleta | 50 boletas | Checkpoint cada | 1 request |
+|---|---|---|---|---|
+| 1 | ~14,5 s | ~12,5 min (+70%) | ~15 s | ~15 s |
+| **5** | **~9,2 s** | **~7,6 min (+8%)** | **~46 s** | **~46 s** |
+| 10 (antes) | ~8,5 s | ~7,1 min | sin avance | ~85 s |
+
+Cinco da avance visible cada ~46 s por un sobrecosto marginal. El tamaño quedó como **constante**
+(`RUN_CHUNK` en `useBatchRunner.ts`) porque los ~9,2 s son una derivación de la medición vieja, no
+una medición del camino nuevo: si en producción resulta peor, subirlo a 10 es cambiar un número.
+
+**Alternativa descartada: cola persistida en background.** Encolar un `BatchJob`, procesarlo en el
+worker y hacer polling desde la UI sobrevive a deploys y a cerrar la pestaña, y permitiría topes
+altos sin costo de tiempo. Requiere migración, dispatcher por tipo en el worker y endpoints de
+estado — 1 sesión dedicada con spec propio. Queda anotada como pendiente; este trabajo no la
+contradice (si se hace, el runner del frontend se conserva y sólo cambia quién ejecuta).
+
+**Manejo de errores:** un fallo nunca corta la corrida — la boleta queda marcada y se sigue. Al
+terminar hay **Reintentar fallidas**, seguro porque los endpoints ya eran idempotentes (2026-07-13).
+Los tres desenlaces se distinguen en la UI: verde (ok), ámbar (skip por regla de negocio, no es
+falla) y rojo (error), con `reverted: false` destacado aparte por ser el único caso que exige
+revisión manual.
+
+**Se eliminó el estado `unknown` del modal de mover** (`pendingMoves`, `pendingItems`, `doneCount`,
+`stillPendingCount` y su JSX). Existía sólo para sobrevivir al 524 con lotes de 10. Con tandas de 5
+el margen es 2,2× (46 s contra 100 s) — más ajustado que el 7× que daría tanda de 1, así que el 524
+no se declara imposible; simplemente **el manejo de error por boleta lo cubre mejor**: una tanda sin
+respuesta interpretable marca esas 5 en rojo con "resultado no confirmado" y Reintentar reconcilia.
+La información que antes daba un modal para todo el lote, ahora la da la lista por fila.
+
+**Hallazgo al implementar:** `notice` quedó muerto y el lint no lo detectaba (seguía "usado" por el
+JSX y por dos `setNotice(null)`). Su único emisor era el resumen de borrado, cuyo trabajo ahora hace
+el modal. Se eliminó.
+
+**Impacto:** 4 archivos nuevos en `admin/boletas/{lib,hooks,components}` (estrenan ahí la convención
+que ya tenía `consortiums/`) + `page.tsx` 568 → 539 líneas. +34 tests (456 → 490). Spec y plan en
+`docs/superpowers/{specs,plans}/2026-08-06-barra-progreso-batch-boletas*`.
+
+---
+
+## 2026-08-06 — Migración del backend a Go: evaluada y descartada (queda como pendiente lejano)
+
+**Problema:** pregunta hipotética del owner — ¿conviene migrar el backend a Go? No hubo un incidente
+que lo motive; se evaluó para dejar el análisis registrado y no volver a re-derivarlo.
+
+**Superficie que implicaría:** ~13.300 líneas de backend puro (`api` 4.9k en 52 route handlers +
+`jobs` 3.2k + `services` 3.9k + `repositories` 1.3k), más `lib/` (7.4k) que hoy comparten backend y
+UI (normalizadores de consorcio, `cuit.ts`, formatos, `bankPalette`, `groupByBank`), más los 456
+tests.
+
+### Decisión: NO migrar. Tres bloqueantes técnicos
+
+**1. La extracción de texto de PDF no tiene equivalente en Go — y es el bloqueante real.**
+`pdf-parse` + `pdfjs-dist` no tienen contraparte de calidad comparable (`ledongthuc/pdf`, `pdfcpu`
+son netamente peores en reading-order). Y el pipeline entero está calibrado contra la salida
+**literal** de `pdf-parse`: `afipTotalsReflow` (regla "número inmediatamente anterior a
+`Subtotal: $`"), `vatContainedAmountGuard` (identidad aritmética ±0,05, testeado contra el texto
+literal de la boleta RANKO), `classifyDocumentType` e `identifyLSPProvider` (primeros 4000 chars),
+el corte a 1 página para LSP / 2 para ARCA F931. Cambiar el extractor cambia el texto de entrada →
+se rompen los 12 prompts, las heurísticas y sus tests, todos afinados contra boletas reales de
+producción.
+
+**2. Prisma no tiene cliente Go** (discontinuado). Habría que reescribir los repositories a
+`sqlc`/`ent` y rehacer el historial de migraciones.
+
+**3. OCR y visión arrastran CGO y binarios externos.** `tesseract.js` → `gosseract` requiere CGO +
+libtesseract (pierde el cross-compile limpio). El fallback de visión Gemini hoy renderiza la página
+con `pdfjs-dist` + `@napi-rs/canvas`; en Go habría que shellear a `pdftoppm`/mupdf.
+
+Secundario: `lib/` compartido con React se duplicaría en dos lenguajes (drift garantizado) o pagaría
+round-trip a la API.
+
+**Lo que sí migraría sin fricción** (por si el análisis se retoma): SDKs de IA (Anthropic, OpenAI y
+Gemini tienen SDK Go; Cerebras es compatible OpenAI), Drive/Sheets (el cliente Go de Google es mejor
+que el de Node), Zod → validación con structs.
+
+### El argumento que decide
+
+El cuello de botella **medido** es ~8,5 s por boleta, dominado por llamadas a Drive (ver
+`docs/progreso.md` 2026-07-13) — I/O externo y latencia de IA, no CPU ni GC. Go no mueve esa aguja.
+Serían semanas de reescritura y riesgo de regresión sobre la parte más delicada del sistema para
+optimizar lo que no es el problema.
+
+**Alternativa preferida (ya anotada como pendiente):** job en background sobre la cola
+`ProcessingJob` existente para las operaciones batch. Elimina la clase entera de 524 del túnel y
+permite volver a topes altos (hoy 10/tanda). Días, no semanas, sin tocar la extracción.
+
+**Si algún día se retoma:** el único corte sensato es **solo el `scheduler`** (no toca PDFs: Drive +
+DB + encolar; bajo riesgo, ganancia real de RAM y arranque). El worker se queda en Node por
+`pdf-parse`. Requisito para arrancar: un problema medido que lo justifique.
+
+**Impacto:** ninguno en código. Anotado en `CLAUDE.md` → "Pendientes lejanos" y en
+`docs/progreso.md`.
+
+---
+
 ## 2026-08-03 — Bancos como catálogo del cliente + una cuenta bancaria por consorcio
 
 **Problema:** la vista general de `/admin/consortiums` era una grilla plana de ~50 edificios sin

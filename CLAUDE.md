@@ -57,8 +57,8 @@ src/
 │   │       ├── rubros/        # CRUD rubros (nivel cliente)
 │   │       ├── coeficientes/  # CRUD coeficientes (nivel cliente)
 │   │       ├── invoices/      # vista global: listado + [id]/payments (pagos)
-│   │       │   ├── bulk-delete/       # POST borrado masivo (tope 10/tanda)
-│   │       │   └── bulk-move-period/  # POST mover al período siguiente (+ preview, tope 10/tanda)
+│   │       │   ├── bulk-delete/       # POST borrado masivo (tope 10 por request)
+│   │       │   └── bulk-move-period/  # POST mover al período siguiente (+ preview, tope 10 por request)
 │   │       ├── obligations/   # PATCH [id]: omitir/reactivar obligación de gasto fijo
 │   │       ├── periods/
 │   │       │   ├── [id]/obligations/  # GET + POST generar obligaciones del período
@@ -472,11 +472,23 @@ Customizable por cliente en `extractionConfigJson.columnMapping`. Fuente única 
 - [ ] Resincronización automática con Sheets cuando Google falla
 - [ ] UI para asignar Rubro y Coeficiente a invoices individuales desde el panel (Stage 2)
 - [ ] UI de gestión de LspServices desde el panel (hoy solo via archivo ALTA)
-- [ ] Job en background para operaciones batch (bulk-move / bulk-delete): hoy van por request
-      con tope 10/tanda por el timeout de ~100s del túnel; la cola ProcessingJob + worker ya
-      existen — spec propio pendiente
+- [ ] Job en background para operaciones batch (bulk-move / bulk-delete): la cola ProcessingJob +
+      worker ya existen — spec propio pendiente. **Bajó de prioridad el 2026-08-06**: el frontend
+      ahora chunkea en tandas de 5 (`RUN_CHUNK` en `boletas/hooks/useBatchRunner.ts`), así que el
+      usuario ya no tiene tope de selección ni queda a ciegas. Lo que seguiría dando la cola es
+      sobrevivir a un deploy o a cerrar la pestaña, y volver a topes altos sin costo de tiempo.
+      Requiere migración
 - [ ] Revocación de sesión: si algún día el `web` escala a más de 1 instancia, revisar el
       cache por proceso de `sessionRevocation.ts` (TTL 60s converge solo, evaluar si alcanza)
+
+### Pendientes lejanos (evaluados, NO planificados)
+- [ ] **Migración parcial del backend a Go — solo el `scheduler`.** Evaluada y descartada como
+      migración completa el 2026-08-06 (ver `docs/decisiones.md`). El worker se queda en Node
+      indefinidamente: `pdf-parse`/`pdfjs-dist` no tienen equivalente en Go y todo el pipeline
+      (`afipTotalsReflow`, `vatContainedAmountGuard`, `classifyDocumentType`, `identifyLSPProvider`,
+      los 12 prompts) está calibrado contra su salida literal. El scheduler sí es candidato limpio
+      (no toca PDFs: Drive + DB + encolar). **No arrancar sin un problema medido** — el cuello de
+      botella actual (~8,5 s/boleta) es I/O externo, no CPU ni GC.
 ---
 ## Docker (producción)
 ### Imagen

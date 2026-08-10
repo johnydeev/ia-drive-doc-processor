@@ -3,6 +3,26 @@
 ## [Unreleased]
 
 ### Added
+- **Barra de progreso en tiempo real para las acciones masivas de Boletas entrantes (2026-08-06)**.
+  "Borrar seleccionadas" y "Mover al período siguiente" dejan de estar limitadas a 10 boletas por
+  tanda: ahora aceptan cualquier cantidad y el frontend las parte en tandas automáticas de
+  `RUN_CHUNK = 5`, mostrando un modal con barra de progreso, contador, tiempo restante estimado por
+  promedio medido en vivo, y la lista de boletas con su estado real (pendiente / en curso / hecha /
+  salteada / fallida). Un fallo no corta la corrida: se marca en rojo y al terminar hay botón
+  **Reintentar fallidas** (seguro — los endpoints ya eran idempotentes). Botón **Cancelar** que frena
+  antes de la tanda siguiente. Piezas nuevas: `boletas/lib/batchProgress` + `boletas/lib/batchAdapters`
+  (tier 0), `boletas/hooks/useBatchRunner` (tier 1), `boletas/components/BatchProgressModal` (tier 2).
+  +34 tests (456 → 490). **Sin migración y sin cambios de backend** — los `.max(10)` de los endpoints
+  siguen vigentes y se les mandan 5. Ver `docs/decisiones.md` (2026-08-06).
+
+### Removed
+- **Estado `unknown` del modal de mover boletas (2026-08-06)**. Existía sólo para sobrevivir al
+  timeout 524 del túnel con lotes de 10 (~85 s contra un techo de 100 s). Con tandas de 5 cada
+  request dura ~46 s y, sobre todo, el manejo de error por boleta lo cubre mejor: una tanda sin
+  respuesta interpretable marca esas 5 en rojo con "resultado no confirmado" y el botón Reintentar
+  las reconcilia. Se fueron `pendingMoves`, `pendingItems`, `doneCount`, `stillPendingCount` y el
+  paso `moveStep === "unknown"`. También se eliminó el estado `notice`, muerto desde que el resumen
+  del borrado vive en el modal.
 - **Bancos a nivel cliente + cuenta bancaria por consorcio + vista agrupada por banco (2026-08-03)**.
   Modelo `Bank` nuevo (catálogo por `Client`: nombre + color de una paleta fija de 8 slugs, con valor
   propio por tema para no romper el contraste). `Consortium` gana `bankId` (relación con
@@ -28,6 +48,11 @@
   columna I = ALIAS de Sheets **no cambian**: ahí el alias de pago es del proveedor y funciona.
 
 ### Docs
+- **Evaluada y descartada la migración del backend a Go (2026-08-06)**. Análisis registrado como
+  pendiente lejano, sin cambios de código. Bloqueante principal: `pdf-parse`/`pdfjs-dist` no tienen
+  equivalente en Go y el pipeline entero está calibrado contra su salida literal. El cuello de
+  botella medido (~8,5 s/boleta) es I/O de Drive, no CPU. Único corte sensato si se retoma: solo el
+  `scheduler`. Ver `docs/decisiones.md` (2026-08-06) y `CLAUDE.md` → "Pendientes lejanos".
 - **Corregida documentación desactualizada del borrado de boletas (2026-07-27)**. El comentario de
   `handleDeleteInvoice` en `consortiums/page.tsx` afirmaba que el borrado mueve el PDF `scanned→pending`;
   en realidad el borrado por consorcio lo manda a **Revisión** (`failed`) para que el scheduler no lo

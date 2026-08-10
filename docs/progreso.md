@@ -1,6 +1,65 @@
 # Progreso del proyecto — drive-doc-processor
 
-Actualizado al 03/08/2026 (sesión 53 — bancos por consorcio).
+Actualizado al 06/08/2026 (sesión 54 — barra de progreso en acciones masivas + evaluación Go).
+
+## 📊 Barra de progreso en las acciones masivas de Boletas entrantes (2026-08-06)
+
+**Estado: implementado y verificado (typecheck + lint 0 errores + 490 tests + build + build:jobs OK).
+Sin migración. Sin cambios de backend. Sin commitear (lo hace el owner).**
+
+Spec/plan: `docs/superpowers/{specs,plans}/2026-08-06-barra-progreso-batch-boletas*`.
+
+Se levanta el tope de **10 boletas por tanda** de "Borrar seleccionadas" y "Mover al período
+siguiente": ahora se selecciona cualquier cantidad (techo natural: la página de 50) y el frontend las
+manda en tandas automáticas de `RUN_CHUNK = 5`, con un modal que muestra barra, contador, tiempo
+restante estimado y la lista de boletas con su estado real.
+
+Hecho:
+- **`lib/batchProgress.ts`** (tier 0) — el estado de la corrida como datos puros: `BatchItem` con 5
+  estados, transiciones, contadores y ETA por **promedio medido en vivo** (no una constante).
+- **`lib/batchAdapters.ts`** (tier 0) — normaliza las dos respuestas a un resultado por `invoiceId`.
+  Detalle que importa: los endpoints devuelven los éxitos como **contador** (`deleted`/`moved`), no
+  como lista de ids; sólo `skipped[]`/`failed[]` traen `invoiceId`. Regla: *todo id enviado que no
+  vuelve en skipped ni en failed es done*. `SKIP_LABELS` se mudó acá desde `page.tsx`.
+- **`hooks/useBatchRunner.ts`** (tier 1) — bucle secuencial por tandas, con `cancel` y `retryFailed`.
+  El estado que el bucle async lee en vivo (cancelación, items, entradas) vive en **refs**: un
+  `useState` quedaría capturado con su valor viejo dentro del `for`.
+- **`components/BatchProgressModal.tsx`** (tier 2) — presentacional puro. Verde/ámbar/rojo por
+  desenlace, `reverted: false` destacado. **No se puede cerrar mientras corre** (no hay Cerrar ni
+  cierre por overlay): para frenar hay que Cancelar, así la corrida nunca sigue invisible.
+- **Se eliminó el estado `unknown`** del modal de mover y su maquinaria de conteo best-effort.
+- `boletas/` estrena la convención `lib/ hooks/ components/` que ya tenía `consortiums/`.
+
+**Costo de tiempo asumido:** ~+8% (50 boletas: ~7,1 → ~7,6 min). Tandas más chicas pierden la
+amortización de la lectura de Sheets; con 1 sería +70%. `RUN_CHUNK` quedó como constante para poder
+subirlo a 10 si en producción resulta peor. Aritmética completa en `docs/decisiones.md` (2026-08-06).
+
+`page.tsx` **568 → 539 líneas**. Tests **456 → 490**.
+
+**⏳ Pendiente del owner:** smoke visual post-deploy — seleccionar más de 10 boletas y borrarlas
+viendo avanzar la barra; probar **Cancelar** a mitad (frena antes de la tanda siguiente, hasta ~46 s
+en tomar efecto); forzar una fallida (borrar una boleta **con pagos registrados** → 409) y usar
+**Reintentar fallidas**; probar "Mover al período siguiente" con más de 10 seleccionadas y verificar
+que el preview chunkeado las lista todas.
+
+## 🕐 Pendiente lejano — migración del backend a Go (2026-08-06, evaluada y descartada)
+
+**Estado: solo análisis. Sin cambios de código, sin plan, sin fecha. NO arrancar sin un problema medido.**
+
+Pregunta hipotética del owner, respondida y registrada para no re-derivarla. Análisis completo en
+`docs/decisiones.md` (2026-08-06).
+
+- **Descartada como migración completa.** Bloqueante principal: `pdf-parse`/`pdfjs-dist` no tienen
+  equivalente en Go, y todo el pipeline (`afipTotalsReflow`, `vatContainedAmountGuard`,
+  `classifyDocumentType`, `identifyLSPProvider`, los 12 prompts) está calibrado contra su salida
+  literal. Secundarios: Prisma sin cliente Go, OCR/visión con CGO + binarios externos, `lib/`
+  compartido con React.
+- **Argumento que decide:** el cuello de botella medido (~8,5 s/boleta) es I/O de Drive y latencia
+  de IA, no CPU ni GC. Go no lo mejora.
+- **Único corte sensato si se retoma:** solo el `scheduler` (no toca PDFs). El worker se queda en
+  Node indefinidamente.
+- **Alternativa preferida y ya pendiente:** job en background sobre la cola `ProcessingJob` para las
+  operaciones batch — mata la clase de 524 del túnel en días, sin tocar la extracción.
 
 ## 🏦 Bancos a nivel cliente + cuenta bancaria por consorcio + vista agrupada (2026-08-03)
 

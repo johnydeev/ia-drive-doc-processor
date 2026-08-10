@@ -1,17 +1,24 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 // Reutiliza los estilos de la vista admin de invoices (tabla, panel, paginación).
 import styles from "../invoices/page.module.css";
 import { useAuthGuard } from "@/lib/useAuthGuard";
+import { useBatchRunner, type BatchEntry } from "./hooks/useBatchRunner";
+import { BatchProgressModal } from "./components/BatchProgressModal";
+import { adaptDeleteResponse, adaptMoveResponse, SKIP_LABELS } from "./lib/batchAdapters";
+import type { BatchItemResult } from "./lib/batchProgress";
 
 type ThemeMode = "dark" | "light";
 const THEME_STORAGE_KEY = "dpp_admin_theme";
-/** Tope de boletas por tanda al mover de período (evita el timeout de ~100s del túnel). */
-const MAX_MOVE_BATCH = 10;
-/** Tope de boletas por tanda al borrar (mismo motivo: varias llamadas a Drive/Sheets por boleta). */
-const MAX_DELETE_BATCH = 10;
+/**
+ * Tamaño de tanda del PREVIEW de "mover" (read-only: no toca Drive ni Sheets,
+ * por eso puede ser mayor que el de ejecución, que vive en `useBatchRunner`).
+ */
+const PREVIEW_CHUNK = 10;
+/** Segundos que tarda una boleta en promedio; sólo para estimar antes de arrancar. */
+const SECONDS_PER_INVOICE = 9;
 
 type InvoiceRow = {
   id: string;
@@ -30,7 +37,6 @@ type InvoiceRow = {
 type Facet = { id: string; name: string };
 
 type MovePreviewItem = { invoiceId: string; consortium: string | null; movable: boolean; fromLabel?: string; toLabel?: string; targetPeriodId?: string; skip?: string };
-type MoveSummary = { moved: number; skipped: Array<{ invoiceId: string; reason: string }>; failed: Array<{ invoiceId: string; error: string; reverted: boolean }>; total: number };
 
 function formatAmount(v: number | null) {
   if (v == null) return "—";
@@ -63,6 +69,12 @@ function toDrivePreviewUrl(url: string): string {
   return id ? `https://drive.google.com/file/d/${id}/preview` : url;
 }
 
+/** "≈ 8 min" a partir de la cantidad de boletas, para avisar antes de arrancar. */
+function estimateRunLabel(count: number): string {
+  const seconds = count * SECONDS_PER_INVOICE;
+  return seconds < 60 ? `≈ ${seconds} s` : `≈ ${Math.ceil(seconds / 60)} min`;
+}
+
 export default function BoletasEntrantesPage() {
   const router = useRouter();
   const { guardedFetch } = useAuthGuard();
@@ -70,19 +82,16 @@ export default function BoletasEntrantesPage() {
   const [theme, setTheme] = useState<ThemeMode>("dark");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
   const [invoices, setInvoices] = useState<InvoiceRow[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
   const [pageSize] = useState(50);
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [deleting, setDeleting] = useState(false);
+  /** Título del modal de progreso; `null` = no hay corrida a la vista. */
+  const [batchTitle, setBatchTitle] = useState<string | null>(null);
   const [moving, setMoving] = useState(false);
-  const [moveStep, setMoveStep] = useState<null | "preview" | "result" | "unknown">(null);
+  const [moveStep, setMoveStep] = useState<null | "preview">(null);
   const [movePreview, setMovePreview] = useState<MovePreviewItem[]>([]);
-  const [moveResult, setMoveResult] = useState<MoveSummary | null>(null);
-  const [pendingMoves, setPendingMoves] = useState<Array<{ invoiceId: string; targetPeriodId: string }>>([]);
-  const [pendingItems, setPendingItems] = useState<Array<{ invoiceId: string; toLabel?: string; fromLabel?: string }>>([]);
   const [facets, setFacets] = useState<{ consortiums: Facet[]; providers: Facet[]; periods: Facet[] }>({ consortiums: [], providers: [], periods: [] });
   const [consortiumFilter, setConsortiumFilter] = useState("");
   const [providerFilter, setProviderFilter] = useState("");
@@ -144,70 +153,106 @@ export default function BoletasEntrantesPage() {
     setSelected((prev) => (prev.size === invoices.length ? new Set() : new Set(invoices.map((i) => i.id))));
   };
 
+  const deleteRunner = useBatchRunner<BatchEntry>({
+    runChunk: useCallback(
+      async (batch: BatchEntry[]): Promise<Map<string, BatchItemResult>> => {
+        const ids = batch.map((e) => e.id);
+        try {
+          const res = await guardedFetch("/api/client/invoices/bulk-delete", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ invoiceIds: ids }),
+          });
+          const data = await res.json().catch(() => null);
+          return adaptDeleteResponse(ids, res.ok ? data : null);
+        } catch {
+          return adaptDeleteResponse(ids, null);
+        }
+      },
+      [guardedFetch]
+    ),
+  });
+
+  /**
+   * Destinos de la corrida de "mover", indexados por invoiceId. Ref y no estado:
+   * `runChunk` los lee dentro del bucle async, y un `useState` seteado justo
+   * antes de `start()` todavía no se habría propagado a ese closure.
+   */
+  const moveTargetsRef = useRef<Map<string, string>>(new Map());
+
+  const moveRunner = useBatchRunner<BatchEntry>({
+    runChunk: useCallback(
+      async (batch: BatchEntry[]): Promise<Map<string, BatchItemResult>> => {
+        const ids = batch.map((e) => e.id);
+        const moves = ids
+          .map((id) => ({ invoiceId: id, targetPeriodId: moveTargetsRef.current.get(id) ?? "" }))
+          .filter((m) => m.targetPeriodId !== "");
+        try {
+          const res = await guardedFetch("/api/client/invoices/bulk-move-period", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ moves }),
+          });
+          const data = await res.json().catch(() => null);
+          return adaptMoveResponse(ids, res.ok ? data : null);
+        } catch {
+          return adaptMoveResponse(ids, null);
+        }
+      },
+      [guardedFetch]
+    ),
+  });
+
   const handleDeleteSelected = useCallback(async () => {
     if (selectedCount === 0) return;
-    if (selectedCount > MAX_DELETE_BATCH) {
-      setError(`No se pueden borrar más de ${MAX_DELETE_BATCH} boletas por tanda. Seleccioná hasta ${MAX_DELETE_BATCH} y hacé el resto en la siguiente tanda.`);
-      return;
-    }
+
     const ok = window.confirm(
-      `¿Borrar ${selectedCount} boleta(s)?\n\n` +
+      `¿Borrar ${selectedCount} boleta(s)?  (${estimateRunLabel(selectedCount)})\n\n` +
       `Se quitan del Sheet y de la base, y los PDFs vuelven a Pendientes para reprocesarse.`
     );
     if (!ok) return;
 
-    setDeleting(true);
     setError(null);
-    setNotice(null);
-    try {
-      const res = await guardedFetch("/api/client/invoices/bulk-delete", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ invoiceIds: [...selected] }),
-      });
-      const data = await res.json();
-      if (!res.ok || !data.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
-      const failedCount = data.failed?.length ?? 0;
-      setNotice(
-        `${data.deleted} boleta(s) borrada(s)` +
-        (failedCount > 0 ? ` — ${failedCount} con error (revisá la consola)` : "")
-      );
-      if (failedCount > 0) console.warn("[bulk-delete] fallidas:", data.failed);
-      await fetchInvoices();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Error al borrar");
-    } finally {
-      setDeleting(false);
-    }
-  }, [guardedFetch, selected, selectedCount, fetchInvoices]);
+    setBatchTitle("Borrando boletas");
 
-  const SKIP_LABELS: Record<string, string> = {
-    sin_periodo: "sin período asignado",
-    destino_inexistente: "el período siguiente no existe todavía (cerrá el período primero)",
-    destino_cerrado: "el período siguiente está cerrado",
-    ya_en_destino: "ya estaba en el período destino",
-    destino_invalido: "el período destino ya no es válido (recargá y reintentá)",
-  };
+    const entries: BatchEntry[] = [...selected].map((id) => {
+      const inv = invoices.find((i) => i.id === id);
+      return {
+        id,
+        label: `${inv?.consortium ?? "(sin consorcio)"} — ${inv?.provider ?? "(sin proveedor)"}`,
+      };
+    });
 
+    await deleteRunner.start(entries);
+    setSelected(new Set());
+    await fetchInvoices();
+  }, [selected, selectedCount, invoices, deleteRunner, fetchInvoices]);
+
+  /**
+   * El preview es read-only (no toca Drive ni Sheets) pero su endpoint valida
+   * hasta 10 ids por request, así que se manda en tandas y se concatena.
+   */
   const openMoveModal = useCallback(async () => {
     if (selectedCount === 0) return;
-    if (selectedCount > MAX_MOVE_BATCH) {
-      setError(`No se pueden mover más de ${MAX_MOVE_BATCH} boletas por tanda. Seleccioná hasta ${MAX_MOVE_BATCH} y hacé el resto en la siguiente tanda.`);
-      return;
-    }
     setError(null);
-    setNotice(null);
-    setMoveResult(null);
     setMoving(true);
     try {
-      const res = await guardedFetch("/api/client/invoices/bulk-move-period/preview", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ invoiceIds: [...selected] }),
-      });
-      const data = await res.json();
-      if (!res.ok || !data.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
-      setMovePreview(data.items as MovePreviewItem[]);
+      const ids = [...selected];
+      const batches: string[][] = [];
+      for (let i = 0; i < ids.length; i += PREVIEW_CHUNK) batches.push(ids.slice(i, i + PREVIEW_CHUNK));
+
+      const collected: MovePreviewItem[] = [];
+      for (const batch of batches) {
+        const res = await guardedFetch("/api/client/invoices/bulk-move-period/preview", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ invoiceIds: batch }),
+        });
+        const data = await res.json();
+        if (!res.ok || !data.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
+        collected.push(...(data.items as MovePreviewItem[]));
+      }
+      setMovePreview(collected);
       setMoveStep("preview");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Error al previsualizar");
@@ -216,64 +261,31 @@ export default function BoletasEntrantesPage() {
     }
   }, [guardedFetch, selected, selectedCount]);
 
-  const runMove = useCallback(async (moves: Array<{ invoiceId: string; targetPeriodId: string }>) => {
-    if (moves.length === 0) return;
-    setMoving(true);
-    setError(null);
-    try {
-      const res = await guardedFetch("/api/client/invoices/bulk-move-period", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ moves }),
-      });
-      let data: MoveSummary | null = null;
-      try { data = (await res.json()) as MoveSummary; } catch { data = null; }
-
-      if (!res.ok || !data || !(data as unknown as { ok?: boolean }).ok) {
-        // Resultado desconocido (timeout 524 / HTML / red). NO romper.
-        setPendingMoves(moves);
-        setSelected(new Set());
-        await fetchInvoices();
-        setMoveStep("unknown");
-        return;
-      }
-
-      setMoveResult(data);
-      setMoveStep("result");
-      setSelected(new Set());
-      await fetchInvoices();
-    } catch {
-      // Error de red / timeout del fetch.
-      setPendingMoves(moves);
-      setSelected(new Set());
-      await fetchInvoices();
-      setMoveStep("unknown");
-    } finally {
-      setMoving(false);
-    }
-  }, [guardedFetch, fetchInvoices]);
-
   const confirmMove = useCallback(async () => {
-    const items = movePreview.filter((i) => i.movable && i.targetPeriodId);
-    const moves = items.map((i) => ({ invoiceId: i.invoiceId, targetPeriodId: i.targetPeriodId! }));
-    setPendingItems(items.map((i) => ({ invoiceId: i.invoiceId, toLabel: i.toLabel, fromLabel: i.fromLabel })));
-    await runMove(moves);
-  }, [movePreview, runMove]);
+    const movable = movePreview.filter((i) => i.movable && i.targetPeriodId);
+    if (movable.length === 0) return;
+
+    moveTargetsRef.current = new Map(movable.map((i) => [i.invoiceId, i.targetPeriodId!]));
+    setMoveStep(null);
+    setBatchTitle("Moviendo boletas al período siguiente");
+
+    const entries: BatchEntry[] = movable.map((i) => ({
+      id: i.invoiceId,
+      label: `${i.consortium ?? "(sin consorcio)"} — ${i.fromLabel} → ${i.toLabel}`,
+    }));
+
+    await moveRunner.start(entries);
+    setSelected(new Set());
+    await fetchInvoices();
+  }, [movePreview, moveRunner, fetchInvoices]);
 
   const closeMoveModal = useCallback(() => {
     setMoveStep(null);
     setMovePreview([]);
-    setMoveResult(null);
   }, []);
 
   const movableCount = movePreview.filter((i) => i.movable).length;
   const skippablePreview = movePreview.filter((i) => !i.movable);
-
-  // Conteo best-effort tras un timeout: de las que se intentaron, cuántas ya
-  // muestran el destino en la lista refrescada vs. siguen en el origen.
-  const invoiceById = useMemo(() => new Map(invoices.map((i) => [i.id, i])), [invoices]);
-  const doneCount = pendingItems.filter((it) => it.toLabel && invoiceById.get(it.invoiceId)?.period === it.toLabel).length;
-  const stillPendingCount = pendingItems.length - doneCount;
 
   const dangerBtnStyle = useMemo<React.CSSProperties>(() => ({
     background: selectedCount > 0 ? "#b91c1c" : undefined,
@@ -304,11 +316,11 @@ export default function BoletasEntrantesPage() {
 
         <div className={styles.filterBar}>
           <button type="button" className={styles.ghostBtn} style={dangerBtnStyle}
-            disabled={selectedCount === 0 || deleting || moving} onClick={handleDeleteSelected}>
-            {deleting ? "Borrando..." : `Borrar seleccionadas${selectedCount > 0 ? ` (${selectedCount})` : ""}`}
+            disabled={selectedCount === 0 || deleteRunner.isRunning || moving} onClick={handleDeleteSelected}>
+            {deleteRunner.isRunning ? "Borrando..." : `Borrar seleccionadas${selectedCount > 0 ? ` (${selectedCount})` : ""}`}
           </button>
           <button type="button" className={styles.ghostBtn}
-            disabled={selectedCount === 0 || moving || deleting} onClick={() => void openMoveModal()}>
+            disabled={selectedCount === 0 || moving || deleteRunner.isRunning} onClick={() => void openMoveModal()}>
             {moving && moveStep === null ? "Cargando..." : `Mover al período siguiente${selectedCount > 0 ? ` (${selectedCount})` : ""}`}
           </button>
           <button type="button" className={styles.ghostBtn} disabled={loading} onClick={() => void fetchInvoices()}>
@@ -335,7 +347,6 @@ export default function BoletasEntrantesPage() {
         </div>
 
         {error && <p className={styles.error}>{error}</p>}
-        {notice && <p style={{ color: "#16a34a", fontSize: 13, margin: "4px 0" }}>{notice}</p>}
 
         {loading ? (
           <p className={styles.loader}>Cargando boletas...</p>
@@ -498,64 +509,8 @@ export default function BoletasEntrantesPage() {
                   <button type="button" className={styles.ghostBtn} onClick={closeMoveModal} disabled={moving}>Cancelar</button>
                   <button type="button" className={styles.ghostBtn}
                     style={{ background: "#2563eb", borderColor: "#2563eb", color: "#fff", opacity: movableCount > 0 ? 1 : 0.5 }}
-                    disabled={moving || movableCount === 0} onClick={() => void confirmMove()}>
-                    {moving ? "Moviendo..." : `Confirmar (${movableCount})`}
-                  </button>
-                </div>
-              </>
-            )}
-            {moveStep === "result" && moveResult && (
-              <>
-                <h2 style={{ marginTop: 0 }}>Resultado</h2>
-                <p>
-                  <strong>{moveResult.moved}</strong> movida(s) · <strong>{moveResult.skipped.length}</strong> salteada(s) · <strong>{moveResult.failed.length}</strong> con error
-                </p>
-                {moveResult.skipped.length > 0 && (
-                  <ul style={{ maxHeight: 140, overflowY: "auto", paddingLeft: 18, color: "#b45309" }}>
-                    {Object.entries(
-                      moveResult.skipped.reduce((acc, s) => {
-                        acc[s.reason] = (acc[s.reason] ?? 0) + 1;
-                        return acc;
-                      }, {} as Record<string, number>)
-                    ).map(([reason, count]) => (
-                      <li key={reason}>{count} {SKIP_LABELS[reason] ?? reason}</li>
-                    ))}
-                  </ul>
-                )}
-                {moveResult.failed.length > 0 && (
-                  <ul style={{ maxHeight: 180, overflowY: "auto", paddingLeft: 18, color: "#b91c1c" }}>
-                    {moveResult.failed.map((f) => (
-                      <li key={f.invoiceId}>
-                        {f.invoiceId}: {f.error}{f.reverted ? " (revertida)" : " — NO revertida, revisar manualmente"}
-                      </li>
-                    ))}
-                  </ul>
-                )}
-                <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 16 }}>
-                  <button type="button" className={styles.ghostBtn} onClick={closeMoveModal}>Cerrar</button>
-                </div>
-              </>
-            )}
-            {moveStep === "unknown" && (
-              <>
-                <h2 style={{ marginTop: 0 }}>No pude confirmar el resultado</h2>
-                <p>
-                  Puede que la operación haya terminado igual (los lotes grandes a veces cortan la
-                  conexión pero el proceso sigue). Revisé la lista:
-                </p>
-                <p>
-                  <strong>{doneCount}</strong> ya figuran en el período nuevo ·{" "}
-                  <strong>{stillPendingCount}</strong> podrían seguir en el anterior.
-                </p>
-                <p style={{ color: "#b45309" }}>
-                  Si quedaron pendientes, reintentá — es seguro, no mueve dos veces.
-                </p>
-                <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 16 }}>
-                  <button type="button" className={styles.ghostBtn} onClick={closeMoveModal} disabled={moving}>Cerrar</button>
-                  <button type="button" className={styles.ghostBtn}
-                    style={{ background: "#2563eb", borderColor: "#2563eb", color: "#fff" }}
-                    disabled={moving} onClick={() => void runMove(pendingMoves)}>
-                    {moving ? "Reintentando..." : "Reintentar"}
+                    disabled={movableCount === 0} onClick={() => void confirmMove()}>
+                    Confirmar ({movableCount}) · {estimateRunLabel(movableCount)}
                   </button>
                 </div>
               </>
@@ -563,6 +518,22 @@ export default function BoletasEntrantesPage() {
           </div>
         </div>
       )}
+
+      {batchTitle && (() => {
+        const runner = batchTitle.startsWith("Borrando") ? deleteRunner : moveRunner;
+        return (
+          <BatchProgressModal
+            title={batchTitle}
+            items={runner.items}
+            summary={runner.summary}
+            isRunning={runner.isRunning}
+            etaMs={runner.etaMs}
+            onCancel={runner.cancel}
+            onRetryFailed={() => void runner.retryFailed()}
+            onClose={() => { setBatchTitle(null); runner.reset(); void fetchInvoices(); }}
+          />
+        );
+      })()}
     </div>
   );
 }
