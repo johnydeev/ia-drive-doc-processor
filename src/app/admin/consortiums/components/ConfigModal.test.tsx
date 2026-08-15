@@ -2,9 +2,8 @@ import { describe, it, expect, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ConfigModal } from "./ConfigModal";
-import type { Bank, Provider } from "../lib/types";
+import type { Bank } from "../lib/types";
 
-const providers: Provider[] = [{ id: "pr1", canonicalName: "EDESUR", cuit: "30-65511651-2", paymentAlias: null }];
 const banks: Bank[] = [{ id: "b1", name: "Santander", color: "red" }];
 
 function setup(overrides: Partial<React.ComponentProps<typeof ConfigModal>> = {}) {
@@ -14,7 +13,6 @@ function setup(overrides: Partial<React.ComponentProps<typeof ConfigModal>> = {}
     openSection: null,
     onToggleSection: vi.fn(),
     onClose: vi.fn(),
-    providers,
     banks,
     bank: {
       form: {
@@ -34,10 +32,7 @@ function setup(overrides: Partial<React.ComponentProps<typeof ConfigModal>> = {}
       error: null, confirmDeleteId: null,
       onChangeForm: vi.fn(), onConfirmDelete: vi.fn(), onAdd: vi.fn(), onDelete: vi.fn(),
     },
-    fixed: {
-      list: [], target: "", error: null,
-      onChangeTarget: vi.fn(), onAdd: vi.fn(), onToggle: vi.fn(), onDelete: vi.fn(),
-    },
+    fixed: { list: [] },
     ...overrides,
   };
   render(<ConfigModal {...props} />);
@@ -52,6 +47,23 @@ describe("ConfigModal", () => {
     expect(screen.getByRole("button", { name: /Banco y cuenta/ })).toHaveAttribute("aria-expanded", "false");
     expect(screen.getByRole("button", { name: /Servicios públicos/ })).toHaveAttribute("aria-expanded", "false");
     expect(screen.getByRole("button", { name: /Gastos fijos/ })).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("la sección de gastos fijos es de solo lectura y linkea a Obligaciones", () => {
+    setup({
+      openSection: "fixed",
+      fixed: {
+        list: [
+          { id: "fx1", providerId: "p1", lspServiceId: null, description: null, active: true },
+          { id: "fx2", providerId: "p2", lspServiceId: null, description: null, active: false },
+        ],
+      },
+    });
+
+    expect(screen.getByText(/1 gasto\(s\) fijo\(s\) activo\(s\) de 2/)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Obligaciones" })).toHaveAttribute("href", "/admin/obligaciones");
+    expect(screen.queryByRole("button", { name: /^Agregar$/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Desactivar/ })).not.toBeInTheDocument();
   });
 
   it("con openSection='bank' muestra el select de bancos y los campos de cuenta", async () => {

@@ -3,6 +3,58 @@
 ## [Unreleased]
 
 ### Added
+- **Arrastre de boletas impagas al mes siguiente (2026-08-12)**. Cuando no entran los pagos y una
+  boleta de gasto fijo queda sin pagar, la vista de obligaciones la muestra en un bloque **"Impagas de
+  meses anteriores"** al pie del edificio (en pantalla y en el PDF), y un botón **"Pasar a este
+  período"** la mueve al mes corriente — Drive, Sheets y DB — para que el gasto quede registrado en el
+  mes en que se paga. **La obligación del mes de origen no se vacía**: queda en el estado nuevo
+  `CARRIED_OVER` conservando su boleta, así el período sigue mostrando que llegó y no se pagó (lo que
+  exige una rendición de cuentas). Las boletas de servicios traen un 2° importe por pago fuera de
+  término que el pipeline no extrae: se carga a mano con **"Cargar monto vencido"** (`Invoice.lateAmount`),
+  que recalcula el saldo por la diferencia y pasa a ser la base del "pagada"; se muestran el 1° y el 2°
+  pago, sin la resta. `Invoice.carriedFromPeriodId` registra el origen una sola vez, así un arrastre
+  encadenado sigue diciendo el mes real. +48 tests (543 → 591). **Requiere migración**
+  `20260813000000_carry_over_unpaid_invoices`. Ver `docs/decisiones.md` (2026-08-12).
+- **Hoja imprimible de obligaciones — PDF e impresión (2026-08-12, Parte 2)**. La vista de
+  `/admin/obligaciones` gana dos botones: **Descargar PDF (N)**, que arma el documento con `jsPDF` +
+  `jspdf-autotable` y lo baja al dispositivo (una hoja A4 por edificio, banco y período en el
+  encabezado, las seis columnas de la planilla, pie con la fecha de generación, archivo
+  `obligaciones-julio-2026.pdf`), e **Imprimir**, que manda la misma vista a la impresora con un
+  `@media print` que esconde barra, buscador y acciones de fila y pagina un edificio por hoja. Qué se
+  encabezado `BANCO: … · PERIODO: …`, columna MONTO de 36mm para que un importe de millones no se
+  parta en dos líneas, filas compactas y el nombre del banco normalizado a title case sólo en el
+  papel. Qué se
+  imprime lo decide una sola función pura (`toPrintableSheets`): sin salteadas, sin desactivadas, sin
+  edificios sin período y sin hojas que quedarían en blanco — la usan el PDF y también la impresión,
+  así el archivo y el papel no pueden diferir. Las librerías se cargan con `import()` dinámico (no
+  pesan en el bundle hasta que se aprieta Descargar). +20 tests (544 → 564). Sin migración y sin
+  cambios de backend. Ver `docs/decisiones.md` (2026-08-12).
+- **Vista global de obligaciones (2026-08-12, Parte 1)**. Nueva pantalla `/admin/obligaciones`
+  (botón en el sidebar, rol CLIENT) con los gastos fijos de todos los edificios agrupados por banco,
+  cada uno con la forma exacta de la hoja que después se va a imprimir: FACTURAS · PROVEEDORES Y
+  SERVICIOS · MONTO · ALIAS CBU · TÉCNICO O GESTOR · TEL. CONTACTO. El monto sale de la boleta cuando
+  llegó; las dos últimas columnas van vacías (el modelo todavía no guarda datos de contacto). Desde
+  la misma pantalla se agregan gastos fijos **de a varios** (modal con checkboxes que esconde lo ya
+  cargado), se desactivan, se eliminan (con aviso de que arrastra el historial de obligaciones) y se
+  omiten o reactivan las obligaciones del mes. Al abrir, la vista **sincroniza sola** las obligaciones
+  faltantes de todos los períodos activos con una función set-based (~5 queries para la cartera
+  entera), así la lista nunca sale incompleta; si esa sincronización falla, la vista carga igual con
+  un aviso. Piezas nuevas: `obligaciones/lib/sheetModel` + `obligaciones/lib/availableTargets`
+  (tier 0), `obligaciones/hooks/useObligationsOverview` (tier 1), `obligaciones/components/SheetCard`
+  + `AddFixedExpenseModal` (tier 2), y los endpoints `/api/client/obligations/overview` y
+  `/api/client/obligations/sync`. Todas las acciones de fila usan `AsyncButton` (spinner + disabled +
+  guard anti doble-click) y son botones rectangulares con área de toque propia (40px de alto en
+  mobile); el tachado de una fila omitida afecta sólo a los datos, no a sus botones. **No hay borrado
+  de gastos fijos**: la baja se hace desactivando, porque el borrado físico arrastra las obligaciones
+  de todos los períodos (`onDelete: Cascade`) y destruiría la evidencia que una rendición de cuentas o
+  una auditoría necesita; los desactivados quedan al fondo de la lista de su edificio. Cada fila
+  ofrece una sola acción de estado — la que lo revierte: "Saltear periodo"/"Agregar al periodo" para
+  la obligación del mes, "Desactivar"/"Activar" para el gasto fijo.
+  +52 tests (492 → 544). **Requiere migración**
+  `20260812000000_unique_fixed_expense_target` (dos índices únicos que impiden cargar dos veces el
+  mismo proveedor o servicio en un edificio). La Parte 2 —descarga de PDF e impresión sobre el mismo
+  `SheetData[]`— queda pendiente. Ver `docs/decisiones.md` (2026-08-12).
+
 - **Barra de progreso en tiempo real para las acciones masivas de Boletas entrantes (2026-08-06)**.
   "Borrar seleccionadas" y "Mover al período siguiente" dejan de estar limitadas a 10 boletas por
   tanda: ahora aceptan cualquier cantidad y el frontend las parte en tandas automáticas de
@@ -36,6 +88,13 @@
   (`20260803000000_bancos_por_consorcio`). Ver `docs/decisiones.md` (2026-08-03).
 
 ### Changed
+- **"Generar obligaciones" pasa a llamarse "Sincronizar gastos fijos" (2026-08-12)**. Es lo que
+  siempre hizo: es idempotente y sólo agrega al período abierto los gastos fijos que todavía no
+  tenían obligación. El nombre viejo sugería que creaba algo desde cero.
+- **La sección "Gastos fijos" del modal de Configuración es ahora de solo lectura (2026-08-12)**.
+  Muestra cuántos hay activos sobre el total y linkea a la vista de Obligaciones, que pasa a ser el
+  único lugar de edición. Al quedarse sin el formulario de alta, la prop `providers` de `ConfigModal`
+  se eliminó por falta de consumidores.
 - **La columna O = BANCO de Google Sheets empieza a llenarse (2026-08-03)**. Estaba cableada desde
   siempre (`DEFAULT_SHEETS_MAPPING` + el pipeline la propagaba), pero salía vacía en todas las
   boletas: el campo `Consortium.bank` se **leía** y nunca se **escribía** — ni la UI, ni el sync ALTA,

@@ -44,10 +44,8 @@ export function useConsortiumConfig({ consortiumId, onMatchNamesSaved, onBankSav
   const [lspError, setLspError] = useState<string | null>(null);
   const [confirmDeleteLspId, setConfirmDeleteLspId] = useState<string | null>(null);
 
-  // Gastos fijos
+  // Gastos fijos: solo lectura desde acá (se administran en /admin/obligaciones).
   const [fixedExpenses, setFixedExpenses] = useState<FixedExpenseRow[]>([]);
-  const [fxTarget, setFxTarget] = useState("");
-  const [fxError, setFxError] = useState<string | null>(null);
 
   const fetchLspServices = useCallback(async (id: string) => {
     try {
@@ -81,7 +79,7 @@ export function useConsortiumConfig({ consortiumId, onMatchNamesSaved, onBankSav
     });
     setLspServices([]); setLspError(null); setLspForm(EMPTY_LSP_FORM);
     setConfirmDeleteLspId(null);
-    setFixedExpenses([]); setFxTarget(""); setFxError(null);
+    setFixedExpenses([]);
     void fetchLspServices(c.id); void fetchFixedExpenses(c.id);
   };
 
@@ -178,39 +176,6 @@ export function useConsortiumConfig({ consortiumId, onMatchNamesSaved, onBankSav
     } finally { setConfirmDeleteLspId(null); }
   };
 
-  // ── Gastos fijos ─────────────────────────────────────────────────────────
-  const addFixedExpense = async () => {
-    if (!consortiumId || !fxTarget) return;
-    setFxError(null);
-    const [kind, targetId] = fxTarget.split(":");
-    const body = kind === "provider" ? { providerId: targetId } : { lspServiceId: targetId };
-    try {
-      const res = await guardedFetch(`/api/client/consortiums/${consortiumId}/fixed-expenses`, {
-        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
-      });
-      const data = await res.json();
-      if (!res.ok || !data.ok) { setFxError(data.error ?? `HTTP ${res.status}`); return; }
-      setFxTarget("");
-      await fetchFixedExpenses(consortiumId);
-    } catch (err) {
-      setFxError(err instanceof Error ? err.message : "Error al agregar");
-    }
-  };
-
-  const toggleFixedExpense = async (fx: FixedExpenseRow) => {
-    if (!consortiumId) return;
-    await guardedFetch(`/api/client/consortiums/${consortiumId}/fixed-expenses/${fx.id}`, {
-      method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ active: !fx.active }),
-    });
-    await fetchFixedExpenses(consortiumId);
-  };
-
-  const removeFixedExpense = async (id: string) => {
-    if (!consortiumId) return;
-    await guardedFetch(`/api/client/consortiums/${consortiumId}/fixed-expenses/${id}`, { method: "DELETE" });
-    await fetchFixedExpenses(consortiumId);
-  };
-
   return {
     isOpen, open, close, load,
     openSection, toggleSection,
@@ -243,12 +208,6 @@ export function useConsortiumConfig({ consortiumId, onMatchNamesSaved, onBankSav
     },
     fixed: {
       list: fixedExpenses,
-      target: fxTarget,
-      error: fxError,
-      setTarget: setFxTarget,
-      add: addFixedExpense,
-      toggle: toggleFixedExpense,
-      remove: removeFixedExpense,
     },
   };
 }

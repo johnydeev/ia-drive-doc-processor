@@ -55,6 +55,10 @@ enum ObligationStatus {
   RECEIVED
   SKIPPED
   NOT_RECEIVED
+  /// Llegó la boleta y no se pagó: se arrastró al período siguiente. La
+  /// obligación conserva su invoiceId para que el mes de origen mantenga la
+  /// evidencia del atraso.
+  CARRIED_OVER
 }
 
 model Client {
@@ -149,9 +153,16 @@ model Invoice {
   amountNorm          String       @default("")
   isPaid              Boolean      @default(false)
   remainingBalance    Decimal?     @db.Decimal(14, 2)
+  /// Período del que se arrastró esta boleta por quedar impaga. Null = nació en
+  /// su período. Se escribe UNA sola vez: un arrastre encadenado conserva el origen.
+  carriedFromPeriodId String?
+  /// Importe del 2° vencimiento (pago fuera de término). Se carga a mano sobre una
+  /// boleta arrastrada; el pipeline nunca lo escribe (extrae sólo el 1er vencimiento).
+  lateAmount          Decimal?     @db.Decimal(14, 2)
   createdAt           DateTime     @default(now())
   updatedAt           DateTime     @updatedAt
   client              Client       @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  carriedFrom         Period?      @relation("InvoiceCarriedFrom", fields: [carriedFromPeriodId], references: [id], onDelete: SetNull)
   consortiumRef       Consortium?  @relation(fields: [consortiumId], references: [id], onDelete: SetNull)
   providerRef         Provider?    @relation(fields: [providerId], references: [id], onDelete: SetNull)
   periodRef           Period?      @relation(fields: [periodId], references: [id], onDelete: SetNull)
@@ -417,6 +428,8 @@ model Period {
   invoices      Invoice[]
   receipts      Receipt[]
   obligations   ExpenseObligation[]
+  /// Boletas que se arrastraron DESDE este período por quedar impagas.
+  carriedInvoices Invoice[] @relation("InvoiceCarriedFrom")
 
   @@unique([consortiumId, year, month])
   @@index([consortiumId, status])
@@ -480,6 +493,11 @@ model FixedExpense {
   lspService   LspService?         @relation(fields: [lspServiceId], references: [id], onDelete: Cascade)
   obligations  ExpenseObligation[]
 
+  // Un gasto fijo por objetivo y por consorcio. Postgres considera los NULL
+  // distintos entre sí, así que un gasto LSP (providerId NULL) nunca colisiona
+  // con otro LSP del mismo consorcio.
+  @@unique([consortiumId, providerId])
+  @@unique([consortiumId, lspServiceId])
   @@index([clientId])
   @@index([consortiumId])
 }

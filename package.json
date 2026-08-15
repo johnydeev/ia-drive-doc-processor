@@ -30,6 +30,8 @@
         "@prisma/client": "^6.17.1",
         "dotenv": "^17.2.4",
         "googleapis": "^171.4.0",
+        "jspdf": "^4.2.1",
+        "jspdf-autotable": "^5.0.8",
         "next": "16.1.6",
         "openai": "^6.18.0",
         "pdf-parse": "^2.2.2",

@@ -85,7 +85,11 @@ export class PaymentRepository {
         throw new PaymentError("La boleta no tiene monto definido", 400);
       }
 
-      const invoiceAmount = new Prisma.Decimal(invoice.amount.toString());
+      // Si la boleta se arrastró impaga y se cargó el importe del 2° vencimiento,
+      // ESE es el monto real a pagar: el saldo y el "pagada" se calculan sobre él.
+      const invoiceAmount = new Prisma.Decimal(
+        (invoice.lateAmount ?? invoice.amount).toString()
+      );
 
       // 5. Buscar pagos previos para determinar el modo
       const existingPayments = await tx.payment.findMany({

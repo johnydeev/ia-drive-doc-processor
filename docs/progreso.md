@@ -1,6 +1,212 @@
 # Progreso del proyecto — drive-doc-processor
 
-Actualizado al 06/08/2026 (sesión 54 — barra de progreso en acciones masivas + evaluación Go).
+Actualizado al 12/08/2026 (sesión 55 — vista global de obligaciones: Partes 1, 2 y arrastre de impagas).
+
+## 💸 Arrastre de boletas impagas al mes siguiente (2026-08-12)
+
+**Estado: implementado y verificado (typecheck + lint 0 errores + 591 tests + build OK). Migración
+`20260813000000_carry_over_unpaid_invoices` **YA APLICADA** por el owner (35 migraciones, schema up to
+date). Sin commitear.**
+
+Spec: `docs/superpowers/specs/2026-08-12-boletas-impagas-arrastre-design.md`
+Plan: `docs/superpowers/plans/2026-08-12-boletas-impagas-arrastre.md`
+
+Origen: el cliente le contó al owner que cuando no entran los pagos, una boleta de gasto fijo queda
+impaga y se abona al mes siguiente junto con la corriente. Regla del owner: **el gasto se registra en
+el mes en que se paga**, y el mes de origen tiene que conservar la evidencia del atraso.
+
+Hecho:
+- **Bloque "Impagas de meses anteriores"** al pie de cada edificio, en pantalla y en el PDF (segunda
+  tabla en la misma hoja). Lista las boletas del consorcio con saldo de períodos anteriores.
+- **Botón "Pasar a este período"** por fila: mueve la boleta (Drive + Sheets + DB) reusando
+  `moveOneInvoiceToTarget` con un `applyDb` propio inyectado por su seam. La obligación de origen
+  queda **`CARRIED_OVER` conservando su `invoiceId`** — el mes de origen sigue mostrando que la boleta
+  llegó y no se pagó.
+- **Botón "Cargar monto vencido"** en las ya pasadas: `Invoice.lateAmount` (2° vencimiento), que
+  recalcula el saldo por la diferencia y pasa a ser la base del "pagada" en `payment.repository`.
+  Se muestran **1° pago** y **2° pago**, sin la resta.
+- `Invoice.carriedFromPeriodId` registra el origen **una sola vez** (un arrastre encadenado sigue
+  diciendo "agosto").
+- Badge **"Impaga — pasada al mes siguiente"** en la pestaña Obligaciones del consorcio, que es donde
+  se ve un período cerrado.
+
+**Dos bloqueantes encontrados en la revisión que pidió el owner, antes de codear:**
+1. El botón no tenía dónde vivir (la obligación impaga queda en un período cerrado, que el `overview`
+   no consulta) → se rediseñó como bloque alimentado por boletas, no por obligaciones.
+2. El vínculo retroactivo habría reventado con **P2002** al intentar vincular la boleta arrastrada a
+   la obligación del período destino (el `invoiceId` es unique y la de origen lo conserva) → las dos
+   queries filtran `carriedFromPeriodId: null`, con un test que reproduce el bug.
+
+Detalle completo en `docs/decisiones.md` (2026-08-12).
+
+**⏳ Pendiente del owner:** smoke visual — con un consorcio que tenga una boleta impaga del mes
+anterior, verificar que aparece en el bloque; pasarla y confirmar que el PDF de Drive cambió de
+subcarpeta, que la fila de Sheets pasó al período nuevo y que la obligación de agosto quedó con el
+badge; cargar un monto vencido y ver que el saldo sube por la diferencia; registrar el pago y que la
+boleta quede saldada sobre el 2° vencimiento.
+
+## 🖨️ Vista global de obligaciones — Parte 2: PDF e impresión (2026-08-12)
+
+**Estado: implementado y verificado (typecheck + lint 0 errores + 564 tests + build + build:jobs OK).
+Sin migración, sin cambios de backend. Sin commitear.**
+
+Plan: `docs/superpowers/plans/2026-08-12-vista-global-obligaciones-parte2.md`
+
+La mitad que faltaba: convertir la pantalla en el papel que el administrador se lleva al banco.
+
+Hecho:
+- **Botón "Descargar PDF (N)"** — arma el documento con `jsPDF` + `jspdf-autotable` y lo baja al
+  dispositivo (PC o celular). Una hoja A4 por edificio, con banco y período en el encabezado, las seis
+  columnas de la planilla y el pie "Generado el …". Nombre del archivo: `obligaciones-julio-2026.pdf`.
+- **Ajustes de layout tras la revisión del owner sobre una muestra real (2026-08-12):**
+  - **MONTO pasó de 26mm a 36mm con `overflow: "visible"`.** Con 26mm un importe de siete cifras
+    (`$ 1.470.392,00`) se partía en dos líneas; los proveedores facturan habitualmente en millones y a
+    veces en decenas de millón. Los seis anchos ahora suman exactos los 182mm útiles del A4:
+    FACTURAS 20 · PROVEEDORES 52 · MONTO 36 · ALIAS 26 · TÉCNICO 26 · TEL. 22.
+  - **Filas más compactas:** padding vertical de 2,5mm → 1,2mm (el horizontal queda en 2mm para que el
+    texto no toque el borde). Entran más servicios por hoja.
+  - **Encabezado rotulado:** `BANCO: Ciudad   ·   PERIODO: Agosto 2026` en vez del texto suelto. Se
+    quitó el `toUpperCase()` global y el mes se capitaliza (la API lo devuelve en minúscula).
+  - **El nombre del banco se normaliza a title case sólo para el papel** (`formatBankName`): el
+    catálogo los tiene con mayúsculas mezcladas y en el encabezado impreso se ven todos parejos. **No
+    toca el registro** — decisión explícita del owner, que prefirió formatear en el PDF antes que
+    editar el catálogo.
+- **Botón "Imprimir"** — `window.print()` sobre la misma vista, con un bloque `@media print` que
+  esconde barra, buscador y acciones de fila, y mete un salto de página por edificio (la última hoja
+  no fuerza salto, para no dejar una página en blanco).
+- **Un solo criterio de qué se imprime** (`toPrintableSheets` / `isPrintableRow`): sin salteadas, sin
+  desactivadas, sin filas sin período y sin edificios que quedarían en blanco. Lo usan el PDF **y** la
+  impresión (vía el `data-printable` que pone `SheetCard`), así no pueden diferir. La pantalla sigue
+  mostrando todo: es la vista de control.
+- Las librerías se cargan con **`import()` dinámico**: no pesan en el bundle hasta que se aprieta
+  Descargar. Ese botón es `AsyncButton` (spinner + disabled); Imprimir es un botón normal porque
+  `window.print()` es síncrono.
+
+**Verificación extra fuera de la suite:** los tests cubren el armado de datos (`toPdfTables`,
+`pdfFileName`), no el binario. Para cubrir que la API de las librerías realmente funcione se generó un
+PDF de muestra con la misma secuencia de llamadas del código: **2 páginas, 11 KB, OK** con
+`jspdf@4.2.1` + `jspdf-autotable@5.0.8` (v5 usa el named export `autoTable(doc, opts)`).
+
+**⏳ Pendiente del owner:** smoke visual — descargar el PDF en PC y en celular y compararlo con la
+planilla de FRANKLIN 25; imprimir y confirmar que sale un edificio por hoja, que no aparecen tarjetas
+vacías ni filas salteadas, y que la última página no queda en blanco. Revisar también que los acentos
+de "TÉCNICO O GESTOR" y "PERÍODO" salgan bien (las fuentes estándar de jsPDF usan WinAnsi, que los
+cubre; si algo sale raro, está anotado el fix en el plan).
+
+## 📋 Vista global de obligaciones — Parte 1: vista + administración (2026-08-12)
+
+**Estado: implementado y verificado (typecheck + lint 0 errores + 544 tests + build + build:jobs OK).
+Migración `20260812000000_unique_fixed_expense_target` **YA APLICADA** por el owner
+(`migrate status` → "Database schema is up to date!"). Sin commitear.**
+
+Spec: `docs/superpowers/specs/2026-08-12-vista-global-obligaciones-design.md`
+Plan: `docs/superpowers/plans/2026-08-12-vista-global-obligaciones-parte1.md`
+
+Origen: el administrador paga cada mes desde el home banking un conjunto de gastos que se repiten en
+todos los edificios (luz, agua, gas, seguro, honorarios, limpieza, ascensor, fumigación), **antes** de
+que llegue ninguna boleta, y llevaba esa lista en una planilla Excel a mano — una hoja por consorcio.
+
+Hecho:
+- **Pantalla nueva `/admin/obligaciones`** (botón en el sidebar, rol CLIENT): los gastos fijos de
+  todos los edificios agrupados por banco, cada edificio con la forma exacta de la hoja a imprimir
+  (FACTURAS · PROVEEDORES Y SERVICIOS · MONTO · ALIAS CBU · TÉCNICO O GESTOR · TEL. CONTACTO). Las dos
+  últimas columnas se muestran **vacías**: el modelo no guarda datos de contacto (decisión del owner;
+  agregarlos queda anotado como mejora futura). El MONTO sale de la boleta cuando llegó.
+- **Sincronización automática al abrir**, con `syncObligationsForClient` — **set-based, ~5 queries
+  para toda la cartera**. Es el punto donde esta feature podía repetir el 524 de `close-all`: llamar
+  47 veces a `generateObligationsForPeriod` habría sido el mismo patrón del incidente. Si falla, la
+  vista carga igual con un aviso no bloqueante + Reintentar.
+- **Administración desde la misma pantalla**: alta **múltiple** por edificio (modal con checkboxes que
+  esconde lo ya cargado), desactivar, eliminar (con advertencia de que arrastra el historial de
+  obligaciones — la FK es `Cascade`) y omitir/reactivar la obligación del mes.
+- **Un solo modelo (`SheetData[]`) para pantalla y papel.** `buildSheets` es puro; la Parte 2 (PDF)
+  consume el mismo array, así los datos no pueden desincronizarse entre lo que se ve y lo que se
+  imprime.
+- **Migración `20260812000000_unique_fixed_expense_target`**: `@@unique([consortiumId, providerId])` y
+  `@@unique([consortiumId, lspServiceId])`. No tapa un agujero abierto (el repositorio ya devolvía 409
+  y es el único camino de alta) — mueve la garantía a la base y cierra la carrera concurrente.
+- **Botón "Generar obligaciones" → "Sincronizar gastos fijos"** en la pestaña del consorcio.
+- **`ConfigModal`**: la sección Gastos fijos quedó de solo lectura con link a la vista global; salieron
+  los handlers de `useConsortiumConfig` y la prop `providers` del componente.
+
+**Corrección post-smoke visual (2026-08-12, misma sesión):** el owner detectó que las acciones de fila
+(Omitir/Reactivar, Desactivar/Activar, Eliminar) usaban `<button>` pelado, **sin spinner ni disabled**
+— incumplía la convención del proyecto (`AsyncButton` / `useAsyncAction`, ver 2026-07-09). Además el
+tachado de una fila omitida se aplicaba a la fila entera, incluidas las acciones, dejando ilegibles
+justo los botones que la sacan de ese estado. Arreglado: las cuatro acciones mutantes pasaron a
+`AsyncButton` (el botón que solo abre el confirm de borrado sigue siendo local, sin spinner), y el
+atenuado/tachado se aplica a los `td` de datos revirtiéndolo en la celda de acciones. **+3 tests** de
+feedback de carga (pending + doble click + borrado confirmado) — no existían, por eso el faltante no
+se detectó solo.
+
+**Segunda pasada de UX (misma sesión):** las acciones de fila pasaron de links de texto a **botones
+rectangulares** con borde y alto mínimo (32px en desktop, 40px bajo 640px de ancho): en mobile, tres
+links de texto pegados son imposibles de acertar. Se sumó un bloque `@media (max-width: 640px)` — la
+card scrollea en horizontal (la tabla de 7 columnas no entra en un teléfono) y la toolbar se apila.
+
+**Se eliminó el borrado de gastos fijos (decisión de negocio del owner):** `ExpenseObligation` cuelga
+del gasto fijo con `onDelete: Cascade`, así que borrarlo se llevaba el historial de **todos** los
+períodos, incluidos los cerrados con boleta vinculada — justo lo que hace falta conservar para una
+rendición de cuentas o una auditoría años después. La baja se hace ahora **desactivando**. `SheetCard`
+no recibe más `onDelete`, el hook no expone ningún borrado y hay un test que lo verifica. Ver
+`docs/decisiones.md` (2026-08-12, Decisión 5).
+
+**Los gastos desactivados van al fondo de la lista** de su edificio (`buildSheets`): no son parte de
+lo que hay que pagar, y desactivar es además el camino para un alta cargada por error. Entre los
+activos se mantiene el orden LSP → resto, alfabético.
+
+**Etiquetas y exclusividad de las acciones (pedido del owner):** "Omitir"/"Reactivar" pasaron a
+**"Saltear periodo"/"Agregar al periodo"** — "omitir" no decía nada sobre el alcance. Se aclaró de
+paso que la acción **no traslada nada** al mes siguiente: marca que en *este* período ese gasto no
+va; la obligación del mes que viene se genera igual (lo que sí mueve cosas es "Mover al período
+siguiente" de Boletas entrantes, que es otra feature). Y cada fila ofrece **una sola acción de
+estado**, la que lo revierte: un gasto desactivado sólo muestra "Activar", uno salteado sólo "Agregar
+al periodo". Antes se podía saltear un gasto inactivo o desactivar uno salteado, combinaciones que no
+significan nada.
+
+**Pendientes anotados de esta feature:**
+1. **Bloque "Vencidas de meses anteriores" al pie de cada edificio** — **el más importante**. Origen:
+   el cliente le contó al owner (2026-08-12) que cuando no entran los pagos, una boleta de gasto fijo
+   queda sin pagar y se abona al mes siguiente junto con la corriente (dos boletas del mismo servicio,
+   una vencida y otra al día). **Hoy el sistema no contempla ese arrastre en esta vista:** saltear un
+   período no traslada nada (la obligación del mes siguiente se genera igual, sola) y la deuda de un
+   período viejo vive en `Invoice.remainingBalance`/`isPaid` — se ve en las tarjetas de deuda de la
+   vista general, pero **no en la hoja imprimible**. Propuesta: un bloque al pie de cada edificio con
+   las boletas de ese consorcio con saldo pendiente de períodos anteriores (proveedor, período de
+   origen, monto adeudado). No requiere migración: el dato ya está.
+   **Decisión del owner: va DESPUÉS de la Parte 2.** Costo asumido: el layout de la hoja impresa y su
+   paginación se rehacen para acomodarlo.
+   **Pregunta abierta antes de diseñarlo:** un pago hecho en octubre de una boleta de septiembre,
+   ¿se registra contra la boleta de septiembre (que tiene el saldo) o cuenta como gasto de octubre?
+   De eso depende si el bloque es informativo o si permite registrar el pago ahí mismo.
+   **Descartado:** habilitar "Saltear periodo" en una obligación ya recibida. Convertiría a `SKIPPED`
+   en dos cosas distintas ("no corresponde" y "corresponde pero no lo pagué"), que se rinden distinto
+   ante el consorcio; además el endpoint lo rechaza con 409 para no pisar el vínculo con la boleta.
+2. **Borrar el handler `DELETE`** de `/api/client/consortiums/[id]/fixed-expenses/[fxId]`: sigue
+   existiendo y ya no lo llama nadie (la vista nueva lo sacó y Config también). Es un endpoint que
+   cascadea historial sin consumidores. Decisión del owner: dejarlo como pendiente por ahora.
+3. **Agrupar los desactivados en un acordeón** (mediano plazo): si en un edificio crecen mucho, la
+   lista se ensucia igual aunque estén al fondo. Recién vale la pena cuando el volumen lo pida.
+
+**Nota sobre el conteo de tests:** el baseline se movió de 456 a **492** durante la sesión — la barra
+de progreso de Boletas se commiteó en `2bd67f3` mientras se trabajaba. Con los 48 tests nuevos de esta
+entrega, la suite quedó en **540**.
+
+**⏳ Pendiente del owner:**
+1. **Antes de migrar**, correr en Supabase la verificación de duplicados (esperado: 0 filas):
+   ```sql
+   SELECT "consortiumId", "providerId", "lspServiceId", COUNT(*)
+   FROM "FixedExpense" GROUP BY 1, 2, 3 HAVING COUNT(*) > 1;
+   ```
+2. Aplicar la migración: `npx prisma migrate deploy` → `npx prisma generate`.
+3. Smoke visual: abrir la vista con la cartera completa; agregar dos gastos fijos de una a un edificio
+   y verlos aparecer; omitir uno (fila tachada) y reactivarlo; desactivar otro; abrir el confirm de
+   eliminar y leer la advertencia; buscar por banco, por edificio y por servicio; entrar a un
+   consorcio y verificar que Configuración → Gastos fijos muestra el resumen y el link.
+
+**⏭️ Parte 2 (pendiente, plan propio):** descarga de PDF (jsPDF con `import()` dinámico) + botón
+Imprimir con `@media print`, sobre el `SheetData[]` que esta entrega deja construido. El plan se
+escribe después del ajuste visual en local, para citar el código real.
 
 ## 📊 Barra de progreso en las acciones masivas de Boletas entrantes (2026-08-06)
 

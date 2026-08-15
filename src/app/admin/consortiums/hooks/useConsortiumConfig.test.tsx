@@ -48,13 +48,11 @@ describe("useConsortiumConfig", () => {
     const { result } = renderHook(() => useConsortiumConfig(deps()));
     act(() => {
       result.current.lsp.setForm({ provider: "AYSA", clientNumber: "9" });
-      result.current.fixed.setTarget("provider:p9");
     });
     await act(async () => { result.current.load(consortium); });
     await waitFor(() => expect(result.current.lsp.services).toHaveLength(1));
     expect(result.current.fixed.list).toHaveLength(1);
     expect(result.current.lsp.form).toEqual({ provider: "", clientNumber: "", description: "" });
-    expect(result.current.fixed.target).toBe("");
     expect(result.current.matchNames.value).toBe("ALT 1|ALT 2");
   });
 
@@ -76,22 +74,21 @@ describe("useConsortiumConfig", () => {
     expect(guardedFetch).not.toHaveBeenCalled();
   });
 
-  it("fixed.add con proveedor postea { providerId } y recarga la lista", async () => {
-    guardedFetch.mockImplementation((_url: string, init?: RequestInit) =>
+  // El alta/toggle/borrado de gastos fijos se mudó a /admin/obligaciones: acá
+  // `fixed` quedó de solo lectura y `load()` sólo carga la lista.
+  it("fixed sólo expone la lista cargada por load()", async () => {
+    guardedFetch.mockImplementation((url: string) =>
       Promise.resolve({
         ok: true,
-        json: async () => init?.method === "POST"
-          ? { ok: true }
+        json: async () => url.includes("lsp-services")
+          ? { ok: true, lspServices: [] }
           : { ok: true, fixedExpenses: [{ id: "f1", providerId: "p1", lspServiceId: null, description: null, active: true }] },
       }));
     const { result } = renderHook(() => useConsortiumConfig(deps()));
-    act(() => result.current.fixed.setTarget("provider:p1"));
-    await act(async () => { await result.current.fixed.add(); });
+    await act(async () => { result.current.load(consortium); });
     await waitFor(() => expect(result.current.fixed.list).toHaveLength(1));
-    const post = guardedFetch.mock.calls.find((c) => (c[1] as RequestInit | undefined)?.method === "POST");
-    expect(post?.[0]).toBe("/api/client/consortiums/c1/fixed-expenses");
-    expect(JSON.parse((post?.[1] as RequestInit).body as string)).toEqual({ providerId: "p1" });
-    expect(result.current.fixed.target).toBe("");
+    expect(Object.keys(result.current.fixed)).toEqual(["list"]);
+    expect(guardedFetch.mock.calls.some((c) => (c[1] as RequestInit | undefined)?.method === "POST")).toBe(false);
   });
 
   // ── Sección Banco ──────────────────────────────────────────────────────

@@ -1190,6 +1190,11 @@
   color: #5a6e8e;
   margin-bottom: 10px;
 }
+/* Link dentro de un párrafo de la config (ej. el atajo a /admin/obligaciones). */
+.linkInline {
+  color: #2563eb;
+  text-decoration: underline;
+}
 .lspTableWrap {
   overflow-x: auto;
   margin-bottom: 12px;

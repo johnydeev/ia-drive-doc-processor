@@ -315,6 +315,14 @@ export default function ConsortiumsPage() {
             <span className={styles.navSidebarItemIcon}>🏦</span>
             {!navCollapsed && <span className={styles.navSidebarItemLabel}>Bancos</span>}
           </button>
+          {/* Navega a otra ruta, por eso es <a> y no <button>: la clase es la misma
+              que la de los botones hermanos para que se vea igual. */}
+          {isClient && (
+            <a href="/admin/obligaciones" className={styles.navSidebarItem} onClick={() => setNavMobileOpen(false)}>
+              <span className={styles.navSidebarItemIcon}>📋</span>
+              {!navCollapsed && <span className={styles.navSidebarItemLabel}>Obligaciones</span>}
+            </a>
+          )}
           {isClient && (
             // Desactivado temporalmente (pedido del owner): visible pero inactivo mientras el
             // cliente explora la vista. El onClick queda cableado (nunca dispara por `disabled`);
@@ -836,8 +844,8 @@ export default function ConsortiumsPage() {
                         : "Sin faltantes"}
                     </span>
                     {obligations.length === 0 && (
-                      <AsyncButton type="button" className={styles.addInvoiceBtn} onClick={() => { if (selectedPeriod) void generateObligations(selectedPeriod.id); }} pendingLabel="Generando…">
-                        Generar obligaciones
+                      <AsyncButton type="button" className={styles.addInvoiceBtn} onClick={() => { if (selectedPeriod) void generateObligations(selectedPeriod.id); }} pendingLabel="Sincronizando…">
+                        Sincronizar gastos fijos
                       </AsyncButton>
                     )}
                   </div>
@@ -857,6 +865,9 @@ export default function ConsortiumsPage() {
                             ob.status === "RECEIVED" ? <span className={styles.badgeOk}>Recibida</span>
                             : ob.status === "PENDING" ? <span className={styles.badgeWarning}>Pendiente</span>
                             : ob.status === "NOT_RECEIVED" ? <span className={styles.badgeDuplicate}>No recibida</span>
+                            // Llegó la boleta y no se pagó: se pasó al mes siguiente. La
+                            // obligación queda acá como evidencia del atraso.
+                            : ob.status === "CARRIED_OVER" ? <span className={styles.badgeDuplicate}>Impaga — pasada al mes siguiente</span>
                             : <span className={styles.badgeManual}>Omitida</span>;
                           return (
                             <tr key={ob.id}>
@@ -901,7 +912,6 @@ export default function ConsortiumsPage() {
           openSection={config.openSection}
           onToggleSection={config.toggleSection}
           onClose={config.close}
-          providers={providers}
           banks={banks.banks}
           bank={{
             form: config.bank.form,
@@ -928,15 +938,7 @@ export default function ConsortiumsPage() {
             onAdd: config.lsp.add,
             onDelete: config.lsp.remove,
           }}
-          fixed={{
-            list: config.fixed.list,
-            target: config.fixed.target,
-            error: config.fixed.error,
-            onChangeTarget: config.fixed.setTarget,
-            onAdd: config.fixed.add,
-            onToggle: config.fixed.toggle,
-            onDelete: config.fixed.remove,
-          }}
+          fixed={{ list: config.fixed.list }}
         />
       )}
 

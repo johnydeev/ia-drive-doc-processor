@@ -4,6 +4,251 @@ Registro de decisiones tomadas ante problemas reales encontrados en producción.
 
 ---
 
+## 2026-08-12 — Arrastre de boletas impagas: el mes de origen conserva la evidencia
+
+**Problema:** hay meses en que no entran los pagos de las expensas y una boleta de gasto fijo que
+llegó y correspondía no se puede pagar. Se abona al mes siguiente junto con la corriente. El sistema
+no lo contemplaba: la hoja del mes siguiente no mostraba esa deuda, y "saltear el período" significa
+otra cosa (el gasto *no corresponde* este mes, como una fumigación trimestral).
+
+Regla de negocio del owner: **el gasto se registra en el mes en que se paga**, y el mes de origen
+tiene que poder demostrar que la boleta llegó y quedó impaga — hay intereses de por medio y la
+administración rinde cuentas ante los inquilinos.
+
+### Decisión: se mueve la boleta, pero la obligación de origen NO se vacía
+
+Se reusa `moveOneInvoiceToTarget` (Drive → Sheets → DB, idempotente, con compensación LIFO) inyectando
+un `applyDb` propio por su seam `InvoiceMoveContext.applyDb`. La diferencia con el camino de Boletas
+entrantes es el corazón de la feature:
+
+- `applyDbMove` significa *"esta boleta entró en el mes equivocado"*: vacía la obligación de origen
+  (`invoiceId: null`) y la re-vincula en el destino.
+- `applyCarryOverDbMove` significa *"llegó y no se pagó"*: la obligación de origen **conserva su
+  `invoiceId`** y pasa a `CARRIED_OVER`. Si se vaciara, al cerrar el período pasaría a `NOT_RECEIVED`
+  —"nunca llegó la boleta"— que es una mentira: la boleta llegó, lo que faltó fue plata.
+
+`Invoice` gana `carriedFromPeriodId`, que se escribe **una sola vez**: un arrastre encadenado
+(agosto → septiembre → octubre) sigue diciendo "agosto", que es la verdad que le importa al inquilino.
+
+### Dos bloqueantes encontrados en una revisión, antes de escribir el código
+
+El owner pidió una revisión completa por ser una feature delicada. Aparecieron dos cosas que habrían
+llegado a producción:
+
+1. **El botón no tenía dónde vivir.** El diseño original lo ponía en la fila de la obligación impaga.
+   Pero `classifyTarget` exige que el destino sea el mes siguiente **y esté `ACTIVE`**, y como hay un
+   solo período abierto por consorcio, la obligación impaga queda en un período **cerrado** — que el
+   `overview` no consulta. **Fix:** un bloque **"Impagas de meses anteriores"** al pie de cada
+   edificio, alimentado por boletas con saldo de períodos no activos. El endpoint pasó a recibir el
+   `invoiceId` en vez del id de la obligación.
+2. **Colisión con el unique `ExpenseObligation.invoiceId`.** El vínculo retroactivo
+   (`generateObligationsForPeriod` y `syncObligationsForClient`) buscaba las boletas del período sin
+   filtrar las arrastradas: al sincronizar, intentaba vincular la boleta de agosto a la obligación
+   `PENDING` de septiembre → **P2002 en runtime**. **Fix:** las dos queries filtran
+   `carriedFromPeriodId: null`. Hay un test que reproduce el bug (falla con `expected 1 to be +0`
+   sin el filtro).
+
+### Decisión: el 2° vencimiento va en un campo aparte, cargado a mano
+
+Las boletas de servicios traen dos importes; el pipeline extrae **sólo el 1°**, a propósito
+(`extraction.ts:686`: *"monto del PRIMER vencimiento solamente"*). Cuando una boleta se paga
+arrastrada, el importe real no está en la base.
+
+Se agregó `Invoice.lateAmount`, editable sólo en una boleta arrastrada, en vez de pisar `amount`:
+`amountNorm` —derivado de `amount`— es parte del índice único de deduplicación
+`uq_invoice_business_key`, y el original es lo que decía el papel. Cargarlo recalcula el saldo por la
+**diferencia** (`remainingBalance += next − base`), así un pago parcial previo se respeta; y
+`payment.repository` pasa a usar `lateAmount ?? amount` como base para el saldo y el "pagada".
+
+En pantalla y en el papel se muestran **1° pago** y **2° pago**, sin exponer la resta (decisión del
+owner: menos números, más claro). En Sheets la columna H **no se toca**: conserva lo que decía la
+boleta; el recargo se ve en el saldo pendiente.
+
+### Alternativas descartadas
+
+- **Duplicar el `Invoice`** en los dos meses: obliga a decidir cuál manda para la deuda total y cuál
+  se escribe en Sheets.
+- **Habilitar "Saltear período" en una obligación recibida:** convertiría a `SKIPPED` en dos cosas
+  distintas ("no corresponde" y "corresponde pero no lo pagué"), que se rinden distinto.
+- **Pase automático al cerrar el período:** una boleta puede estar impaga porque está en disputa con
+  el proveedor, no por falta de fondos.
+- **Que la IA extraiga el 2° vencimiento:** además de tocar los 12 prompts y el pipeline, **el owner
+  prefiere la carga manual por una razón de negocio**: el recargo *no siempre aplica* —en servicios
+  suele hacerlo, en otros proveedores no— y quien decide es el administrador, que tiene la boleta
+  delante cuando la va a pagar. Automatizarlo cargaría un importe que muchas veces no corresponde.
+  Queda como pendiente de baja prioridad, no como deuda técnica.
+
+### Impacto
+
+Migración `20260813000000_carry_over_unpaid_invoices` (`CARRIED_OVER` + `carriedFromPeriodId` +
+`lateAmount`). Nuevos: `lib/invoiceCarryOver.ts`, `services/carryOver.service.ts`, los endpoints
+`/api/client/invoices/[id]/{carry-over,late-amount}`, el bloque en `SheetCard` y en el PDF.
+Modificados: las dos queries del vínculo retroactivo, `payment.repository`, el `overview`,
+`sheetModel` (`SheetData.carried`) y el badge de la pestaña Obligaciones del consorcio.
++48 tests (543 → 591).
+
+---
+
+## 2026-08-12 — Hoja imprimible de obligaciones: dos salidas, un solo criterio
+
+**Problema:** la Parte 1 dejó la pantalla de control, pero lo que el administrador realmente necesita
+es el **papel** para sentarse frente al home banking. Y no cualquier volcado de la pantalla: la vista
+muestra a propósito cosas que no van al papel (las salteadas del mes, los gastos desactivados, los
+edificios sin gastos cargados).
+
+### Decisión: `toPrintableSheets` es la única definición de qué se imprime
+
+Una función pura decide qué va al papel — descarta filas `SKIPPED`, gastos `active: false`, filas sin
+período activo y edificios que quedarían en blanco. La consumen **las dos salidas**:
+
+- el **PDF**, vía `toPdfTables`;
+- la **impresión directa**, indirectamente: `SheetCard` marca cada tarjeta con
+  `data-printable={hasPrintableRows(sheet)}` y el `@media print` esconde las que dan `false`, además
+  de las filas con clase `.rowSkipped` / `.rowInactive`.
+
+Así el archivo descargado y lo que sale por la impresora no pueden diferir: si mañana cambia el
+criterio, cambia en un solo lugar. La divergencia con la pantalla es intencional y está declarada ahí.
+
+### Decisión: `jsPDF` + `jspdf-autotable` en el cliente, con `import()` dinámico
+
+Se instalaron `jspdf@4` y `jspdf-autotable@5` (esta última exporta `autoTable(doc, opts)` como named
+export; en 4.x era `doc.autoTable(...)`). Se cargan con `import()` dentro de `downloadSheetsPdf`, así
+los ~350 KB no viajan en el bundle del panel hasta que alguien aprieta Descargar. Por eso ese botón es
+`AsyncButton`; **Imprimir** es un `<button>` normal porque `window.print()` es síncrono.
+
+### Decisión: el PDF se testea por los datos, no por el binario
+
+`toPdfTables` y `pdfFileName` son puros y tienen 9 tests; el documento en sí no se assertá. Un PDF
+binario no se verifica de forma útil en un test unitario y daría falsa cobertura. Para cubrir el hueco
+real —que la API de las librerías funcione— se corrió un **smoke fuera de la suite** que generó un PDF
+de dos páginas con la misma secuencia de llamadas del código (2 páginas, 11 KB). El render final lo
+valida el owner a ojo.
+
+### Alternativas descartadas
+
+- **Generar el PDF en el servidor.** Puppeteer suma cientos de MB a una imagen Docker que ya arrastra
+  `@napi-rs/canvas` y Tesseract; `pdfkit` es liviano pero obliga a dibujar las tablas a mano.
+- **Sólo impresión con CSS, sin descarga.** El owner necesita el archivo en el dispositivo (celular o
+  PC) antes de imprimir; y sin la pantalla como vista previa se imprimían hojas vacías (fue
+  justamente su objeción al diseño original).
+
+### Impacto
+
+Nuevos: `lib/sheetPdf.ts` (+ tests), `isPrintableRow`/`hasPrintableRows`/`toPrintableSheets` en
+`lib/sheetModel.ts`, el bloque `@media print` + `@page` en `page.module.css`, los dos botones en la
+toolbar y el `data-printable` de `SheetCard`. +20 tests (544 → 564). Sin migración, sin backend.
+
+---
+
+## 2026-08-12 — Vista global de obligaciones: sincronización set-based y un solo modelo para pantalla y papel
+
+**Problema:** el administrador arranca cada mes pagando desde el home banking un conjunto de gastos
+que se repiten en todos los edificios (luz, agua, gas, seguro, honorarios, limpieza, ascensor,
+fumigación), **antes** de que llegue ninguna boleta. Esa lista la llevaba en una planilla Excel a
+mano, una hoja por consorcio. El sistema ya modelaba el dominio (`FixedExpense` + `ExpenseObligation`)
+pero tenía tres huecos: no había forma de imprimirlo, administrarlo costaba entrar a 47 pantallas
+(una por consorcio, modal de Configuración), y **la lista de un período podía estar incompleta sin
+que se notara** — las obligaciones se generan al crear el período, así que un gasto fijo agregado a
+mitad de mes no aparecía hasta que alguien apretara el botón "Generar obligaciones" en ese edificio.
+
+El tercer hueco es el que más duele para un papel: una hoja incompleta es peor que no tener hoja,
+porque el administrador no tiene cómo darse cuenta mirándola.
+
+### Decisión 1: la vista sincroniza al abrir, con una función set-based nueva
+
+`/admin/obligaciones` llama a `POST /api/client/obligations/sync` al montar, antes de pedir los
+datos. La sincronización es idempotente (unique `(periodId, fixedExpenseId)`), así que abrir la vista
+diez veces no crea nada de más.
+
+Lo importante es **cómo** está hecha. La función existente `generateObligationsForPeriod` recibe
+**un** período y hace un `create` por gasto fijo dentro de un `for`. Llamarla 47 veces son cientos de
+queries secuenciales: el patrón exacto que produjo el 524 del túnel en `close-all` (ver 2026-07-12).
+Por eso se escribió `syncObligationsForClient(clientId)`, que resuelve **toda la cartera en ~5
+queries**: períodos activos → gastos fijos de esos consorcios → obligaciones existentes →
+`createMany({ skipDuplicates: true })` → vínculo retroactivo. El vínculo retroactivo se acota a los
+períodos donde efectivamente se creó algo, así que en régimen normal no hace ningún `update`.
+
+`generateObligationsForPeriod` se conserva sin cambios para el camino de un período suelto (creación
+de período, cierre general, botón del consorcio).
+
+**Si la sincronización falla, la vista carga igual** y muestra un aviso no bloqueante con botón
+Reintentar: una lista vieja sigue siendo más útil que una pantalla en blanco.
+
+### Decisión 2: un solo modelo de datos para la pantalla y para el PDF
+
+`buildSheets` (puro, sin React) convierte la respuesta del endpoint en `SheetData[]` — una hoja por
+edificio, con sus filas. La pantalla lo pinta y, en la Parte 2, el generador de PDF va a consumir
+**exactamente el mismo array**. Así el riesgo clásico de tener dos representaciones que se
+desincronizan queda acotado al layout: si un edificio deja de aparecer, deja de aparecer en los dos
+lados a la vez.
+
+La pantalla muestra **todo** (incluidas las omitidas y los gastos desactivados, en gris) porque es la
+vista de control; el filtrado para el papel será una función aparte sobre el mismo modelo.
+
+### Decisión 3: la edición se muda a la vista global; Config queda como atajo
+
+La sección "Gastos fijos" del modal de Configuración del consorcio hacía lo mismo pero de a un
+edificio. Quedó reducida a un resumen de solo lectura ("11 gasto(s) fijo(s) activo(s) de 14") con un
+link a `/admin/obligaciones`. Un solo lugar de edición, sin perder el acceso desde el consorcio. Al
+sacarle el alta, la prop `providers` de `ConfigModal` quedó sin consumidores y se eliminó.
+
+### Decisión 4: índices únicos en la base para el objetivo del gasto fijo
+
+`FixedExpense` gana `@@unique([consortiumId, providerId])` y `@@unique([consortiumId, lspServiceId])`
+(migración `20260812000000_unique_fixed_expense_target`). Postgres trata los `NULL` como distintos
+entre sí, así que un gasto LSP no colisiona con otro LSP del mismo consorcio y no hace falta un índice
+parcial.
+
+Esto **no tapa un agujero abierto**: `FixedExpenseRepository.create` ya rechazaba el duplicado con
+409, y es el único camino que crea gastos fijos (ni el archivo ALTA ni el import Excel los tocan). Lo
+que agrega es la garantía en la base en vez de en el código, cerrando la carrera de dos requests
+concurrentes.
+
+### Decisión 5: no hay borrado de gastos fijos en la UI (2026-08-12, tras el smoke visual)
+
+La primera versión de la vista tenía un botón **Eliminar** con confirmación. El owner lo objetó por
+lógica de negocio: `ExpenseObligation.fixedExpense` es `onDelete: Cascade`, así que borrar un gasto
+fijo se lleva puestas **todas** sus obligaciones, de todos los períodos, incluidos los cerrados con
+boleta vinculada. Un consorcio tiene que poder demostrar años después qué se le exigió pagar y qué
+pagó — ante una rendición de cuentas o una auditoría, ese historial es la evidencia.
+
+**El botón se eliminó de la UI.** La baja de un gasto fijo se hace **desactivándolo**: deja de generar
+obligaciones nuevas, el registro y su historial quedan intactos, y se puede reactivar. `SheetCard` ya
+no recibe `onDelete` y el hook no expone ningún borrado (hay un test que lo verifica, para que no
+vuelva por descuido).
+
+Se evaluó el borrado lógico con un campo `archivedAt` (ocultar de la vista conservando todo) y se
+descartó por ahora: agrega una migración y un tercer estado para un caso que Desactivar ya cubre. Si
+más adelante molesta ver los desactivados en la lista, ese es el camino.
+
+**Queda un cabo suelto anotado:** el handler `DELETE` de
+`/api/client/consortiums/[id]/fixed-expenses/[fxId]` sigue existiendo y ya **no lo llama nadie**
+(la UI de Config también perdió su acceso). Es un endpoint que cascadea historial sin consumidores.
+
+### Alternativas descartadas
+
+- **Basar la hoja en `FixedExpense` sin sincronizar.** La lista saldría siempre completa, pero se
+  perdería el estado del mes (qué llegó, qué se omitió) y el monto de la boleta.
+- **Reutilizar `groupByBank`** de `consortiums/lib`. Existe para la grilla de bancos con su búsqueda
+  por card y devuelve `Consortium[]`, un tipo que esta vista no maneja. El agrupamiento acá es un
+  `reduce` sobre hojas ya ordenadas. Sí se conserva el criterio de orden (banco alfabético, "Sin
+  banco" al final).
+- **Montos esperados o presupuestados** cargados a mano en el gasto fijo. No es como trabaja el
+  administrador: la celda MONTO va vacía hasta que la boleta llega y él la completa a mano.
+- **Una tilde de "llegó"** al lado del monto. Redundante: el pipeline no persiste boletas sin importe
+  (las etiqueta `SIN MONTO` y las manda a Revisión), así que *obligación con boleta ⟺ tiene monto*.
+
+### Impacto
+
+Archivos nuevos: `admin/obligaciones/{page.tsx, page.module.css}`, `lib/{sheetModel, availableTargets}`,
+`hooks/useObligationsOverview`, `components/{SheetCard, AddFixedExpenseModal}`, y los endpoints
+`/api/client/obligations/{overview, sync}`. Modificados: `obligation.service.ts` (+`syncObligationsForClient`),
+el POST de `fixed-expenses` (acepta `items[]`), `ConfigModal` + `useConsortiumConfig` (recorte),
+`consortiums/page.tsx` (sidebar + rename del botón a "Sincronizar gastos fijos"). +45 tests (492 → 537).
+Requiere migración.
+
+---
+
 ## 2026-08-06 — Acciones masivas de boletas: tandas de 5 en el frontend en vez de cola en background
 
 **Problema:** las dos acciones masivas de `/admin/boletas` estaban topeadas en **10 boletas por

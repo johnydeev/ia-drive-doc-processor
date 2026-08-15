@@ -60,6 +60,8 @@ src/
 │   │       │   ├── bulk-delete/       # POST borrado masivo (tope 10 por request)
 │   │       │   └── bulk-move-period/  # POST mover al período siguiente (+ preview, tope 10 por request)
 │   │       ├── obligations/   # PATCH [id]: omitir/reactivar obligación de gasto fijo
+│   │       │   ├── overview/  # GET: todo lo que necesita la vista global (4 queries)
+│   │       │   └── sync/      # POST: sincroniza obligaciones de TODOS los períodos activos (set-based)
 │   │       ├── periods/
 │   │       │   ├── [id]/obligations/  # GET + POST generar obligaciones del período
 │   │       │   └── close-all/ # preview (GET) + execute (POST) cierre general
@@ -70,6 +72,8 @@ src/
 │   └── admin/
 │       ├── consortiums/       # UI principal de gestión
 │       ├── boletas/           # UI vista global "Boletas entrantes" (borrado/move masivo)
+│       ├── obligaciones/      # UI vista global de gastos fijos por edificio
+│       │                      # + Descargar PDF (jsPDF, import dinámico) e Imprimir (@media print)
 │       ├── clients/
 │       │   └── [id]/          # UI edición de configuración de cliente
 │       └── page.tsx           # Panel admin principal
@@ -116,6 +120,8 @@ Client          → Tenant. Roles: ADMIN / CLIENT / VIEWER. consortiumsEnabled (
   │                   driveFileId/Url (comprobante) + paymentMethod
   ├── Receipt     → Recibo de pago (modelo separado, relacionado 1:1 con Invoice)
   ├── FixedExpense → Gasto fijo mensual por consorcio. Apunta a Provider? o LspService? + active
+  │                 Unique (consortiumId, providerId) y (consortiumId, lspServiceId) — los NULL de
+  │                 Postgres son distintos entre sí, así que un LSP no choca con otro LSP
   │   └── ExpenseObligation → Instancia por período. status: PENDING/RECEIVED/SKIPPED/NOT_RECEIVED
   │                           + invoiceId? (se vincula solo cuando llega la boleta). Unique (periodId, fixedExpenseId)
   ├── ConsortiumProvider → Relación N:M consorcio↔proveedor. Unique (consortiumId, providerId)

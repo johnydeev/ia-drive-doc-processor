@@ -1,0 +1,189 @@
+/* Vista global de obligaciones. En la Parte 2 se suma el bloque @media print. */
+
+.page { padding: 24px; max-width: 1200px; margin: 0 auto; }
+
+.toolbar {
+  display: flex; gap: 16px; align-items: center; flex-wrap: wrap;
+  position: sticky; top: 0; z-index: 10;
+  background: var(--background); padding: 12px 0; margin-bottom: 16px;
+  border-bottom: 1px solid rgba(127, 127, 127, 0.2);
+}
+.pageTitle { font-size: 20px; margin: 0; }
+.pageSubtitle { margin: 2px 0 0; opacity: 0.7; font-size: 13px; text-transform: capitalize; }
+.toolbarRight { margin-left: auto; display: flex; align-items: center; gap: 12px; }
+.counters { font-size: 13px; opacity: 0.75; }
+
+.searchInput {
+  flex: 1; min-width: 220px; padding: 8px 12px; border-radius: 8px;
+  border: 1px solid rgba(127, 127, 127, 0.35); background: transparent; color: inherit;
+}
+
+.bankGroup { margin-bottom: 28px; }
+.bankTitle { font-size: 14px; text-transform: uppercase; letter-spacing: 0.08em; opacity: 0.7; margin: 0 0 10px; }
+
+.sheetCard {
+  border: 1px solid rgba(127, 127, 127, 0.25);
+  border-radius: 10px; padding: 16px; margin-bottom: 16px;
+  border-left-width: 4px;
+}
+/* El color del banco tiñe sólo el borde izquierdo. Todo selector lleva la clase
+   local: CSS Modules corre en modo `pure` y un [data-*] suelto rompe el build. */
+.sheetCard[data-bank-color="red"] { border-left-color: #dc2626; }
+.sheetCard[data-bank-color="blue"] { border-left-color: #2563eb; }
+.sheetCard[data-bank-color="green"] { border-left-color: #16a34a; }
+.sheetCard[data-bank-color="amber"] { border-left-color: #d97706; }
+.sheetCard[data-bank-color="violet"] { border-left-color: #7c3aed; }
+.sheetCard[data-bank-color="slate"] { border-left-color: #64748b; }
+
+.sheetHeader { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 12px; }
+.sheetBank { font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; opacity: 0.6; }
+.sheetTitle { font-size: 17px; margin: 2px 0 0; }
+.sheetHeaderRight { display: flex; align-items: center; gap: 10px; }
+.sheetPeriod { font-size: 13px; opacity: 0.75; text-transform: capitalize; }
+
+.addBtn {
+  width: 30px; height: 30px; border-radius: 8px; font-size: 18px; line-height: 1;
+  border: 1px solid rgba(127, 127, 127, 0.4); background: transparent; color: inherit; cursor: pointer;
+}
+.addBtn:hover { background: rgba(127, 127, 127, 0.12); }
+
+.sheetTable { width: 100%; border-collapse: collapse; font-size: 13px; }
+.sheetTable th {
+  text-align: left; font-size: 11px; letter-spacing: 0.04em;
+  padding: 6px 8px; border-bottom: 1px solid rgba(127, 127, 127, 0.3); white-space: nowrap;
+}
+.sheetTable td { padding: 6px 8px; border-bottom: 1px solid rgba(127, 127, 127, 0.12); }
+.actionsHeader { width: 1%; }
+.rowActions { display: flex; gap: 8px; justify-content: flex-end; white-space: nowrap; }
+
+/* El atenuado y el tachado son de los DATOS, no de las acciones: los botones de
+   una fila omitida o desactivada tienen que seguir legibles y clickeables (son
+   justamente los que la sacan de ese estado). Por eso se aplica a `td` y se
+   revierte en la celda de acciones. */
+.rowSkipped td { opacity: 0.55; text-decoration: line-through; }
+.rowSkipped td.rowActions { opacity: 1; text-decoration: none; }
+.rowInactive td { opacity: 0.5; font-style: italic; }
+.rowInactive td.rowActions { opacity: 1; font-style: normal; }
+
+/* Acciones de fila: botones rectangulares con área de toque propia. En mobile un
+   link de texto al lado de otro es imposible de acertar — el borde delimita
+   dónde termina cada acción. Alto mínimo 32px en desktop, 40px en pantallas
+   chicas (recomendación de tamaño de target táctil). */
+.actionBtn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  min-height: 32px; padding: 0 12px; border-radius: 6px;
+  font-size: 12px; line-height: 1; white-space: nowrap; cursor: pointer;
+  background: transparent; border: 1px solid rgba(127, 127, 127, 0.4); color: inherit;
+}
+.actionBtn:hover:not(:disabled) { background: rgba(37, 99, 235, 0.1); border-color: #2563eb; }
+.actionBtn:disabled { opacity: 0.6; cursor: default; }
+
+/* Bloque de impagas de meses anteriores, al pie de la hoja del edificio. */
+.carriedBlock { margin-top: 18px; border-top: 1px dashed rgba(127, 127, 127, 0.45); padding-top: 10px; }
+.carriedTitle {
+  font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em;
+  opacity: 0.75; margin: 0 0 6px;
+}
+.rowCarried td { background: rgba(217, 119, 6, 0.06); }
+.carriedBadge {
+  display: inline-block; margin-left: 6px; padding: 1px 6px; border-radius: 999px;
+  font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em;
+  border: 1px solid rgba(217, 119, 6, 0.5); color: #b45309; white-space: nowrap;
+}
+.carriedAmounts { display: block; font-size: 11px; opacity: 0.7; margin-top: 2px; }
+.lateInput {
+  width: 120px; padding: 4px 8px; border-radius: 6px; font-size: 12px;
+  border: 1px solid rgba(127, 127, 127, 0.4); background: transparent; color: inherit;
+}
+
+.linkBtn { background: none; border: none; padding: 0; color: #2563eb; cursor: pointer; font-size: 12px; }
+.ghostBtn {
+  padding: 6px 12px; border-radius: 8px; border: 1px solid rgba(127, 127, 127, 0.4);
+  background: transparent; color: inherit; cursor: pointer; font-size: 13px; text-decoration: none;
+}
+.primaryBtn {
+  padding: 6px 14px; border-radius: 8px; border: 1px solid #2563eb;
+  background: #2563eb; color: #fff; cursor: pointer; font-size: 13px;
+}
+.primaryBtn:disabled { opacity: 0.5; cursor: default; }
+
+.emptyNote { font-size: 13px; opacity: 0.65; margin: 8px 0; }
+.loading { font-size: 14px; opacity: 0.75; }
+.warning { padding: 10px 12px; border-radius: 8px; border: 1px solid rgba(217, 119, 6, 0.5); margin-bottom: 12px; font-size: 13px; }
+.error { padding: 10px 12px; border-radius: 8px; border: 1px solid rgba(185, 28, 28, 0.5); margin-bottom: 12px; font-size: 13px; }
+
+.modalOverlay {
+  position: fixed; inset: 0; z-index: 1000; background: rgba(0, 0, 0, 0.5);
+  display: flex; align-items: center; justify-content: center;
+}
+.modalCard {
+  background: var(--background); color: inherit; border-radius: 12px; padding: 20px;
+  width: 90%; max-width: 520px; max-height: 80vh; display: flex; flex-direction: column; gap: 10px;
+}
+.modalTitle { margin: 0; font-size: 17px; }
+.modalSubtitle { margin: 0; font-size: 13px; opacity: 0.7; }
+.modalActions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 8px; }
+
+.targetList { overflow-y: auto; flex: 1; }
+.targetGroupTitle { font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; opacity: 0.6; margin: 10px 0 4px; }
+.targetGroup { list-style: none; margin: 0; padding: 0; }
+.targetItem { padding: 3px 0; }
+.targetLabel { display: flex; gap: 8px; align-items: center; cursor: pointer; font-size: 13px; }
+
+/* ── Impresión ───────────────────────────────────────────────────────────
+   Lo que sale por la impresora es la misma vista sin el cromo de la app: sin
+   barra, sin buscador y sin las acciones de fila. El criterio de qué filas se
+   imprimen es el mismo que usa el PDF (`isPrintableRow`), aplicado acá por
+   clase; las tarjetas que quedarían vacías las marca el componente con
+   `data-printable="false"`. */
+@media print {
+  .page { padding: 0; max-width: none; }
+  .toolbar,
+  .warning,
+  .error,
+  .bankTitle,
+  .addBtn,
+  .rowActions,
+  .actionsHeader { display: none !important; }
+
+  /* Una hoja por edificio. La última no fuerza salto, para no dejar una página
+     en blanco al final. */
+  .sheetCard {
+    break-after: page;
+    border: none;
+    padding: 0 0 8mm;
+    margin: 0;
+    overflow: visible;
+  }
+  .sheetCard:last-of-type { break-after: auto; }
+  .sheetCard[data-printable="false"] { display: none; }
+
+  /* Salteadas y desactivadas no son parte de lo que hay que pagar. */
+  .sheetTable .rowSkipped,
+  .sheetTable .rowInactive { display: none; }
+  .sheetTable { min-width: 0; font-size: 10pt; }
+  .sheetTable td,
+  .sheetTable th { border-bottom: 1px solid #999; }
+  .sheetTitle { font-size: 16pt; }
+  .sheetBank,
+  .sheetPeriod { color: #444; }
+}
+
+@page {
+  size: A4 portrait;
+  margin: 12mm;
+}
+
+/* ── Mobile ──────────────────────────────────────────────────────────────
+   La tabla de 7 columnas no entra en un teléfono: la card scrollea en
+   horizontal y las acciones crecen a 40px de alto para ser clickeables. */
+@media (max-width: 640px) {
+  .page { padding: 12px; }
+  .toolbar { gap: 10px; }
+  .toolbarRight { margin-left: 0; width: 100%; justify-content: space-between; }
+  .sheetCard { overflow-x: auto; }
+  .sheetTable { min-width: 640px; }
+  .actionBtn { min-height: 40px; padding: 0 14px; font-size: 13px; }
+  .rowActions { gap: 6px; }
+  .modalCard { width: 94%; padding: 16px; }
+}

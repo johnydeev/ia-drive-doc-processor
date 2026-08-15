@@ -1,7 +1,7 @@
 import styles from "../page.module.css";
 import { AsyncButton } from "@/components/AsyncButton";
 import { LSP_PROVIDERS } from "../lib/constants";
-import type { Bank, BankAccountForm, ConfigSection, FixedExpenseRow, LspForm, LspService, Provider } from "../lib/types";
+import type { Bank, BankAccountForm, ConfigSection, FixedExpenseRow, LspForm, LspService } from "../lib/types";
 
 type Props = {
   consortiumName: string;
@@ -9,7 +9,6 @@ type Props = {
   openSection: ConfigSection | null;
   onToggleSection: (section: ConfigSection) => void;
   onClose: () => void;
-  providers: Provider[];
   banks: Bank[];
   bank: {
     form: BankAccountForm;
@@ -36,19 +35,14 @@ type Props = {
     onAdd: () => void;
     onDelete: (id: string) => void;
   };
+  /** Solo lectura: los gastos fijos se administran en /admin/obligaciones. */
   fixed: {
     list: FixedExpenseRow[];
-    target: string;
-    error: string | null;
-    onChangeTarget: (value: string) => void;
-    onAdd: () => void;
-    onToggle: (fx: FixedExpenseRow) => void;
-    onDelete: (id: string) => void;
   };
 };
 
 export function ConfigModal({
-  consortiumName, saving, openSection, onToggleSection, onClose, providers, banks, bank, matchNames, lsp, fixed,
+  consortiumName, saving, openSection, onToggleSection, onClose, banks, bank, matchNames, lsp, fixed,
 }: Props) {
   return (
     <div className={styles.modalOverlay} onClick={() => !saving && onClose()}>
@@ -239,59 +233,16 @@ export function ConfigModal({
           </button>
           {openSection === "fixed" && (
             <div className={styles.lspContent}>
-              {fixed.list.length > 0 ? (
-                <div className={styles.lspTableWrap}>
-                  <table className={styles.lspTable}>
-                    <thead>
-                      <tr><th>Gasto fijo</th><th>Estado</th><th>Acciones</th></tr>
-                    </thead>
-                    <tbody>
-                      {fixed.list.map((fx) => {
-                        const lspService = lsp.services.find((l) => l.id === fx.lspServiceId);
-                        const prov = providers.find((p) => p.id === fx.providerId);
-                        const label = lspService
-                          ? `${LSP_PROVIDERS.find((p) => p.value === lspService.providerName)?.label ?? lspService.providerName} (${lspService.clientNumber})`
-                          : prov?.canonicalName ?? fx.description ?? "—";
-                        return (
-                          <tr key={fx.id}>
-                            <td>{label}</td>
-                            <td>{fx.active ? "Activo" : "Inactivo"}</td>
-                            <td>
-                              <AsyncButton type="button" className={styles.ghostBtn} style={{ padding: "4px 10px", fontSize: 12 }} onClick={() => fixed.onToggle(fx)}>
-                                {fx.active ? "Desactivar" : "Activar"}
-                              </AsyncButton>{" "}
-                              <AsyncButton type="button" className={styles.lspDeleteBtn} onClick={() => fixed.onDelete(fx.id)} pendingLabel="…">Quitar</AsyncButton>
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-              ) : (
-                <p className={styles.lspEmpty}>No hay gastos fijos cargados para este consorcio.</p>
-              )}
-              <div className={styles.lspAddForm}>
-                <select className={styles.formSelect} value={fixed.target} onChange={(e) => fixed.onChangeTarget(e.target.value)}>
-                  <option value="">Elegir proveedor o servicio...</option>
-                  {providers.length > 0 && (
-                    <optgroup label="Proveedores">
-                      {providers.map((p) => <option key={`p-${p.id}`} value={`provider:${p.id}`}>{p.canonicalName}</option>)}
-                    </optgroup>
-                  )}
-                  {lsp.services.length > 0 && (
-                    <optgroup label="Servicios (LSP)">
-                      {lsp.services.map((l) => (
-                        <option key={`l-${l.id}`} value={`lsp:${l.id}`}>
-                          {LSP_PROVIDERS.find((p) => p.value === l.providerName)?.label ?? l.providerName} ({l.clientNumber})
-                        </option>
-                      ))}
-                    </optgroup>
-                  )}
-                </select>
-                <AsyncButton type="button" className={styles.addInvoiceBtn} onClick={fixed.onAdd} disabled={!fixed.target} pendingLabel="Agregando…">Agregar</AsyncButton>
-              </div>
-              {fixed.error && <p className={styles.errorMsg}>{fixed.error}</p>}
+              <p className={styles.lspEmpty}>
+                {fixed.list.length === 0
+                  ? "No hay gastos fijos cargados para este consorcio."
+                  : `${fixed.list.filter((fx) => fx.active).length} gasto(s) fijo(s) activo(s) de ${fixed.list.length}.`}
+              </p>
+              <p className={styles.lspEmpty}>
+                Los gastos fijos se administran desde la vista de{" "}
+                <a href="/admin/obligaciones" className={styles.linkInline}>Obligaciones</a>, donde se
+                ven todos los edificios juntos.
+              </p>
             </div>
           )}
         </div>

@@ -69,7 +69,11 @@ export type FixedExpenseRow = {
 };
 export type ObligationRow = {
   id: string;
-  status: "PENDING" | "RECEIVED" | "SKIPPED" | "NOT_RECEIVED";
+  /** `CARRIED_OVER`: llegó la boleta, no se pagó y se arrastró al mes siguiente.
+   *  La obligación conserva su `invoiceId` para que el período mantenga la
+   *  evidencia del atraso. Ojo: esta unión es manual — TypeScript no avisa si
+   *  el enum de Prisma gana un valor y acá falta. */
+  status: "PENDING" | "RECEIVED" | "SKIPPED" | "NOT_RECEIVED" | "CARRIED_OVER";
   fixedExpense: {
     description: string | null;
     provider: { canonicalName: string } | null;
