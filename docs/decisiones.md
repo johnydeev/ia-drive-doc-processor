@@ -4,6 +4,78 @@ Registro de decisiones tomadas ante problemas reales encontrados en producción.
 
 ---
 
+## 2026-08-17 — `_Proveedores`: terminología del administrador, alias múltiples y oficio
+
+Tres cambios sobre la misma hoja del ALTA, pedidos por el owner.
+
+### La terminología cambia en la hoja, NO en la base
+
+Los encabezados pasan a `RAZÓN SOCIAL · CUIT · NOMBRE FANTASÍA · ALIAS DE PAGO · TIPO · OFICIO`.
+"Nombre canónico" era jerga interna: lo que el owner carga en la columna A es la razón social exacta
+del padrón, y en la C el nombre con el que la empresa aparece en sus boletas — que cuando coincide
+con la razón social se deja vacío.
+
+**Los campos de la base no se renombran.** Cambiar `canonicalName` o `matchNames` sería un refactor
+transversal (pipeline, matching, repositorios, importación Excel) sin ningún beneficio funcional: el
+sync lee por posición, no por nombre de columna.
+
+**Sólo `_Proveedores`.** En `_Consorcios` no aplica: la columna A es un nombre normalizado
+(`FRIAS 324`, no `Consorcio de Propietarios Frías 324`) y la C mezcla nombres alternativos con
+**CUITs alternativos** (`assignmentMatching.ts:96`), que no son un nombre de fantasía.
+
+**Los encabezados se corrigen solos** cuando difieren (`headersNeedUpdate`). Antes sólo se escribían
+al crear la hoja, así que un ALTA existente se quedaba con la terminología vieja para siempre.
+
+### Varios alias de pago, en el mismo campo
+
+`Provider.paymentAlias` sigue siendo texto y guarda hasta **3** valores separados por `|` — la misma
+convención que `matchNames` y que la propia hoja. Sin migración y sin conversión de lo ya cargado.
+
+**Descartado:** una columna `String[]` de Postgres (más prolija, pero migración y conversión) y una
+tabla `ProviderAlias` (flexible, pero modelo nuevo y ABM propio para algo que son tres strings).
+
+Cada valor puede ser un **alias o un CBU**, sin validar el formato: un CBU se reconoce a simple vista
+por sus 22 dígitos. Por eso la columna de la planilla imprimible pasó de `ALIAS CBU` a **`ALIAS - CBU`**
+— el rótulo viejo hacía pensar en la cuenta del edificio (`Consortium.bankAlias` / `Consortium.cbu`),
+cuando lo que muestra es el destino del pago.
+
+En el papel se muestran **todos**, uno debajo del otro. Apilarlos en vertical evita rebalancear los
+anchos: las seis columnas siguen sumando los 182mm útiles del A4. Costo asumido: una fila con tres
+alias es más alta.
+
+### El oficio es un catálogo propio, no el `Rubro`
+
+El **rubro** divide las secciones de una liquidación de expensas y **agrupa** varios oficios; el
+**oficio** identifica al proveedor uno por uno. Un rubro "Mantenimiento" contiene proveedores de
+oficio Pintor, Albañil y Electricista. Son dos niveles distintos y conviven, así que `Oficio` es un
+modelo nuevo con la forma de `Rubro` (nombre único por cliente) y `Provider.oficioId` con
+`onDelete: SetNull`.
+
+**Descartado:** texto libre (nada impide escribir PINTOR en una fila y PINTURA en otra) y una lista
+cerrada en el código (agregar un oficio exigiría deploy).
+
+Los oficios se sincronizan **antes** que los proveedores: la columna F trae un nombre que hay que
+resolver a un id, y puede referirse a uno recién creado. Si el oficio no está en el catálogo, el
+proveedor **se carga igual sin oficio** y el reporte lo avisa — mismo criterio que el resto del sync:
+un dato de catalogación no puede impedir que se cargue un registro.
+
+### Se elimina el matching por alias al escanear
+
+`match.ts` intentaba reconocer al proveedor de una boleta escaneada comparando el texto extraído
+contra `canonicalName` **o** `paymentAlias`. Un alias es corto y coincide con demasiadas cosas: si
+existe un proveedor cuya razón social es "TIGRE" y otro con alias "TIGRE", ganaba el del alias. Queda
+sólo CUIT y razón social exacta, el mismo criterio que el pipeline desde 2026-07-02.
+
+El pipeline no se tocó: nunca usó `paymentAlias` para matchear, sólo lo transporta para escribirlo en
+Sheets.
+
+### Impacto
+
+`aliasCbu` de la planilla pasó de `string | null` a `string[]`, lo que tocó el modelo, el PDF, la
+tabla y sus fixtures. **+17 tests** (636 → 653). Requiere migración (`Oficio` + `Provider.oficioId`).
+
+---
+
 ## 2026-08-17 — `SERVICIO` en `ProviderType`: el catálogo distingue a las empresas de servicios
 
 **Problema:** `ProviderType` tenía dos valores, `PROVEEDOR` y `EMPLEADO`. No había forma de decir que

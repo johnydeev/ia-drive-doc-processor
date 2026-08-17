@@ -14,13 +14,13 @@ const sheet: SheetData = {
   periodLabel: "julio 2026",
   rows: [
     { fixedExpenseId: "fx1", obligationId: "ob1", providerId: null, lspServiceId: "l1",
-      facturas: "4804882", concepto: "EDESUR", monto: 118000, aliasCbu: "edesur.pago",
+      facturas: "4804882", concepto: "EDESUR", monto: 118000, aliasCbu: ["edesur.pago"],
       status: "RECEIVED", active: true },
     { fixedExpenseId: "fx2", obligationId: "ob2", providerId: "p1", lspServiceId: null,
-      facturas: null, concepto: "SEGURO LA CAJA", monto: null, aliasCbu: null,
+      facturas: null, concepto: "SEGURO LA CAJA", monto: null, aliasCbu: [],
       status: "PENDING", active: true },
     { fixedExpenseId: "fx3", obligationId: "ob3", providerId: "p2", lspServiceId: null,
-      facturas: null, concepto: "N.G. FUMIGACION", monto: null, aliasCbu: null,
+      facturas: null, concepto: "N.G. FUMIGACION", monto: null, aliasCbu: [],
       status: "SKIPPED", active: true },
   ],
   carried: [],
@@ -50,7 +50,7 @@ describe("SheetCard", () => {
 
   it("dibuja las seis columnas de la planilla", () => {
     renderCard();
-    for (const header of ["FACTURAS", "PROVEEDORES Y SERVICIOS", "MONTO", "ALIAS CBU", "TÉCNICO O GESTOR", "TEL. CONTACTO"]) {
+    for (const header of ["FACTURAS", "PROVEEDORES Y SERVICIOS", "MONTO", "ALIAS - CBU", "TÉCNICO O GESTOR", "TEL. CONTACTO"]) {
       expect(screen.getByRole("columnheader", { name: header })).toBeInTheDocument();
     }
   });
@@ -192,7 +192,7 @@ describe("SheetCard", () => {
       ...nadaQueImprimir,
       carried: [
         { invoiceId: "inv-ago", facturas: null, concepto: "EDESUR S.A.", monto: 980000,
-          originalAmount: 980000, lateAmount: null, aliasCbu: null,
+          originalAmount: 980000, lateAmount: null, aliasCbu: [],
           fromLabel: "agosto 2026", alreadyCarried: false, canCarry: true },
       ],
     };
@@ -217,7 +217,7 @@ describe("SheetCard", () => {
         ...sheet,
         carried: [
           { invoiceId: "inv-ago", facturas: "4804882", concepto: "EDESUR S.A.", monto: 980000,
-            originalAmount: 980000, lateAmount: null, aliasCbu: "edesur.pago",
+            originalAmount: 980000, lateAmount: null, aliasCbu: ["edesur.pago"],
             fromLabel: "agosto 2026", alreadyCarried: false, canCarry: true },
         ],
       },
@@ -236,7 +236,7 @@ describe("SheetCard", () => {
         ...sheet,
         carried: [
           { invoiceId: "inv-jun", facturas: null, concepto: "AYSA", monto: 5000,
-            originalAmount: 5000, lateAmount: null, aliasCbu: null,
+            originalAmount: 5000, lateAmount: null, aliasCbu: [],
             fromLabel: "junio 2026", alreadyCarried: false, canCarry: false },
         ],
       },
@@ -250,7 +250,7 @@ describe("SheetCard", () => {
         ...sheet,
         carried: [
           { invoiceId: "inv-ago", facturas: null, concepto: "EDESUR S.A.", monto: 980000,
-            originalAmount: 980000, lateAmount: null, aliasCbu: null,
+            originalAmount: 980000, lateAmount: null, aliasCbu: [],
             fromLabel: "agosto 2026", alreadyCarried: true, canCarry: false },
         ],
       },
@@ -271,7 +271,7 @@ describe("SheetCard", () => {
         ...sheet,
         carried: [
           { invoiceId: "inv-ago", facturas: null, concepto: "EDESUR S.A.", monto: 1050000,
-            originalAmount: 980000, lateAmount: 1050000, aliasCbu: null,
+            originalAmount: 980000, lateAmount: 1050000, aliasCbu: [],
             fromLabel: "agosto 2026", alreadyCarried: true, canCarry: false },
         ],
       },

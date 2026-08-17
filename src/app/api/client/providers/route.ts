@@ -19,6 +19,7 @@ export async function GET(request: Request) {
     const providers = await prisma.provider.findMany({
       where: { clientId: auth.session.clientId },
       orderBy: { canonicalName: "asc" },
+      include: { oficio: { select: { name: true } } },
     });
     return NextResponse.json({ ok: true, providers });
   } catch (error) {

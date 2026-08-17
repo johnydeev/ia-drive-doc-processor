@@ -38,7 +38,10 @@ export function matchProvider(providers: Provider[], extracted: ScannedData): Pr
   if (extracted.provider) {
     const norm = normName(extracted.provider);
     if (norm.length >= 3) {
-      const hit = providers.find((p) => normName(p.canonicalName) === norm || (p.paymentAlias && normName(p.paymentAlias) === norm));
+      // Sólo razón social exacta: matchear por alias de pago asignaba la boleta
+      // al proveedor equivocado (un alias corto coincide con demasiadas cosas).
+      // Mismo criterio que el pipeline, que matchea proveedores sólo por CUIT.
+      const hit = providers.find((p) => normName(p.canonicalName) === norm);
       if (hit) return hit;
     }
   }

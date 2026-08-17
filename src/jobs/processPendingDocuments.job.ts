@@ -7,6 +7,7 @@ import { identifyLSPProvider, LSPProvider, LSP_FALLBACK_NAMES, annotateSindicalP
 import { refineExtractionWithRawText } from "@/lib/extraction";
 import { createEmptyTokenUsageSummary } from "@/lib/createEmptyTokenUsageSummary";
 import { pipelineLog } from "@/lib/logger";
+import { formatAliasesInline } from "@/lib/paymentAliases";
 import { safeDebugLog } from "@/lib/debugSanitize";
 import { accumulateTokenUsage } from "@/types/aiUsage.types";
 import { ExtractedDocumentData } from "@/types/extractedDocument.types";
@@ -1033,7 +1034,8 @@ async function canonizeStep(ctx: PipelineContext): Promise<StepResult> {
     // texto para distinguir las 2 boletas FATERYH del consorcio en Sheets, el nombre
     // del archivo en Drive y la DB.
     extracted.provider = annotateSindicalProvider(extracted.provider, ctx.lspProvider);
-    extracted.alias = assignment.providerPaymentAlias || null;
+    // Un proveedor puede tener hasta 3 alias/CBU; en la celda van todos juntos.
+    extracted.alias = formatAliasesInline(assignment.providerPaymentAlias) || null;
     if (assignment.canonicalProviderTaxId) extracted.providerTaxId = assignment.canonicalProviderTaxId;
     extracted.period = assignment.periodLabel || null;
     extracted.bank = assignment.consortiumBank;

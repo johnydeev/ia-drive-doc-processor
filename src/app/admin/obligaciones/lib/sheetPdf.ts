@@ -8,7 +8,7 @@ export const PDF_COLUMNS = [
   "FACTURAS",
   "PROVEEDORES Y SERVICIOS",
   "MONTO",
-  "ALIAS CBU",
+  "ALIAS - CBU",
   "TÉCNICO O GESTOR",
   "TEL. CONTACTO",
 ];
@@ -65,7 +65,7 @@ export function toPdfTables(sheets: SheetData[]): PdfTable[] {
       row.facturas ?? "",
       row.concepto,
       row.monto != null ? money.format(row.monto) : "",
-      row.aliasCbu ?? "",
+      row.aliasCbu.join("\n"),
       "", // TÉCNICO O GESTOR — se completa a mano
       "", // TEL. CONTACTO — se completa a mano
     ]),
@@ -78,7 +78,7 @@ export function toPdfTables(sheets: SheetData[]): PdfTable[] {
           ? ` (1° pago ${money.format(row.originalAmount)})`
           : ""),
       money.format(row.monto),
-      row.aliasCbu ?? "",
+      row.aliasCbu.join("\n"),
       "",
       "",
     ]),

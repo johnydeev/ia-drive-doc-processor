@@ -5,6 +5,7 @@
  * PDF: si un edificio deja de aparecer, deja de aparecer en los dos lados a la
  * vez. Sin React, sin fetch — se testea sin montar nada.
  */
+import { parsePaymentAliases } from "@/lib/paymentAliases";
 
 export type ObligationStatus = "PENDING" | "RECEIVED" | "SKIPPED" | "NOT_RECEIVED";
 /** `NO_PERIOD` = el edificio no tiene período activo, así que no hay obligación posible. */
@@ -73,8 +74,8 @@ export type SheetRow = {
   concepto: string;
   /** Columna MONTO: sale de la boleta vinculada; null mientras no llegó. */
   monto: number | null;
-  /** Columna ALIAS CBU. */
-  aliasCbu: string | null;
+  /** Columna ALIAS - CBU: hasta 3 alias o CBU, uno debajo del otro. */
+  aliasCbu: string[];
   status: SheetStatus;
   active: boolean;
 };
@@ -95,7 +96,7 @@ export type CarriedRow = {
   /** El importe del 1° pago, para mostrarlo al lado cuando hay monto vencido. */
   originalAmount: number | null;
   lateAmount: number | null;
-  aliasCbu: string | null;
+  aliasCbu: string[];
   /** "agosto 2026" */
   fromLabel: string | null;
   /** Ya se pasó a este período (su boleta vive acá). */
@@ -152,7 +153,7 @@ export function buildSheets(payload: OverviewPayload): SheetData[] {
         facturas: lsp?.clientNumber ?? null,
         concepto,
         monto: fx.obligation?.amount ?? null,
-        aliasCbu: (lsp ? lspProvider?.paymentAlias : provider?.paymentAlias) ?? null,
+        aliasCbu: parsePaymentAliases(lsp ? lspProvider?.paymentAlias : provider?.paymentAlias),
         status: c.periodId ? fx.obligation?.status ?? "PENDING" : "NO_PERIOD",
         active: fx.active,
       };
@@ -184,7 +185,7 @@ export function buildSheets(payload: OverviewPayload): SheetData[] {
         monto: inv.remaining,
         originalAmount: inv.originalAmount,
         lateAmount: inv.lateAmount,
-        aliasCbu: inv.aliasCbu,
+        aliasCbu: parsePaymentAliases(inv.aliasCbu),
         fromLabel: inv.fromLabel,
         alreadyCarried: inv.alreadyCarried,
         canCarry: inv.canCarry,

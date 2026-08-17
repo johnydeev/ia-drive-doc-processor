@@ -87,6 +87,7 @@ model Client {
   receipts             Receipt[]
   coeficientes         Coeficiente[]
   rubros               Rubro[]
+  oficios              Oficio[]
   lspServices          LspService[]
   processingLogs       ProcessingLog[]
   processingJobs       ProcessingJob[]
@@ -194,6 +195,22 @@ model Coeficiente {
   invoices    Invoice[]
 
   @@unique([clientId, code])
+  @@index([clientId])
+}
+
+/// Oficio del proveedor (Pintor, Albañil, Energía…). Etiqueta de catálogo:
+/// NO es el Rubro, que divide las secciones de la liquidación y agrupa oficios.
+model Oficio {
+  id          String     @id @default(cuid())
+  clientId    String
+  name        String
+  description String?
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+  client      Client     @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  providers   Provider[]
+
+  @@unique([clientId, name])
   @@index([clientId])
 }
 
@@ -390,6 +407,10 @@ model Provider {
   /// Alias visible en la UI y en la columna "ALIAS" de Google Sheets.
   paymentAlias        String?
   providerType        ProviderType         @default(PROVEEDOR)
+  /// Oficio del proveedor (Pintor, Albañil, Energía…). Se carga desde la columna
+  /// OFICIO del ALTA y referencia el catálogo `Oficio`.
+  oficioId            String?
+  oficio              Oficio?              @relation(fields: [oficioId], references: [id], onDelete: SetNull)
   createdAt           DateTime             @default(now())
   updatedAt           DateTime             @updatedAt
   client              Client               @relation(fields: [clientId], references: [id], onDelete: Cascade)

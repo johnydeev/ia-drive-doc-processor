@@ -21,8 +21,18 @@ describe("matchProvider", () => {
   it("matchea por nombre canónico cuando no hay CUIT", () => {
     expect(matchProvider(providers, scanned({ provider: "tigre ascensores s.a." }))?.id).toBe("p1");
   });
-  it("matchea por alias de pago", () => {
-    expect(matchProvider(providers, scanned({ provider: "tigre" }))?.id).toBe("p1");
+  // El alias de pago ya NO matchea: es corto y coincide con demasiadas cosas, así
+  // que asignaba la boleta al proveedor equivocado. Mismo criterio que el
+  // pipeline, que matchea proveedores sólo por CUIT.
+  it("NO matchea por alias de pago", () => {
+    expect(matchProvider(providers, scanned({ provider: "tigre" }))).toBeUndefined();
+  });
+  it("ante un alias que es la razón social de otro, gana la razón social", () => {
+    const conHomonimo: Provider[] = [
+      ...providers,
+      { id: "p3", canonicalName: "TIGRE", cuit: null, paymentAlias: null },
+    ];
+    expect(matchProvider(conHomonimo, scanned({ provider: "tigre" }))?.id).toBe("p3");
   });
   it("sin coincidencia → undefined", () => {
     expect(matchProvider(providers, scanned({ providerTaxId: "30-99999999-9", provider: "otro" }))).toBeUndefined();

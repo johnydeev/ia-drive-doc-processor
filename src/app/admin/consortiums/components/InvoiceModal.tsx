@@ -1,6 +1,7 @@
 import styles from "../page.module.css";
 import { TIPOS_COMPROBANTE, TIPOS_GASTO } from "../lib/constants";
 import { formatAmountPlain, parseAmountInput } from "../lib/format";
+import { parsePaymentAliases } from "@/lib/paymentAliases";
 import type { Coeficiente, InvoiceForm, Provider, Rubro } from "../lib/types";
 
 type Props = {
@@ -56,7 +57,11 @@ export function InvoiceModal({
               <option value="">Seleccioná un proveedor</option>
               {providers.map((p) => (
                 <option key={p.id} value={p.id}>
-                  {p.canonicalName}{p.paymentAlias ? ` (${p.paymentAlias})` : ""}{p.providerType === "EMPLEADO" ? " [EMPLEADO]" : ""}
+                  {p.canonicalName}
+                  {/* Sólo el primer alias: con tres el desplegable se vuelve ilegible. */}
+                  {parsePaymentAliases(p.paymentAlias)[0] ? ` (${parsePaymentAliases(p.paymentAlias)[0]})` : ""}
+                  {p.oficio ? ` — ${p.oficio.name}` : ""}
+                  {p.providerType === "EMPLEADO" ? " [EMPLEADO]" : ""}
                 </option>
               ))}
             </select>

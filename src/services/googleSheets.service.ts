@@ -2,6 +2,7 @@ import { google, sheets_v4 } from "googleapis";
 import { env } from "@/config/env";
 import { buildBusinessKeyParts, buildBusinessKeyString, normalizeBusinessAmount } from "@/lib/businessKey";
 import { parseProviderType, type ProviderTypeValue } from "@/lib/providerType";
+import { headersNeedUpdate } from "@/lib/sheetHeaders";
 import { ClientGoogleConfig } from "@/types/client.types";
 import { ExtractedDocumentData } from "@/types/extractedDocument.types";
 
@@ -129,7 +130,9 @@ export interface DirectoryData {
   // Los consorcios NO traen alias: el alias bancario del consorcio se carga por UI
   // (sección Banco del modal de Configuración), no por el archivo ALTA.
   consortiums: { canonicalName: string; cuit: string | null; matchNames: string | null }[];
-  providers: { canonicalName: string; cuit: string | null; matchNames: string | null; paymentAlias: string | null; providerType: ProviderTypeValue }[];
+  providers: { canonicalName: string; cuit: string | null; matchNames: string | null; paymentAlias: string | null; providerType: ProviderTypeValue; oficioName: string | null }[];
+  /** Catálogo de oficios (hoja `_Oficios`). El proveedor lo referencia por nombre. */
+  oficios: { name: string; description: string | null }[];
   rubros: { name: string; description: string | null }[];
   coeficientes: { code: string; name: string }[];
   lspServices: { consortiumName: string; provider: string; clientNumber: string; description: string | null }[];
@@ -344,7 +347,8 @@ export class GoogleSheetsService {
     const TABS: { name: string; headers: string[]; cols: string }[] = [
       // Sin columna ALIAS: el alias bancario del consorcio se carga por UI.
       { name: "_Consorcios",  headers: ["NOMBRE CANÓNICO", "CUIT", "NOMBRES ALTERNATIVOS"], cols: "A:C" },
-      { name: "_Proveedores", headers: ["NOMBRE CANÓNICO", "CUIT", "NOMBRES ALTERNATIVOS", "ALIAS", "TIPO"], cols: "A:E" },
+      { name: "_Proveedores", headers: ["RAZÓN SOCIAL", "CUIT", "NOMBRE FANTASÍA", "ALIAS DE PAGO", "TIPO", "OFICIO"], cols: "A:F" },
+      { name: "_Oficios",     headers: ["NOMBRE", "DESCRIPCIÓN"],              cols: "A:B" },
       { name: "_Rubros",      headers: ["NOMBRE", "DESCRIPCIÓN"],              cols: "A:B" },
       { name: "_Coeficientes",headers: ["NOMBRE", "CÓDIGO"],                   cols: "A:B" },
       { name: "_LspServices", headers: ["NOMBRE CANÓNICO", "PROVEEDOR", "NRO CLIENTE", "DESCRIPCIÓN"], cols: "A:D" },
@@ -389,6 +393,31 @@ export class GoogleSheetsService {
       );
     }
 
+    // Los encabezados sólo se escribían al crear la hoja, así que un ALTA ya
+    // existente se quedaba con la terminología vieja. Se corrigen acá: la
+    // lectura es por posición, así que reescribirlos no puede romper nada.
+    const proveedoresTab = TABS.find((t) => t.name === "_Proveedores")!;
+    if (existingTitles.has(proveedoresTab.name)) {
+      const headerRow = await this.withRetry(() =>
+        this.sheets.spreadsheets.values.get({
+          spreadsheetId: this.spreadsheetId,
+          range: `${proveedoresTab.name}!1:1`,
+        })
+      );
+      const actualHeaders = (headerRow.data.values?.[0] ?? []).map((v) => String(v ?? ""));
+      if (headersNeedUpdate(actualHeaders, proveedoresTab.headers)) {
+        await this.withRetry(() =>
+          this.sheets.spreadsheets.values.update({
+            spreadsheetId: this.spreadsheetId,
+            range: `${proveedoresTab.name}!A1`,
+            valueInputOption: "RAW",
+            requestBody: { values: [proveedoresTab.headers] },
+          })
+        );
+        console.log("[readDirectory] Encabezados de _Proveedores actualizados a la terminología nueva");
+      }
+    }
+
     // 3. Leer datos de todas las hojas
     const readTab = async (tabName: string, cols: string): Promise<string[][]> => {
       const response = await this.withRetry(() =>
@@ -401,12 +430,13 @@ export class GoogleSheetsService {
       return rows.slice(1).filter((row) => row[0]?.toString().trim());
     };
 
-    const [consortiumRows, providerRows, rubroRows, coeficienteRows, lspServiceRows] = await Promise.all([
+    const [consortiumRows, providerRows, rubroRows, coeficienteRows, lspServiceRows, oficioRows] = await Promise.all([
       readTab("_Consorcios", "A:C"),
-      readTab("_Proveedores", "A:E"),
+      readTab("_Proveedores", "A:F"),
       readTab("_Rubros", "A:B"),
       readTab("_Coeficientes", "A:B"),
       readTab("_LspServices", "A:D"),
+      readTab("_Oficios", "A:B"),
     ]);
 
     return {
@@ -425,8 +455,16 @@ export class GoogleSheetsService {
           matchNames: row[2]?.toString().trim() || null,
           paymentAlias: row[3]?.toString().trim() || null,
           providerType: parseProviderType(row[4] as string | undefined),
+          oficioName: row[5]?.toString().trim().toUpperCase() || null,
         }))
         .filter((p) => p.canonicalName),
+
+      oficios: oficioRows
+        .map((row) => ({
+          name: row[0]?.toString().trim().toUpperCase() ?? "",
+          description: row[1]?.toString().trim() || null,
+        }))
+        .filter((o) => o.name),
 
       rubros: rubroRows
         .map((row) => ({

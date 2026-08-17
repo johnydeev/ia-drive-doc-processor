@@ -81,7 +81,7 @@ export function SheetCard({ sheet, onAdd, onToggle, onSetStatus, onCarryOver, on
               <th>FACTURAS</th>
               <th>PROVEEDORES Y SERVICIOS</th>
               <th>MONTO</th>
-              <th>ALIAS CBU</th>
+              <th>ALIAS - CBU</th>
               <th>TÉCNICO O GESTOR</th>
               <th>TEL. CONTACTO</th>
               <th className={styles.actionsHeader} aria-label="Acciones" />
@@ -95,7 +95,7 @@ export function SheetCard({ sheet, onAdd, onToggle, onSetStatus, onCarryOver, on
                 <td>{row.facturas ?? ""}</td>
                 <td>{row.concepto}</td>
                 <td>{row.monto != null ? money.format(row.monto) : ""}</td>
-                <td>{row.aliasCbu ?? ""}</td>
+                <td>{row.aliasCbu.map((a) => (<div key={a}>{a}</div>))}</td>
                 <td />
                 <td />
                 <td className={styles.rowActions}>
@@ -145,7 +145,7 @@ export function SheetCard({ sheet, onAdd, onToggle, onSetStatus, onCarryOver, on
                 <th>FACTURAS</th>
                 <th>PROVEEDORES Y SERVICIOS</th>
                 <th>MONTO</th>
-                <th>ALIAS CBU</th>
+                <th>ALIAS - CBU</th>
                 <th>TÉCNICO O GESTOR</th>
                 <th>TEL. CONTACTO</th>
                 <th className={styles.actionsHeader} aria-label="Acciones" />
@@ -165,7 +165,7 @@ export function SheetCard({ sheet, onAdd, onToggle, onSetStatus, onCarryOver, on
                     )}
                   </td>
                   <td>{money.format(row.monto)}</td>
-                  <td>{row.aliasCbu ?? ""}</td>
+                  <td>{row.aliasCbu.map((a) => (<div key={a}>{a}</div>))}</td>
                   <td />
                   <td />
                   <td className={styles.rowActions}>

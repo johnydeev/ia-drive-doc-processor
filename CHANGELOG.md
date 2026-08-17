@@ -24,6 +24,22 @@
   con un único `UPDATE ... FROM (VALUES ...)` por entidad.
 
 ### Added
+- **La hoja `_Proveedores` habla el idioma del administrador, admite varios alias y suma el oficio
+  (2026-08-17)**. Los encabezados pasan a `RAZÓN SOCIAL · CUIT · NOMBRE FANTASÍA · ALIAS DE PAGO ·
+  TIPO · OFICIO` — "nombre canónico" era jerga interna, y lo que va en la columna C es el nombre con
+  el que la empresa aparece en sus boletas. **Los campos de la base no se renombran**: el sync lee por
+  posición, así que los rótulos son informativos y ahora **se corrigen solos** cuando difieren (antes
+  sólo se escribían al crear la hoja, así que un ALTA existente se quedaba con la terminología vieja).
+  Un proveedor pasa a admitir **hasta 3 alias de pago** separados por `|` en el mismo campo, y cada
+  uno puede ser un alias o un CBU indistintamente: van los tres a la columna ALIAS de la hoja de
+  boletas separados por ` · `, uno debajo del otro en la planilla imprimible —cuyo encabezado pasa de
+  "ALIAS CBU" a **"ALIAS - CBU"**, porque lo que muestra es el destino del pago y no la cuenta del
+  edificio— y sólo el primero en el desplegable del modal de boleta. Aparece además el **oficio** de
+  cada proveedor (Pintor, Albañil, Energía…), con catálogo propio en la hoja `_Oficios` nueva: **no es
+  el Rubro**, que divide las secciones de una liquidación y agrupa varios oficios. Si la columna
+  OFICIO menciona uno que no está en el catálogo, el proveedor se carga igual y el reporte lo avisa.
+  **Requiere migración** (`20260817000200_oficio`). +17 tests (636 → 653).
+  Ver `docs/decisiones.md` (2026-08-17).
 - **Tipo `SERVICIO` en el catálogo de proveedores (2026-08-17)**. `ProviderType` gana un tercer valor
   para las empresas de servicios (Edesur, Edenor, AySA, Metrogas, Naturgy, Camuzzi, Litoral Gas,
   Personal), que hasta ahora eran indistinguibles de un proveedor común aunque tengan reglas propias
@@ -115,6 +131,13 @@
   siguen vigentes y se les mandan 5. Ver `docs/decisiones.md` (2026-08-06).
 
 ### Removed
+- **El matching por alias de pago al escanear una boleta (2026-08-17)**. Al escanear un PDF, el modal
+  intentaba pre-seleccionar el proveedor comparando el texto extraído contra su alias además de su
+  razón social. Un alias es corto y coincide con demasiadas cosas: si existía un proveedor cuya razón
+  social era "TIGRE" y otro con alias "TIGRE", ganaba el del alias y la boleta quedaba asignada a
+  quien no era. Queda el match por CUIT y por razón social exacta, el mismo criterio que el pipeline
+  desde 2026-07-02.
+
 - **Estado `unknown` del modal de mover boletas (2026-08-06)**. Existía sólo para sobrevivir al
   timeout 524 del túnel con lotes de 10 (~85 s contra un techo de 100 s). Con tandas de 5 cada
   request dura ~46 s y, sobre todo, el manejo de error por boleta lo cubre mejor: una tanda sin

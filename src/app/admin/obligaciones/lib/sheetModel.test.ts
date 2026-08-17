@@ -102,9 +102,20 @@ describe("buildSheets", () => {
 
   it("resuelve el alias: del proveedor, y para un LSP el de su proveedor asociado", () => {
     const rows = buildSheets(payload)[0].rows;
-    expect(rows.find((r) => r.fixedExpenseId === "fx1")!.aliasCbu).toBe("seguro.caja");
-    expect(rows.find((r) => r.fixedExpenseId === "fx2")!.aliasCbu).toBe("edesur.pago");
-    expect(rows.find((r) => r.fixedExpenseId === "fx3")!.aliasCbu).toBeNull();
+    expect(rows.find((r) => r.fixedExpenseId === "fx1")!.aliasCbu).toEqual(["seguro.caja"]);
+    expect(rows.find((r) => r.fixedExpenseId === "fx2")!.aliasCbu).toEqual(["edesur.pago"]);
+    expect(rows.find((r) => r.fixedExpenseId === "fx3")!.aliasCbu).toEqual([]);
+  });
+
+  it("parte los alias del proveedor en lista, con tope de 3", () => {
+    const conVarios: OverviewPayload = {
+      ...payload,
+      providers: payload.providers.map((p) =>
+        p.id === "p1" ? { ...p, paymentAlias: "uno|dos|tres|cuatro" } : p
+      ),
+    };
+    const rows = buildSheets(conVarios)[0].rows;
+    expect(rows.find((r) => r.fixedExpenseId === "fx1")!.aliasCbu).toEqual(["uno", "dos", "tres"]);
   });
 
   it("sin obligación pero con período, la fila queda PENDING y sin obligationId", () => {

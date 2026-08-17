@@ -1,6 +1,39 @@
 # Progreso del proyecto — drive-doc-processor
 
-Actualizado al 17/08/2026 (sesión 56 — el sync de directorio deja de borrar + rendimiento + `SERVICIO`).
+Actualizado al 17/08/2026 (sesión 56 — sync sin borrado + rendimiento + `SERVICIO` + terminología/alias/oficio).
+
+## 🏷️ `_Proveedores`: terminología, alias múltiples y oficio (2026-08-17)
+
+**Estado: implementado. Verificación PARCIAL — lint 0 errores + 653 tests OK. El typecheck y los
+builds quedan pendientes de la migración: el cliente Prisma todavía no conoce `Oficio` ni
+`oficioId` (6 errores en `directorySync.service.ts` y `providers/route.ts`). Es lo esperado.
+Sin commitear.**
+
+Spec: `docs/superpowers/specs/2026-08-17-proveedores-terminologia-alias-oficio-design.md`
+Plan: `docs/superpowers/plans/2026-08-17-proveedores-terminologia-alias-oficio.md`
+
+Hecho:
+- **La hoja habla el idioma del administrador**: `RAZÓN SOCIAL · CUIT · NOMBRE FANTASÍA ·
+  ALIAS DE PAGO · TIPO · OFICIO`, y pasa a leerse de `A:F`. Los **campos de la base no se renombran**.
+  Los encabezados se corrigen solos cuando difieren (`headersNeedUpdate`), porque antes sólo se
+  escribían al crear la hoja.
+- **Hasta 3 alias de pago** por proveedor, separados por `|` en el mismo campo. Cada uno puede ser un
+  alias o un CBU. En la hoja de boletas van los tres separados por ` · `; en la planilla imprimible,
+  uno debajo del otro; en el modal, sólo el primero. El encabezado del papel pasó a **`ALIAS - CBU`**.
+- **Modelo `Oficio`** (catálogo por cliente, hoja `_Oficios`) + `Provider.oficioId` con `SetNull`. Se
+  sincroniza **antes** que los proveedores; si la columna F menciona un oficio que no está en el
+  catálogo, el proveedor se carga igual sin oficio y el reporte lo avisa. Se muestra en el panel,
+  junto al nombre del proveedor.
+- **Se eliminó el matching por alias al escanear** una boleta: un alias corto asignaba la boleta al
+  proveedor equivocado. Queda CUIT y razón social exacta, igual que el pipeline. El test que fijaba
+  el comportamiento viejo quedó invertido.
+- `aliasCbu` de la planilla pasó de `string | null` a `string[]`. **+17 tests (636 → 653).**
+
+**⏳ Pendiente del owner:**
+1. `npx prisma migrate deploy` → `npx prisma generate` (migración `20260817000200_oficio`).
+2. Correr la verificación bloqueada: `npm run typecheck` + `npm run build` + `npm run build:jobs`.
+3. La hoja `_Oficios` ya está cargada con 8 oficios. Falta completar la **columna F** de
+   `_Proveedores` y, donde corresponda, los alias adicionales en la columna D separados por `|`.
 
 ## 🏷️ `SERVICIO` en `ProviderType` (2026-08-17)
 

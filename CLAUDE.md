@@ -108,8 +108,12 @@ Client          → Tenant. Roles: ADMIN / CLIENT / VIEWER. consortiumsEnabled (
   │   ├── Period    → Período mensual. status: ACTIVE / CLOSED
   │   └── LspService → Servicio de empresa pública. provider + clientNumber + description
   ├── Bank        → Banco del catálogo (nivel cliente). name + color (slug de paleta)
-  ├── Provider    → Proveedor. canonicalName + cuit + matchNames + paymentAlias
+  ├── Provider    → Proveedor. canonicalName (razón social) + cuit + matchNames (nombre
+  │                 fantasía) + paymentAlias (hasta 3 alias/CBU con `|`) + providerType
+  │                 + oficioId? → Oficio
   ├── Rubro       → Categoría de gasto (nivel cliente). name + description?
+  ├── Oficio      → Oficio del proveedor (nivel cliente). name + description?
+  │                 Pintor, Albañil, Energía… NO es el Rubro: el rubro agrupa oficios
   ├── Coeficiente → Coeficiente de liquidación (nivel cliente). code + name
   ├── Invoice     → Boleta procesada. Liga a Consortium + Provider + Period + LspService?
   │                 lspServiceId / paymentMethod (nullable)
@@ -191,13 +195,27 @@ Client          → Tenant. Roles: ADMIN / CLIENT / VIEWER. consortiumsEnabled (
 4. Primera sincronización: si las hojas no existen se crean automáticamente con encabezados.
 5. El usuario carga datos y vuelve a sincronizar.
 ### Formato del archivo ALTA (5 hojas)
-| Hoja | Col A | Col B | Col C | Col D | Col E |
-|---|---|---|---|---|---|
-| `_Consorcios` | NOMBRE CANÓNICO | CUIT | NOMBRES ALTERNATIVOS (separado por `\|`, interno) | — | — |
-| `_Proveedores` | NOMBRE CANÓNICO | CUIT | NOMBRES ALTERNATIVOS (separado por `\|`, interno) | ALIAS (visible en UI) | TIPO: `PROVEEDOR` / `EMPLEADO` / `SERVICIO` |
-| `_Rubros` | NOMBRE | DESCRIPCIÓN (opcional) | — | — | — |
-| `_Coeficientes` | NOMBRE | CÓDIGO | — | — | — |
-| `_LspServices` | NOMBRE CANÓNICO (consorcio) | PROVEEDOR (normalizado) | NRO CLIENTE | DESCRIPCIÓN (opcional) | — |
+| Hoja | Col A | Col B | Col C | Col D | Col E | Col F |
+|---|---|---|---|---|---|---|
+| `_Consorcios` | NOMBRE CANÓNICO | CUIT | NOMBRES ALTERNATIVOS (separado por `\|`, interno; **acepta CUITs alternativos**) | — | — | — |
+| `_Proveedores` | RAZÓN SOCIAL | CUIT | NOMBRE FANTASÍA (separado por `\|`, interno) | ALIAS DE PAGO (hasta 3, separados por `\|`) | TIPO: `PROVEEDOR` / `EMPLEADO` / `SERVICIO` | OFICIO (nombre de `_Oficios`) |
+| `_Oficios` | NOMBRE | DESCRIPCIÓN (opcional) | — | — | — | — |
+| `_Rubros` | NOMBRE | DESCRIPCIÓN (opcional) | — | — | — | — |
+| `_Coeficientes` | NOMBRE | CÓDIGO | — | — | — | — |
+| `_LspServices` | NOMBRE CANÓNICO (consorcio) | PROVEEDOR (normalizado) | NRO CLIENTE | DESCRIPCIÓN (opcional) | — | — |
+
+> **Terminología:** los encabezados de `_Proveedores` cambiaron el 2026-08-17 para hablar el idioma
+> del administrador; **los campos de la base NO se renombraron** (`canonicalName`, `matchNames`,
+> `paymentAlias`). El sync lee por posición y **corrige los encabezados** de esa hoja si difieren
+> (`headersNeedUpdate` en `src/lib/sheetHeaders.ts`).
+>
+> **ALIAS DE PAGO** admite hasta 3 valores separados por `|`, y cada uno puede ser un alias **o un
+> CBU** (`parsePaymentAliases` en `src/lib/paymentAliases.ts`). No confundir con
+> `Consortium.bankAlias`/`cbu`, que son la cuenta del EDIFICIO y se cargan por UI.
+>
+> **OFICIO** referencia el catálogo `Oficio` por nombre. **No es el `Rubro`**: el rubro divide las
+> secciones de la liquidación y agrupa varios oficios. Si el oficio no existe en `_Oficios`, el
+> proveedor se carga igual sin oficio y el reporte lo avisa.
 
 > **Columna TIPO** (`parseProviderType` en `src/lib/providerType.ts`): vacío o texto no reconocido →
 > `PROVEEDOR`. `SERVICIO` marca a las empresas de servicios (Edesur, AySA, Metrogas…) — un

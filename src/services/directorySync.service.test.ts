@@ -30,6 +30,7 @@ describe("syncDirectory", () => {
       rubro: entity,
       coeficiente: entity,
       lspService: entity,
+      oficio: entity,
       invoice: { groupBy },
       period: { groupBy },
        
@@ -42,6 +43,7 @@ describe("syncDirectory", () => {
       rubros: [],
       coeficientes: [],
       lspServices: [],
+      oficios: [],
       warnings: [],
     });
 
@@ -74,6 +76,7 @@ describe("syncDirectory", () => {
       rubro: entityVacia,
       coeficiente: entityVacia,
       lspService: entityVacia,
+      oficio: entityVacia,
       invoice: { groupBy: vi.fn().mockResolvedValue([{ consortiumId: "c-viejo", _count: { _all: 37 } }]) },
       period: { groupBy: vi.fn().mockResolvedValue([]) },
        
@@ -86,6 +89,7 @@ describe("syncDirectory", () => {
       rubros: [],
       coeficientes: [],
       lspServices: [],
+      oficios: [],
       warnings: [],
     });
 
@@ -122,6 +126,7 @@ describe("syncDirectory", () => {
       rubro: entity,
       coeficiente: entity,
       lspService: entity,
+      oficio: entity,
       invoice: { groupBy: vi.fn().mockResolvedValue([]) },
       period: { groupBy: vi.fn().mockResolvedValue([]) },
       $transaction: async (fn: any) => fn({ ...prisma, $executeRaw: vi.fn() }),
@@ -137,6 +142,7 @@ describe("syncDirectory", () => {
     lspServices: [
       { consortiumName: "FRIAS 324", provider: "EDESUR S.A.", clientNumber: "1061158", description: null },
     ],
+    oficios: [],
     warnings: [],
   };
 
@@ -152,5 +158,50 @@ describe("syncDirectory", () => {
 
     expect(report.warnings).toEqual([]);
     expect(report.lspServices.created).toBe(1);
+  });
+
+  it("resuelve el oficio por nombre y avisa cuando no está en el catálogo", async () => {
+    const entity = {
+      findMany: vi.fn().mockResolvedValue([]),
+      createMany: vi.fn().mockResolvedValue({ count: 1 }),
+      deleteMany: vi.fn(),
+      findFirst: vi.fn(),
+      update: vi.fn(),
+    };
+
+    const prisma: any = {
+      consortium: entity,
+      provider: entity,
+      rubro: entity,
+      coeficiente: entity,
+      lspService: entity,
+      oficio: {
+        ...entity,
+        findMany: vi
+          .fn()
+          .mockResolvedValueOnce([]) // foto previa: el catálogo está vacío
+          .mockResolvedValueOnce([{ id: "of1", name: "PINTOR" }]), // tras crearlo
+      },
+      invoice: { groupBy: vi.fn().mockResolvedValue([]) },
+      period: { groupBy: vi.fn().mockResolvedValue([]) },
+      $transaction: async (fn: any) => fn({ ...prisma, $executeRaw: vi.fn() }),
+    };
+
+    const report = await syncDirectory(prisma, "cli1", {
+      consortiums: [],
+      providers: [
+        { canonicalName: "JUAN PINTURAS", cuit: null, matchNames: null, paymentAlias: null, providerType: "PROVEEDOR", oficioName: "PINTOR" },
+        { canonicalName: "OTRO", cuit: null, matchNames: null, paymentAlias: null, providerType: "PROVEEDOR", oficioName: "SOLDADOR" },
+      ],
+      rubros: [],
+      coeficientes: [],
+      lspServices: [],
+      oficios: [{ name: "PINTOR", description: null }],
+      warnings: [],
+    });
+
+    expect(report.oficios.created).toBe(1);
+    expect(report.warnings.some((w) => w.includes('"SOLDADOR"'))).toBe(true);
+    expect(report.warnings.some((w) => w.includes('"PINTOR"'))).toBe(false);
   });
 });

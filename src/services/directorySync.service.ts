@@ -24,6 +24,7 @@ export type DirectorySyncReport = {
   rubros: EntityReport;
   coeficientes: EntityReport;
   lspServices: EntityReport;
+  oficios: EntityReport;
   /** Renombres detectados, pendientes de confirmación del usuario. */
   pendingRenames: Array<EntityRename & { entity: "consortium" | "provider"; invoices: number; periods: number }>;
   ambiguous: string[];
@@ -102,16 +103,74 @@ export async function syncDirectory(
     );
   }, TX_OPTS);
 
+  // ---- Oficios ----
+  // Van ANTES que los proveedores: la columna OFICIO de `_Proveedores` trae un
+  // nombre que hay que resolver a un id, y puede referirse a uno recién creado.
+  const existingOficios = await prisma.oficio.findMany({
+    where: { clientId },
+    select: { id: true, name: true, description: true },
+  });
+  const oficioPlan = planKeyedEntity({
+    sheetRows: directory.oficios,
+    existing: existingOficios,
+    keyOf: (o) => o.name,
+    compareFields: ["description"],
+    nameOf: (o) => o.name,
+  });
+
+  await prisma.$transaction(async (tx) => {
+    if (oficioPlan.creates.length > 0) {
+      await tx.oficio.createMany({
+        data: oficioPlan.creates.map((o) => ({ clientId, name: o.name, description: o.description })),
+      });
+    }
+    await applyUpdates(tx, "Oficio", [{ name: "description", cast: "text" }], oficioPlan.updates);
+  }, TX_OPTS);
+
+  const oficiosNow = await prisma.oficio.findMany({
+    where: { clientId },
+    select: { id: true, name: true },
+  });
+  const oficioIdByName = new Map(oficiosNow.map((o) => [o.name, o.id]));
+
   // ---- Proveedores ----
   const existingProviders = await prisma.provider.findMany({
     where: { clientId },
-    select: { id: true, canonicalName: true, cuit: true, matchNames: true, paymentAlias: true, providerType: true },
+    select: {
+      id: true,
+      canonicalName: true,
+      cuit: true,
+      matchNames: true,
+      paymentAlias: true,
+      providerType: true,
+      oficioId: true,
+    },
+  });
+
+  // La columna OFICIO trae un nombre; acá se convierte en el id que va a la base.
+  // Si no está en el catálogo, el proveedor se carga igual y se avisa: un dato de
+  // catalogación no puede impedir que se cargue un proveedor.
+  const providerSheetRows = directory.providers.map((p) => {
+    const oficioId = p.oficioName ? oficioIdByName.get(p.oficioName) ?? null : null;
+    if (p.oficioName && !oficioId) {
+      warnings.push(
+        `El proveedor "${p.canonicalName}" declara el oficio "${p.oficioName}", que no está en la hoja _Oficios.`
+      );
+    }
+    return {
+      canonicalName: p.canonicalName,
+      cuit: p.cuit,
+      matchNames: p.matchNames,
+      paymentAlias: p.paymentAlias,
+      providerType: p.providerType,
+      oficioId,
+    };
   });
 
   const providerPlan = planCuitEntity({
-    sheetRows: directory.providers,
+    sheetRows: providerSheetRows,
     existing: existingProviders,
-    compareFields: ["cuit", "matchNames", "paymentAlias", "providerType"],
+    compareFields: ["cuit", "matchNames", "paymentAlias", "providerType", "oficioId"],
   });
   ambiguous.push(...providerPlan.ambiguous);
 
@@ -125,6 +184,7 @@ export async function syncDirectory(
           matchNames: p.matchNames,
           paymentAlias: p.paymentAlias ?? null,
           providerType: (p.providerType ?? "PROVEEDOR") as ProviderTypeValue,
+          oficioId: p.oficioId ?? null,
         })),
       });
     }
@@ -136,6 +196,7 @@ export async function syncDirectory(
         { name: "matchNames", cast: "text" },
         { name: "paymentAlias", cast: "text" },
         { name: "providerType", cast: '"ProviderType"' },
+        { name: "oficioId", cast: "text" },
       ],
       providerPlan.updates
     );
@@ -349,6 +410,11 @@ export async function syncDirectory(
       created: lspPlan.creates.length,
       updated: lspPlan.updates.length,
       orphans: lspPlan.orphans,
+    },
+    oficios: {
+      created: oficioPlan.creates.length,
+      updated: oficioPlan.updates.length,
+      orphans: oficioPlan.orphans,
     },
     pendingRenames,
     ambiguous,

@@ -26,8 +26,12 @@ export type BankGroup = {
   consortiums: Consortium[];
 };
 export type Provider = {
-  id: string; canonicalName: string; cuit: string | null; paymentAlias: string | null;
+  id: string; canonicalName: string; cuit: string | null;
+  /** Hasta 3 alias o CBU separados por `|`. Parsear con `parsePaymentAliases`. */
+  paymentAlias: string | null;
   providerType?: "PROVEEDOR" | "EMPLEADO" | "SERVICIO";
+  /** Oficio del catálogo (Pintor, Albañil…). No es el Rubro de la liquidación. */
+  oficio?: { name: string } | null;
 };
 export type Invoice = {
   id: string; boletaNumber: string | null; provider: string | null; providerTaxId: string | null;
