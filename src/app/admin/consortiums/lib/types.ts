@@ -27,7 +27,7 @@ export type BankGroup = {
 };
 export type Provider = {
   id: string; canonicalName: string; cuit: string | null; paymentAlias: string | null;
-  providerType?: "PROVEEDOR" | "EMPLEADO";
+  providerType?: "PROVEEDOR" | "EMPLEADO" | "SERVICIO";
 };
 export type Invoice = {
   id: string; boletaNumber: string | null; provider: string | null; providerTaxId: string | null;
@@ -39,7 +39,7 @@ export type Invoice = {
   isPaid: boolean;
   remainingBalance: number | null;
   lspServiceId: string | null;
-  providerType?: "PROVEEDOR" | "EMPLEADO";
+  providerType?: "PROVEEDOR" | "EMPLEADO" | "SERVICIO";
 };
 export type ScannedData = {
   boletaNumber: string | null; provider: string | null; providerTaxId: string | null;
@@ -97,6 +97,31 @@ export type PayForm = {
 // Dominio Config (Tanda 3e): sección abierta del acordeón + form de alta de LSP.
 export type ConfigSection = "matchNames" | "bank" | "lsp" | "fixed";
 export type LspForm = { provider: string; clientNumber: string; description: string };
+
+// Reporte del sync de directorio. El sync no borra: lo que está en la base y no
+// en el ALTA viaja acá como "sobrante" para que el usuario lo vea y decida.
+export type SyncOrphan = { id: string; name: string; invoices?: number };
+export type SyncEntityReport = { created: number; updated: number; orphans: SyncOrphan[] };
+/** Renombre detectado por CUIT, pendiente de que el usuario lo confirme. */
+export type SyncPendingRename = {
+  entity: "consortium" | "provider";
+  id: string;
+  from: string;
+  to: string;
+  cuit: string;
+  invoices: number;
+  periods: number;
+};
+export type DirectorySyncReport = {
+  consortiums: SyncEntityReport;
+  providers: SyncEntityReport;
+  rubros: SyncEntityReport;
+  coeficientes: SyncEntityReport;
+  lspServices: SyncEntityReport;
+  pendingRenames: SyncPendingRename[];
+  ambiguous: string[];
+  warnings: string[];
+};
 
 /** Sección Banco del acordeón de Config: banco asignado + datos de la cuenta. */
 export type BankAccountForm = {

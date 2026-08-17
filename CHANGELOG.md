@@ -2,7 +2,54 @@
 
 ## [Unreleased]
 
+### Fixed
+- **El sync de directorio ya no puede destruir datos (2026-08-17)**. Sincronizar con un nombre
+  cambiado en el archivo ALTA borraba el registro viejo **en silencio**: el `try/catch` que prometía
+  el aviso "no pudieron eliminarse porque tienen boletas asociadas" no podía dispararse nunca, porque
+  todas las relaciones hijas de `Consortium` y `Provider` son `onDelete: Cascade` y el `deleteMany` no
+  lanza — se llevaba períodos, gastos fijos, obligaciones y servicios, y dejaba las boletas sin
+  edificio. Ahora el sync **no borra**: lo que está en la base y no en la hoja se informa en un modal
+  nuevo, con cuántas boletas tiene colgando cada uno. En el caso que lo destapó (FRIAS 320 → 324)
+  estaban en juego 6 períodos y 37 boletas.
+- **Las boletas de servicios dejan de perder su vínculo en cada sincronización (2026-08-17)**. Rubros,
+  coeficientes y servicios LSP se sincronizaban con borrado + alta: los registros recreados tenían
+  `id` nuevo y, por `onDelete: SetNull`, todo lo que los apuntaba quedaba en null. Por eso hay hoy 70
+  boletas de Edesur, Metrogas, AySA y Edenor sin su `lspServiceId` — sin ese dato no se distingue el
+  medidor del edificio del de un local. Pasan a upsert por clave natural, conservando el `id`. Las
+  boletas ya desvinculadas necesitan un script aparte: el número de cliente no está en `Invoice`.
+- **El sync deja de rozar el timeout de 100 s del túnel (2026-08-17)**. Tardaba 119,9 s, de los cuales
+  84,7 s eran los 176 proveedores: los `Promise.all` de `tx.update` no paralelizan, porque dentro de
+  una transacción de Prisma todas las queries van por la misma conexión. Ahora un diff en memoria
+  descarta lo que no cambió —un sync de rutina no ejecuta ni un update— y lo que sí cambió se escribe
+  con un único `UPDATE ... FROM (VALUES ...)` por entidad.
+
 ### Added
+- **Tipo `SERVICIO` en el catálogo de proveedores (2026-08-17)**. `ProviderType` gana un tercer valor
+  para las empresas de servicios (Edesur, Edenor, AySA, Metrogas, Naturgy, Camuzzi, Litoral Gas,
+  Personal), que hasta ahora eran indistinguibles de un proveedor común aunque tengan reglas propias
+  en todo el resto del sistema. Se carga desde la columna E ("TIPO") de la hoja `_Proveedores`, que ya
+  existía. Al sincronizar, si un servicio apunta a un proveedor que no está marcado como `SERVICIO`,
+  el reporte lo avisa — **sin bloquear**: el vínculo entre la boleta y el servicio lo resuelve el
+  pipeline por el número de cliente del PDF, no el catálogo. El parseo de esa columna salió a una
+  función pura (`lib/providerType`) con sesgo conservador: celda vacía o texto no reconocido caen a
+  `PROVEEDOR`. `SERVICIO` se comporta como proveedor común en pagos (parcial) y en el modal de boleta
+  (CUIT, no CUIL), ahora con tests que lo fijan. **Requiere dos migraciones**
+  (`20260817000000_provider_type_servicio` y `20260817000100_backfill_provider_type_servicio`): el
+  `ADD VALUE` va solo porque Postgres no permite usar un valor de enum en la misma transacción que lo
+  creó, y el backfill marca a los proveedores que ya tienen servicios cargados. Sin cambios de UI.
+  +9 tests (627 → 636). Ver `docs/decisiones.md` (2026-08-17).
+- **Confirmación de renombres en el sync de directorio (2026-08-17)**. Cambiar el nombre de un
+  edificio o proveedor en el ALTA ya no crea un duplicado: si el CUIT apunta a exactamente un registro
+  que no figura en la hoja, se ofrece como renombre en un modal con el nombre viejo, el nuevo, el CUIT
+  que los emparejó y cuántas boletas y períodos hay en juego. **Nada se aplica solo** — cada fila tiene
+  su checkbox y el botón dice cuántos renombres va a aplicar. Al confirmar, el nombre anterior se suma
+  a `matchNames`, para que las boletas que lo traigan impreso sigan matcheando. La confirmación va por
+  un endpoint aparte que recibe la lista exacta que se mostró en pantalla y no re-deriva nada de la
+  hoja. Piezas nuevas: `lib/directorySyncPlan` + `lib/bulkUpdate` (tier 0),
+  `services/directorySync.service`, `sync-directory/renames` y `components/DirectorySyncModal`.
+  El endpoint pasa de **cero tests** a tener su lógica en una función pura: +34 tests (591 → 625).
+  Sin migración. Ver `docs/decisiones.md` (2026-08-17).
+
 - **Arrastre de boletas impagas al mes siguiente (2026-08-12)**. Cuando no entran los pagos y una
   boleta de gasto fijo queda sin pagar, la vista de obligaciones la muestra en un bloque **"Impagas de
   meses anteriores"** al pie del edificio (en pantalla y en el PDF), y un botón **"Pasar a este

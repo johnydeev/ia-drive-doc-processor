@@ -24,6 +24,28 @@ describe("PagosView", () => {
     render(<PagosView invoices={[baseInvoice({ id: "i2", provider: "AYSA-DUP", isDuplicate: true })]} {...noop} />);
     expect(screen.queryByText("AYSA-DUP")).not.toBeInTheDocument();
   });
+  // SERVICIO es un proveedor común a los fines del pago: se paga parcial y tiene
+  // input de monto. Sólo EMPLEADO se paga por el total.
+  it("una boleta de un proveedor SERVICIO se paga como proveedor, no como empleado", () => {
+    render(
+      <PagosView
+        invoices={[baseInvoice({ id: "i3", provider: "EDESUR", providerType: "SERVICIO", amount: 1000 })]}
+        {...noop}
+      />
+    );
+    expect(screen.getByPlaceholderText("1.000,00")).toBeInTheDocument();
+  });
+
+  it("una boleta de un EMPLEADO no ofrece input de monto parcial", () => {
+    render(
+      <PagosView
+        invoices={[baseInvoice({ id: "i4", provider: "JUAN PEREZ", providerType: "EMPLEADO", amount: 1000 })]}
+        {...noop}
+      />
+    );
+    expect(screen.queryByPlaceholderText("1.000,00")).not.toBeInTheDocument();
+  });
+
   it("sin boletas: muestra el empty-state", () => {
     render(<PagosView invoices={[]} {...noop} />);
     expect(screen.getByText("No hay boletas para este período.")).toBeInTheDocument();

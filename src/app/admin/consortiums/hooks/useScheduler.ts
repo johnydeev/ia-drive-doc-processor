@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { useAuthGuard } from "@/lib/useAuthGuard";
+import type { DirectorySyncReport } from "../lib/types";
 
 export function useScheduler({ accessChecked, setToolbarInfo, setToolbarError, onDirectorySynced, onInvoicesReload }: {
   accessChecked: boolean;
@@ -11,6 +12,7 @@ export function useScheduler({ accessChecked, setToolbarInfo, setToolbarError, o
   const { guardedFetch } = useAuthGuard();
   const [schedulerEnabled, setSchedulerEnabled] = useState<boolean | null>(null);
   const [busyAction, setBusyAction] = useState<string | null>(null);
+  const [syncReport, setSyncReport] = useState<DirectorySyncReport | null>(null);
 
   useEffect(() => {
     if (!accessChecked) return;
@@ -62,12 +64,30 @@ export function useScheduler({ accessChecked, setToolbarInfo, setToolbarError, o
       });
       const data = await res.json();
       if (!res.ok || !data.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
+      // El reporte deja de descartarse: lo consume el modal. Antes sólo se
+      // mostraban los contadores en el toast y los avisos se perdían.
+      setSyncReport(data.report ?? null);
       const counts = `C: ${data.consortiumsCount ?? 0} | P: ${data.providersCount ?? 0} | R: ${data.rubrosCount ?? 0}`;
       setToolbarInfo(`Directorio sincronizado. ${counts}`);
       onDirectorySynced();
     } catch (err) {
       setToolbarError(err instanceof Error ? err.message : "Error");
     } finally { setBusyAction(null); }
+  };
+
+  /**
+   * Aplica los renombres que el usuario tildó en el modal. Manda la lista exacta
+   * que se mostró en pantalla; el backend no re-deduce nada del archivo ALTA.
+   */
+  const applyRenames = async (renames: Array<{ entity: "consortium" | "provider"; id: string; to: string }>) => {
+    const res = await guardedFetch("/api/client/sync-directory/renames", {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ renames }),
+    });
+    const data = await res.json();
+    if (!res.ok || !data.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
+    setToolbarInfo(`${data.applied} renombre(s) aplicado(s).`);
+    setSyncReport(null);
+    onDirectorySynced();
   };
 
   const handleSyncPayments = async () => {
@@ -130,5 +150,6 @@ export function useScheduler({ accessChecked, setToolbarInfo, setToolbarError, o
     schedulerEnabled, busyAction,
     handleToggleScheduler, handleRunNow, handleSyncDirectory,
     handleSyncPayments, handleSetupSheetProtection, handleUnprotectSheet,
+    syncReport, closeSyncReport: () => setSyncReport(null), applyRenames,
   };
 }

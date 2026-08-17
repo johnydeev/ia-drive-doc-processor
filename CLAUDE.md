@@ -191,20 +191,45 @@ Client          → Tenant. Roles: ADMIN / CLIENT / VIEWER. consortiumsEnabled (
 4. Primera sincronización: si las hojas no existen se crean automáticamente con encabezados.
 5. El usuario carga datos y vuelve a sincronizar.
 ### Formato del archivo ALTA (5 hojas)
-| Hoja | Col A | Col B | Col C | Col D |
-|---|---|---|---|---|
-| `_Consorcios` | NOMBRE CANÓNICO | CUIT | NOMBRES ALTERNATIVOS (separado por `\|`, interno) | — |
-| `_Proveedores` | NOMBRE CANÓNICO | CUIT | NOMBRES ALTERNATIVOS (separado por `\|`, interno) | ALIAS (visible en UI) |
-| `_Rubros` | NOMBRE | DESCRIPCIÓN (opcional) | — | — |
-| `_Coeficientes` | NOMBRE | CÓDIGO | — | — |
-| `_LspServices` | NOMBRE CANÓNICO (consorcio) | PROVEEDOR (normalizado) | NRO CLIENTE | DESCRIPCIÓN (opcional) |
-### Estrategia de sync por entidad
-- **Rubro / Coeficiente / LspService**: reemplazo total (`deleteMany` + `createMany`).
-- **Consortium / Provider**: upsert + intento de delete de huérfanos. Si la FK falla → warning (no error fatal).
-- **LspService**: resuelve `consortiumId` buscando por `canonicalName` dentro del `clientId`. Si no encuentra → warning.
+| Hoja | Col A | Col B | Col C | Col D | Col E |
+|---|---|---|---|---|---|
+| `_Consorcios` | NOMBRE CANÓNICO | CUIT | NOMBRES ALTERNATIVOS (separado por `\|`, interno) | — | — |
+| `_Proveedores` | NOMBRE CANÓNICO | CUIT | NOMBRES ALTERNATIVOS (separado por `\|`, interno) | ALIAS (visible en UI) | TIPO: `PROVEEDOR` / `EMPLEADO` / `SERVICIO` |
+| `_Rubros` | NOMBRE | DESCRIPCIÓN (opcional) | — | — | — |
+| `_Coeficientes` | NOMBRE | CÓDIGO | — | — | — |
+| `_LspServices` | NOMBRE CANÓNICO (consorcio) | PROVEEDOR (normalizado) | NRO CLIENTE | DESCRIPCIÓN (opcional) | — |
+
+> **Columna TIPO** (`parseProviderType` en `src/lib/providerType.ts`): vacío o texto no reconocido →
+> `PROVEEDOR`. `SERVICIO` marca a las empresas de servicios (Edesur, AySA, Metrogas…) — un
+> `LspService` debería apuntar a un proveedor de ese tipo, y si no, el reporte del sync lo avisa (no
+> bloquea: el vínculo boleta↔servicio lo resuelve el pipeline por número de cliente).
+> `EMPLEADO` cambia comportamiento real: pago por el total en `PagosView` y "CUIL" en `InvoiceModal`.
+### Estrategia de sync por entidad (reescrita 2026-08-17)
+> **El ALTA manda sobre el directorio, no sobre los datos operativos.** El sync **NUNCA borra**.
+
+- **Las 5 entidades**: upsert por clave natural, conservando el `id`
+  (`Consortium(clientId,canonicalName)`, `Provider(clientId,canonicalName)`, `Rubro(clientId,name)`,
+  `Coeficiente(clientId,code)`, `LspService(consortiumId,providerName,clientNumber)`).
+- **Sobrantes** (en la base, no en la hoja): se reportan con su conteo de boletas. No se borran.
+  Antes se borraban en silencio: las relaciones hijas son `Cascade` y el `deleteMany` nunca lanzaba.
+- **Renombre por CUIT**: si una fila no existe por nombre pero su CUIT apunta a **exactamente un**
+  registro ausente de la hoja, se ofrece como renombre y **no se aplica hasta que el usuario lo
+  confirma en el modal**. Ese candidato NO se crea como alta (crearlo sería el duplicado). CUIT
+  ambiguo → se reporta y no se toca. Sólo aplica a Consortium y Provider (los que tienen CUIT).
+- **Rendimiento**: diff en memoria (sync de rutina = 0 updates) + un único
+  `UPDATE ... FROM (VALUES ...)` por entidad. Cada update lleva el valor final de **todas** las
+  columnas comparables — emitir sólo las modificadas escribiría `null` sobre el dato bueno de otra
+  fila del lote.
+- **LspService**: resuelve `consortiumId` por `canonicalName` dentro del `clientId`. Si no encuentra → warning.
 ### Archivos clave
+- `src/lib/directorySyncPlan.ts` → **tier 0 puro**: hoja + foto de la base → plan (creates / updates /
+  renames / orphans / ambiguous). Acá va toda la decisión; es lo que hace testeable al sync.
+- `src/lib/bulkUpdate.ts` → arma el `UPDATE ... FROM (VALUES ...)` parametrizado (`Prisma.sql`).
+- `src/services/directorySync.service.ts` → aplica el plan y arma el reporte; `applyRenames` para los
+  confirmados.
 - `src/services/googleSheets.service.ts` → método `readDirectory()`: lee las 5 hojas, auto-crea las faltantes, retorna `DirectoryData`.
-- `src/app/api/client/sync-directory/route.ts` → POST endpoint. Usa `resolveGoogleConfig(client)` para desencriptar la private key.
+- `src/app/api/client/sync-directory/route.ts` → POST endpoint (fino). Usa `resolveGoogleConfig(client)` para desencriptar la private key.
+- `src/app/api/client/sync-directory/renames/route.ts` → POST con la lista exacta de renombres confirmados.
 - `src/services/schedulerControl.service.ts` → propaga `lastDirectorySyncAt` en `toRuntimeState()`.
 ### Bug crítico resuelto
 Siempre usar `resolveGoogleConfig(client)` para construir el `GoogleSheetsService` del archivo ALTA.

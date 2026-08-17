@@ -48,6 +48,9 @@ enum PaymentType {
 enum ProviderType {
   PROVEEDOR
   EMPLEADO
+  /// Empresa de servicios (Edesur, AySA, Metrogas…). Es la que puede tener
+  /// LspService con número de cliente por consorcio.
+  SERVICIO
 }
 
 enum ObligationStatus {

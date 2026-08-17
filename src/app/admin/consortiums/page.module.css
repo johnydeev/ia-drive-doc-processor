@@ -1556,3 +1556,11 @@
 :global([data-theme="light"]) .bankDot[data-bank-color="violet"]  { --bank-accent: rgba(124,58,237,0.6);  --bank-bg: rgba(124,58,237,0.05); }
 :global([data-theme="light"]) .bankCard[data-bank-color="rose"],
 :global([data-theme="light"]) .bankDot[data-bank-color="rose"]    { --bank-accent: rgba(225,29,72,0.6);   --bank-bg: rgba(225,29,72,0.05); }
+
+.syncSummary {
+  list-style: none;
+  margin: 0 0 12px;
+  padding: 0;
+  font-size: 13px;
+  line-height: 1.7;
+}

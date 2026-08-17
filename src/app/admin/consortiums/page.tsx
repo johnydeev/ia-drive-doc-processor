@@ -27,6 +27,7 @@ import { useCloseAllModal } from "./hooks/useCloseAllModal";
 import { CloseAllModal } from "./components/CloseAllModal";
 import { useUnassignedModal } from "./hooks/useUnassignedModal";
 import { UnassignedModal } from "./components/UnassignedModal";
+import { DirectorySyncModal } from "./components/DirectorySyncModal";
 import { useSession } from "./hooks/useSession";
 import { useTheme } from "./hooks/useTheme";
 import { useToolbarToast } from "./hooks/useToolbarToast";
@@ -177,6 +178,7 @@ export default function ConsortiumsPage() {
     schedulerEnabled, busyAction,
     handleToggleScheduler, handleRunNow, handleSyncDirectory,
     handleSyncPayments, handleSetupSheetProtection, handleUnprotectSheet,
+    syncReport, closeSyncReport, applyRenames,
   } = useScheduler({
     accessChecked,
     setToolbarInfo, setToolbarError,
@@ -1024,6 +1026,14 @@ export default function ConsortiumsPage() {
           saving={consortium.saving}
           error={consortium.error}
           success={consortium.success}
+        />
+      )}
+
+      {syncReport && (
+        <DirectorySyncModal
+          report={syncReport}
+          onClose={closeSyncReport}
+          onApplyRenames={applyRenames}
         />
       )}
 

@@ -1,6 +1,7 @@
 import { google, sheets_v4 } from "googleapis";
 import { env } from "@/config/env";
 import { buildBusinessKeyParts, buildBusinessKeyString, normalizeBusinessAmount } from "@/lib/businessKey";
+import { parseProviderType, type ProviderTypeValue } from "@/lib/providerType";
 import { ClientGoogleConfig } from "@/types/client.types";
 import { ExtractedDocumentData } from "@/types/extractedDocument.types";
 
@@ -128,7 +129,7 @@ export interface DirectoryData {
   // Los consorcios NO traen alias: el alias bancario del consorcio se carga por UI
   // (sección Banco del modal de Configuración), no por el archivo ALTA.
   consortiums: { canonicalName: string; cuit: string | null; matchNames: string | null }[];
-  providers: { canonicalName: string; cuit: string | null; matchNames: string | null; paymentAlias: string | null; providerType: "PROVEEDOR" | "EMPLEADO" }[];
+  providers: { canonicalName: string; cuit: string | null; matchNames: string | null; paymentAlias: string | null; providerType: ProviderTypeValue }[];
   rubros: { name: string; description: string | null }[];
   coeficientes: { code: string; name: string }[];
   lspServices: { consortiumName: string; provider: string; clientNumber: string; description: string | null }[];
@@ -418,16 +419,13 @@ export class GoogleSheetsService {
         .filter((c) => c.canonicalName),
 
       providers: providerRows
-        .map((row) => {
-          const providerTypeRaw = (row[4] as string | undefined)?.trim().toUpperCase();
-          return {
-            canonicalName: row[0]?.toString().trim().toUpperCase() ?? "",
-            cuit: row[1]?.toString().trim() || null,
-            matchNames: row[2]?.toString().trim() || null,
-            paymentAlias: row[3]?.toString().trim() || null,
-            providerType: providerTypeRaw === "EMPLEADO" ? ("EMPLEADO" as const) : ("PROVEEDOR" as const),
-          };
-        })
+        .map((row) => ({
+          canonicalName: row[0]?.toString().trim().toUpperCase() ?? "",
+          cuit: row[1]?.toString().trim() || null,
+          matchNames: row[2]?.toString().trim() || null,
+          paymentAlias: row[3]?.toString().trim() || null,
+          providerType: parseProviderType(row[4] as string | undefined),
+        }))
         .filter((p) => p.canonicalName),
 
       rubros: rubroRows

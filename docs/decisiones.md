@@ -4,6 +4,155 @@ Registro de decisiones tomadas ante problemas reales encontrados en producción.
 
 ---
 
+## 2026-08-17 — `SERVICIO` en `ProviderType`: el catálogo distingue a las empresas de servicios
+
+**Problema:** `ProviderType` tenía dos valores, `PROVEEDOR` y `EMPLEADO`. No había forma de decir que
+un proveedor es una **empresa de servicios** (Edesur, AySA, Metrogas, Naturgy, Camuzzi, Litoral Gas,
+Edenor, Personal) — una categoría con reglas propias en todo el resto del sistema: prompt específico
+por empresa, extracción limitada a la primera página, y `LspService` con número de cliente por
+consorcio. Un `LspService` podía apuntar a cualquier `Provider` sin que nada lo cuestionara.
+
+### Decisión: un tercer valor del enum, no un booleano
+
+Un `isService` en paralelo a `providerType` crearía dos fuentes de verdad que pueden contradecirse
+(un `EMPLEADO` marcado como servicio). Las tres categorías son excluyentes, así que son un enum.
+
+### Decisión: la hoja ALTA es la fuente de verdad, con lo que eso implica
+
+Mismo principio que el sync de directorio del mismo día: el ALTA manda sobre el directorio. La
+columna E ("TIPO") de `_Proveedores` ya existía y ya se leía; sólo se le agregó el valor.
+
+**Consecuencia asumida:** el owner tiene que escribir `SERVICIO` en esa columna. Si no lo hace, el
+próximo sync devuelve esos proveedores a `PROVEEDOR` y el reporte lo avisa. Es el comportamiento
+correcto, no un efecto colateral.
+
+**Descartado — derivar el tipo de si tiene `LspService`:** no habría nada que cargar a mano y sería
+imposible desincronizar, pero introduce un campo que la hoja no controla y vuelve la validación
+redundante: nunca podría fallar. **Descartado — que la celda vacía no pise el valor actual:** haría
+que una columna vacía signifique dos cosas distintas según el estado previo, y volvería el campo
+imposible de revertir desde la hoja.
+
+### Decisión: dos migraciones, no una
+
+Postgres rechaza usar un valor de enum dentro de la misma transacción que lo agregó
+(`unsafe use of new value of enum type`) y Prisma corre cada migración en una transacción. Entonces
+`20260817000000_provider_type_servicio` sólo hace el `ALTER TYPE ... ADD VALUE`, y
+`20260817000100_backfill_provider_type_servicio` marca como `SERVICIO` a los proveedores que ya
+tienen al menos un `LspService`. El backfill deja el estado correcto desde el arranque, sin depender
+de que la hoja se actualice primero.
+
+### Decisión: la validación avisa, no bloquea
+
+Si un `LspService` apunta a un proveedor que no es `SERVICIO`, el reporte del sync lo dice y sigue.
+Bloquear dejaría servicios sin cargar por un dato de catalogación, y un servicio que no se crea deja
+boletas sin vincular — bastante peor que un catálogo desactualizado. Además el tipo **no condiciona**
+el vínculo con la boleta: eso lo resuelve el pipeline por el número de cliente que extrae del PDF.
+
+### Lo que este cambio NO resuelve
+
+**No habría evitado las 70 boletas desvinculadas** del fix del sync. Aquello se arregló conservando
+el `id` en el upsert. Tampoco cambia cómo el pipeline detecta que una boleta es de una empresa de
+servicios: eso sigue siendo `identifyLSPProvider()` sobre el texto del PDF.
+
+### Impacto
+
+`parseProviderType` (`src/lib/providerType.ts`) saca de `readDirectory` un ternario que no tenía
+tests y cubre los cuatro casos, con sesgo conservador: celda vacía o texto no reconocido caen a
+`PROVEEDOR`. Los consumidores actuales preguntan por `EMPLEADO`, así que `SERVICIO` cae en la rama de
+proveedor común — se paga parcial y muestra CUIT, no CUIL — y hay tests que lo fijan. **+9 tests**
+(627 → 636). Sin cambios de UI.
+
+---
+
+## 2026-08-17 — El sync de directorio deja de borrar: el ALTA manda sobre el directorio, no sobre los datos
+
+**Problema:** el consorcio `FRIAS 320` estaba mal cargado — el edificio es `FRIAS 324`. Corregir el
+nombre en el archivo ALTA parecía lo natural, pero habría destruido el historial del edificio.
+
+Tres defectos, todos con la misma causa: el sync trataba al ALTA como fuente de verdad de todo.
+
+### 1. El `try/catch` de huérfanos no protegía nada
+
+El endpoint borraba lo que estaba en la base y no en la hoja, con un `catch` que prometía el aviso
+*"no pudieron eliminarse porque tienen boletas asociadas"*. **Ese mensaje no podía aparecer nunca.**
+Todas las relaciones hijas de `Consortium` son `onDelete: Cascade` (`Period`, `FixedExpense`,
+`ExpenseObligation`, `LspService`, `ConsortiumProvider`, `Receipt`), así que el `deleteMany` no lanza:
+Postgres borra en cascada y devuelve éxito. `Invoice` es `SetNull`, de modo que las boletas sobrevivían
+huérfanas, sin consorcio ni período. `Provider` tenía el mismo agujero y el mismo `catch` inútil.
+
+En el caso FRIAS: 6 períodos borrados y 37 boletas colgando, sin un solo error visible.
+
+Agravantes: el panel **no tiene** borrado de consorcios (`/api/client/consortiums/[id]` sólo expone
+`GET` y `PATCH`), así que el warning remitía a una función inexistente; y la UI descartaba los
+`warnings` — `useScheduler` sólo mostraba contadores en el toast.
+
+**Decisión: el sync no borra.** Lo que está en la base y no en la hoja se reporta con cuántas boletas
+tiene colgando y se queda. Un edificio que se va de la administración conserva su historial para
+rendiciones y auditoría; las bajas reales son raras y se resuelven aparte.
+
+**Descartado:** borrar sólo si el registro está vacío (automatiza un caso que casi no ocurre y deja
+viva la clase de bug) y borrar con preview (convierte el sync en un flujo de dos pasos para lo mismo).
+
+### 2. El reemplazo total desvinculaba boletas
+
+`Rubro`, `Coeficiente` y `LspService` se sincronizaban con `deleteMany` + `createMany`. Los registros
+recreados eran idénticos en contenido pero con `id` nuevo, y por `onDelete: SetNull` todo lo que los
+apuntaba quedaba en null.
+
+Medido en producción: **1054 boletas, 70 de empresas de servicios** (Edesur 26, Metrogas 21, AySA 18,
+Edenor 5) y **ninguna con `lspServiceId`**. Sin ese campo se pierde a qué cuenta pertenece la boleta:
+FRIAS tiene dos servicios de Edesur (1061158 y 1061133 / GITMAN MOISES). Lo mismo explicaba que no
+hubiera ningún `FixedExpense` ligado a un LSP: cuelgan con `Cascade`.
+
+**Decisión: upsert por clave natural, conservando el `id`.** Las cinco claves ya existían como
+`@@unique`. Si el registro no se destruye, nada queda apuntando al vacío.
+
+### 3. El sync rozaba el timeout del túnel
+
+119,9 s medidos (46 consorcios 23,9 s · **176 proveedores 84,7 s** · 59 servicios 2,9 s), contra los
+100 s de Cloudflare. Son ~500 ms por registro: los `Promise.all` de `tx.update` **no paralelizan**,
+porque dentro de una transacción interactiva de Prisma todas las queries van por la misma conexión.
+El contraste estaba a la vista: los LspServices, con `createMany`, hacían 59 registros en 2,9 s.
+
+**Decisión: diff en memoria + un único `UPDATE ... FROM (VALUES ...)`.** El plan compara campo por
+campo y descarta lo idéntico — en un sync de rutina no se ejecuta ni un update. Lo que cambió se
+escribe en una sola query por entidad (`lib/bulkUpdate.ts`, parametrizado con `Prisma.sql`).
+
+Un camino solo, no dos: mantener updates individuales para los lotes chicos habría dejado el timeout
+vivo para el día que se editen 176 filas de golpe.
+
+**Detalle que importa:** cada update lleva el valor final de **todas** las columnas comparables, no
+sólo el de las que cambiaron. Un único `UPDATE` escribe el mismo juego de columnas para todo el lote;
+si una fila no aportara valor para alguna, se escribiría `null` sobre el dato bueno. Hay un test que
+lo blinda ("en un lote mixto, cada update conserva el valor de la columna que no cambió").
+
+### El renombre se detecta por CUIT, pero lo confirma el usuario
+
+Con upsert por nombre, cambiar el nombre en el ALTA crea un registro nuevo y deja el viejo como
+sobrante. Se detecta el caso comparando CUIT, con tres guardas: el nombre no existe, el CUIT no está
+vacío y matchea a **exactamente uno**, y ese registro **no aparece por nombre** en otra fila de la
+hoja. Si matchea a varios, se reporta como ambiguo y no se toca nada.
+
+**Decisión del owner: no se aplica solo.** El sync deja los candidatos en suspenso — no renombra y
+**tampoco crea el registro nuevo**, porque crearlo es lo que produce el duplicado — y la UI muestra
+un modal con `FRIAS 320 → FRIAS 324`, el CUIT que los emparejó y cuántas boletas y períodos hay en
+juego, con un checkbox por fila. El motivo: que un error en la hoja no dispare un renombre masivo sin
+que nadie lo vea.
+
+La aplicación va por un endpoint aparte que **recibe la lista exacta** que se mostró en pantalla y no
+re-deriva nada del ALTA: idempotente, y no puede tocar lo que el usuario no vio. Además suma el
+nombre viejo a `matchNames`, para que las boletas que traigan impreso el anterior sigan matcheando —
+exactamente lo que se hizo a mano con FRIAS.
+
+### Impacto
+
+`sync-directory/route.ts` pasa de ~350 líneas con todo mezclado a ~100 de auth y configuración. La
+decisión vive en `lib/directorySyncPlan.ts`, puro y sin red, que era la condición para poder testear:
+el endpoint tenía **cero tests**, como todos los route handlers del proyecto. **+34 tests** (591 → 625).
+Sin migración.
+
+---
+
 ## 2026-08-12 — Arrastre de boletas impagas: el mes de origen conserva la evidencia
 
 **Problema:** hay meses en que no entran los pagos de las expensas y una boleta de gasto fijo que

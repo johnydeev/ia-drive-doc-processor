@@ -1,6 +1,75 @@
 # Progreso del proyecto — drive-doc-processor
 
-Actualizado al 12/08/2026 (sesión 55 — vista global de obligaciones: Partes 1, 2 y arrastre de impagas).
+Actualizado al 17/08/2026 (sesión 56 — el sync de directorio deja de borrar + rendimiento + `SERVICIO`).
+
+## 🏷️ `SERVICIO` en `ProviderType` (2026-08-17)
+
+**Estado: implementado y verificado (typecheck + lint 0 errores + 636 tests + build + build:jobs OK).
+Migraciones `20260817000000_provider_type_servicio` y `20260817000100_backfill_provider_type_servicio`
+**YA APLICADAS** por el owner (37 migraciones, cliente 6.19.2 regenerado). Sin commitear.**
+
+Spec: `docs/superpowers/specs/2026-08-17-provider-type-servicio-design.md`
+Plan: `docs/superpowers/plans/2026-08-17-provider-type-servicio.md`
+
+Origen: el catálogo no distinguía a las empresas de servicios de los proveedores comunes, así que un
+`LspService` podía apuntar a cualquier `Provider` sin que nada lo cuestionara.
+
+Hecho:
+- **Tercer valor del enum**, cargado desde la columna E ("TIPO") de `_Proveedores`, que ya existía y
+  ya se leía. **Dos migraciones**: el `ADD VALUE` va solo, porque Postgres no deja usar un valor de
+  enum en la misma transacción que lo creó; el backfill marca a los que ya tienen servicios.
+- **`parseProviderType`** (`src/lib/providerType.ts`) saca de `readDirectory` un ternario sin tests.
+  Celda vacía o texto no reconocido caen a `PROVEEDOR`: un dato mal escrito no convierte un proveedor
+  en otra cosa.
+- **El sync avisa** cuando un servicio apunta a un proveedor que no es `SERVICIO`. **No bloquea** — el
+  vínculo con la boleta lo resuelve el pipeline por número de cliente, no el catálogo.
+- **`SERVICIO` cae en la rama de proveedor común** en `PagosView` (pago parcial) e `InvoiceModal`
+  (CUIT, no CUIL). Correcto por omisión, ahora fijado con tests. **+9 tests (627 → 636).**
+
+**⏳ Pendiente del owner:** **escribir `SERVICIO` en la columna E de `_Proveedores`** para Edesur,
+Edenor, AySA, Metrogas, Naturgy, Camuzzi, Litoral Gas y Personal, **antes del próximo sync**. El
+backfill ya los marcó en la base, pero la hoja es la fuente de verdad: si la columna queda vacía, el
+sync los devuelve a `PROVEEDOR` y el reporte muestra un aviso por cada uno.
+
+## 🛡️ Sync de directorio: sin borrado, con confirmación de renombres y sin timeout (2026-08-17)
+
+**Estado: implementado y verificado (typecheck + lint 0 errores + 625 tests + build + build:jobs OK).
+Sin migración. Sin commitear.**
+
+Spec: `docs/superpowers/specs/2026-08-17-sync-directory-sin-borrado-y-rendimiento-design.md`
+Plan: `docs/superpowers/plans/2026-08-17-sync-directory-sin-borrado-y-rendimiento.md`
+
+Origen: el edificio `FRIAS 320` estaba mal cargado (es `FRIAS 324`). Corregirlo en el archivo ALTA
+habría borrado **6 períodos** y dejado **37 boletas** huérfanas, en silencio. El renombre se terminó
+haciendo con un runbook manual de SQL; esta entrega hace que no vuelva a hacer falta.
+
+Hecho:
+- **El sync no borra.** Las cinco entidades pasan a upsert por su clave natural (todas ya tenían su
+  `@@unique`). Lo que está en la base y no en la hoja se **reporta** con cuántas boletas tiene
+  colgando, y se queda.
+- **Los servicios LSP conservan su `id`.** Antes se borraban y recreaban en cada sync, y por
+  `onDelete: SetNull` las boletas perdían `lspServiceId`: **70 boletas de servicios están hoy en
+  null**. De acá en adelante no se rompe más.
+- **Renombre por CUIT con confirmación.** Si una fila del ALTA no existe por nombre pero su CUIT
+  apunta a exactamente un registro ausente de la hoja, se ofrece como renombre en un modal
+  (`FRIAS 320 → FRIAS 324`, con el CUIT y los conteos) y **nada se aplica sin tildarlo**. Al aplicar,
+  el nombre viejo se suma a `matchNames`.
+- **De ~120 s a segundos.** Diff en memoria (un sync de rutina no ejecuta ni un update) + un único
+  `UPDATE ... FROM (VALUES ...)` por entidad. Los `Promise.all` de `tx.update` no paralelizaban: 176
+  proveedores eran 85 s de round-trips en serie.
+- **El endpoint pasa de 0 tests a tener su lógica en una función pura** (`lib/directorySyncPlan.ts`),
+  con las tres guardas del renombre y la regresión del `id` cubiertas. **+34 tests (591 → 625).**
+
+**Pendiente anotado, con decisión propia:** re-vincular las 70 boletas ya desvinculadas. El arreglo
+detiene la sangría pero no repara lo perdido, y `Invoice` no guarda el número de cliente: con el
+proveedor solo no se sabe a cuál de los dos servicios de Edesur de un edificio pertenece cada boleta.
+El dato está en la columna J de la hoja Datos y en el PDF. Script propio.
+
+**⏳ Pendiente del owner:** smoke visual — sincronizar y confirmar que aparece el modal con el resumen;
+sacar una fila del ALTA y verificar que se reporta como sobrante **sin borrarse**; cambiar el nombre
+de un edificio en la hoja y confirmar que ofrece el renombre en vez de duplicar, aplicarlo y ver que
+el `id` es el mismo y que el nombre viejo quedó en `matchNames`; cancelar en otro y verificar que no
+pasó nada. Medir de paso cuánto tarda ahora el sync.
 
 ## 💸 Arrastre de boletas impagas al mes siguiente (2026-08-12)
 

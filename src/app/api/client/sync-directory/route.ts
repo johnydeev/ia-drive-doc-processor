@@ -3,8 +3,21 @@ import { requireClientSession } from "@/lib/clientAuth";
 import { getPrismaClient } from "@/lib/prisma";
 import { GoogleSheetsService } from "@/services/googleSheets.service";
 import { resolveGoogleConfig } from "@/lib/clientProcessingConfig";
-import { formatCuit } from "@/lib/cuit";
+import type { ProcessingClient } from "@/types/client.types";
+import { syncDirectory } from "@/services/directorySync.service";
 
+/**
+ * Sincroniza el directorio (edificios, proveedores, rubros, coeficientes y
+ * servicios) desde el archivo ALTA de Google Sheets.
+ *
+ * La decisión de qué crear, actualizar o reportar vive en `directorySyncPlan.ts`
+ * (puro) y la aplicación en `directorySync.service.ts`. Acá sólo queda la
+ * autenticación, la configuración de Google y la respuesta.
+ *
+ * El sync NO borra: lo que está en la base y no en la hoja se informa en el
+ * reporte. Los renombres detectados por CUIT quedan pendientes de confirmación
+ * del usuario y se aplican desde `sync-directory/renames`.
+ */
 export async function POST(request: NextRequest) {
   const auth = await requireClientSession(request);
   if (auth.error) return auth.error;
@@ -16,7 +29,6 @@ export async function POST(request: NextRequest) {
     console.log(`[sync-directory] Iniciando sincronización — clientId=${clientId}`);
 
     const prisma = getPrismaClient();
-
     const client = await prisma.client.findUnique({ where: { id: clientId } });
     if (!client) {
       return NextResponse.json({ ok: false, error: "Cliente no encontrado" }, { status: 404 });
@@ -24,7 +36,6 @@ export async function POST(request: NextRequest) {
 
     const rawConfig = client.googleConfigJson as Record<string, unknown> | null;
     const altaSheetsId = rawConfig?.altaSheetsId as string | undefined;
-
     if (!altaSheetsId) {
       return NextResponse.json(
         {
@@ -37,334 +48,43 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // resolveGoogleConfig desencripta la private key correctamente
-    const googleConfig = resolveGoogleConfig(client as any);
+    // resolveGoogleConfig desencripta la private key. Nunca usar la del JSON crudo.
+    // El cast salva la diferencia entre los JsonValue de Prisma y los tipos
+    // estructurados de ProcessingClient; resolveGoogleConfig valida el contenido.
+    const googleConfig = resolveGoogleConfig(client as unknown as ProcessingClient);
     if (!googleConfig) {
-      return NextResponse.json(
-        { ok: false, error: "Credenciales de Google incompletas" },
-        { status: 400 }
-      );
+      return NextResponse.json({ ok: false, error: "Credenciales de Google incompletas" }, { status: 400 });
     }
 
-    // Usar las mismas credenciales pero apuntando al archivo ALTA
     const altaService = new GoogleSheetsService({ ...googleConfig, sheetsId: altaSheetsId });
-
     const directory = await altaService.readDirectory();
-    console.log(`[sync-directory] Directorio leído — consorcios=${directory.consortiums.length} proveedores=${directory.providers.length} rubros=${directory.rubros.length} coeficientes=${directory.coeficientes.length} lspServices=${directory.lspServices.length}`);
+    console.log(
+      `[sync-directory] Directorio leído — consorcios=${directory.consortiums.length} proveedores=${directory.providers.length} rubros=${directory.rubros.length} coeficientes=${directory.coeficientes.length} lspServices=${directory.lspServices.length}`
+    );
 
-    const warnings: string[] = [...directory.warnings];
+    const report = await syncDirectory(prisma, clientId, directory);
 
     const syncedAt = new Date();
-
-    // timeout: 120s para evitar "Transaction already closed" con lotes grandes
-    // de proveedores/consorcios (50+ registros con updates en paralelo).
-    const txOpts = { maxWait: 10000, timeout: 120000 };
-
-    // Transacción 1: Rubros (reemplazo total)
-    const t1 = Date.now();
-    console.log(`[sync-directory] → Sincronizando Rubros (${directory.rubros.length})...`);
-    await prisma.$transaction(async (tx) => {
-      await tx.rubro.deleteMany({ where: { clientId } });
-      if (directory.rubros.length > 0) {
-        await tx.rubro.createMany({
-          data: directory.rubros.map((r) => ({
-            clientId,
-            name: r.name,
-            description: r.description,
-          })),
-        });
-      }
-    }, txOpts);
-    console.log(`[sync-directory] ✓ Rubros completado (${Date.now() - t1}ms)`);
-
-    // Transacción 2: Coeficientes (reemplazo total)
-    const t2 = Date.now();
-    console.log(`[sync-directory] → Sincronizando Coeficientes (${directory.coeficientes.length})...`);
-    await prisma.$transaction(async (tx) => {
-      await tx.coeficiente.deleteMany({ where: { clientId } });
-      if (directory.coeficientes.length > 0) {
-        await tx.coeficiente.createMany({
-          data: directory.coeficientes.map((c) => ({
-            clientId,
-            code: c.code,
-            name: c.name,
-          })),
-        });
-      }
-    }, txOpts);
-    console.log(`[sync-directory] ✓ Coeficientes completado (${Date.now() - t2}ms)`);
-
-    // Transacción 3: Consorcios + Períodos
-    const t3 = Date.now();
-    console.log(`[sync-directory] → Sincronizando Consorcios (${directory.consortiums.length})...`);
-    await prisma.$transaction(async (tx) => {
-      // Cargar consorcios existentes en memoria
-      const existingConsortiums = await tx.consortium.findMany({
-        where: { clientId },
-        select: { id: true, canonicalName: true },
-      });
-      const existingConsortiumMap = new Map(existingConsortiums.map((c) => [c.canonicalName, c.id]));
-
-      // Separar nuevos vs existentes
-      const newConsortiums = directory.consortiums.filter(c => !existingConsortiumMap.has(c.canonicalName));
-      const existingToUpdate = directory.consortiums.filter(c => existingConsortiumMap.has(c.canonicalName));
-
-      // Crear nuevos en batch. CUIT siempre al formato canónico XX-XXXXXXXX-X
-      // (las planillas suelen traerlo sin guiones; la DB lo guarda con guiones).
-      if (newConsortiums.length > 0) {
-        await tx.consortium.createMany({
-          data: newConsortiums.map(c => ({
-            clientId,
-            canonicalName: c.canonicalName,
-            rawName: c.canonicalName,
-            cuit: formatCuit(c.cuit) ?? c.cuit,
-            matchNames: c.matchNames,
-          })),
-        });
-      }
-
-      // Actualizar existentes en paralelo
-      await Promise.all(existingToUpdate.map(c =>
-        tx.consortium.update({
-          where: { id: existingConsortiumMap.get(c.canonicalName)! },
-          // Sin alias: el alias bancario del consorcio se edita por UI y el sync no lo pisa.
-          data: { cuit: formatCuit(c.cuit) ?? c.cuit, matchNames: c.matchNames },
-        })
-      ));
-
-      // Crear período activo para consorcios nuevos que no tengan uno
-      const allConsortiumsAfterUpsert = await tx.consortium.findMany({
-        where: { clientId },
-        select: { id: true, canonicalName: true },
-      });
-      const existingPeriods = await tx.period.findMany({
-        where: { consortiumId: { in: allConsortiumsAfterUpsert.map((c) => c.id) }, status: "ACTIVE" },
-        select: { consortiumId: true },
-      });
-      const consWithPeriod = new Set(existingPeriods.map((p) => p.consortiumId));
-      const consWithoutPeriod = allConsortiumsAfterUpsert.filter((c) => !consWithPeriod.has(c.id));
-
-      if (consWithoutPeriod.length > 0) {
-        const activePeriods = await tx.period.findMany({
-          where: { consortium: { clientId }, status: "ACTIVE" },
-          select: { year: true, month: true },
-        });
-
-        let periodYear: number;
-        let periodMonth: number;
-
-        if (activePeriods.length === 0) {
-          const now = new Date();
-          periodYear = now.getFullYear();
-          periodMonth = now.getMonth() + 1;
-        } else {
-          const freq = new Map<string, number>();
-          for (const p of activePeriods) {
-            const key = `${p.year}-${p.month}`;
-            freq.set(key, (freq.get(key) ?? 0) + 1);
-          }
-          let majorityKey = "";
-          let majorityCount = 0;
-          for (const [key, count] of freq) {
-            if (count > majorityCount) { majorityKey = key; majorityCount = count; }
-          }
-          const [y, m] = majorityKey.split("-").map(Number);
-          periodYear = y;
-          periodMonth = m;
-        }
-
-        await tx.period.createMany({
-          data: consWithoutPeriod.map((c) => ({
-            clientId,
-            consortiumId: c.id,
-            year: periodYear,
-            month: periodMonth,
-            status: "ACTIVE" as const,
-          })),
-        });
-      }
-
-      // Eliminar huérfanos
-      const sheetsConsortiumNames = new Set(directory.consortiums.map((c) => c.canonicalName));
-      const orphanConsortiumIds = allConsortiumsAfterUpsert
-        .filter((c) => !sheetsConsortiumNames.has(c.canonicalName))
-        .map((c) => c.id);
-
-      if (orphanConsortiumIds.length > 0) {
-        try {
-          await tx.consortium.deleteMany({ where: { id: { in: orphanConsortiumIds } } });
-        } catch {
-          warnings.push(
-            `${orphanConsortiumIds.length} consorcio(s) no pudieron eliminarse porque tienen boletas asociadas. Eliminalos manualmente desde el panel.`
-          );
-        }
-      }
-    }, txOpts);
-    console.log(`[sync-directory] ✓ Consorcios completado (${Date.now() - t3}ms)`);
-
-    // Transacción 4: Proveedores
-    const t4 = Date.now();
-    console.log(`[sync-directory] → Sincronizando Proveedores (${directory.providers.length})...`);
-    await prisma.$transaction(async (tx) => {
-      // Cargar proveedores existentes en memoria
-      const existingProviders = await tx.provider.findMany({
-        where: { clientId },
-        select: { id: true, canonicalName: true },
-      });
-      const existingProviderMap = new Map(existingProviders.map((p) => [p.canonicalName, p.id]));
-
-      // Separar nuevos vs existentes
-      const newProviders = directory.providers.filter(p => !existingProviderMap.has(p.canonicalName));
-      const existingProvidersToUpdate = directory.providers.filter(p => existingProviderMap.has(p.canonicalName));
-
-      // Crear nuevos en batch (CUIT al formato canónico, ver consorcios arriba)
-      if (newProviders.length > 0) {
-        await tx.provider.createMany({
-          data: newProviders.map(p => ({
-            clientId,
-            canonicalName: p.canonicalName,
-            cuit: formatCuit(p.cuit) ?? p.cuit,
-            matchNames: p.matchNames,
-            paymentAlias: p.paymentAlias,
-            providerType: p.providerType,
-          })),
-        });
-      }
-
-      // Actualizar existentes en paralelo
-      await Promise.all(existingProvidersToUpdate.map(p =>
-        tx.provider.update({
-          where: { id: existingProviderMap.get(p.canonicalName)! },
-          data: { cuit: formatCuit(p.cuit) ?? p.cuit, matchNames: p.matchNames, paymentAlias: p.paymentAlias, providerType: p.providerType },
-        })
-      ));
-
-      // Eliminar huérfanos
-      const sheetsProviderNames = new Set(directory.providers.map((p) => p.canonicalName));
-      const orphanProviderIds = existingProviders
-        .filter((p) => !sheetsProviderNames.has(p.canonicalName))
-        .map((p) => p.id);
-
-      if (orphanProviderIds.length > 0) {
-        try {
-          await tx.provider.deleteMany({ where: { id: { in: orphanProviderIds } } });
-        } catch {
-          warnings.push(
-            `${orphanProviderIds.length} proveedor(es) no pudieron eliminarse porque tienen boletas asociadas. Eliminalos manualmente desde el panel.`
-          );
-        }
-      }
-    }, txOpts);
-    console.log(`[sync-directory] ✓ Proveedores completado (${Date.now() - t4}ms)`);
-
-    // Transacción 5: LspServices (reemplazo total)
-    const t5 = Date.now();
-    console.log(`[sync-directory] → Sincronizando LspServices (${directory.lspServices.length})...`);
-    await prisma.$transaction(async (tx) => {
-      if (directory.lspServices.length > 0) {
-        await tx.lspService.deleteMany({ where: { clientId } });
-
-        const currentConsortiums = await tx.consortium.findMany({
-          where: { clientId },
-          select: { id: true, canonicalName: true },
-        });
-        const consortiumMap = new Map(currentConsortiums.map((c) => [c.canonicalName, c.id]));
-
-        const currentProviders = await tx.provider.findMany({
-          where: { clientId },
-          select: { id: true, canonicalName: true },
-        });
-        const providerMap = new Map(currentProviders.map((p) => [p.canonicalName.toUpperCase(), p.id]));
-
-        const validLspServices: Array<{
-          clientId: string;
-          consortiumId: string;
-          providerName: string;
-          providerId: string | null;
-          clientNumber: string;
-          description: string | null;
-        }> = [];
-
-        for (const ls of directory.lspServices) {
-          const consortiumId = consortiumMap.get(ls.consortiumName);
-          if (!consortiumId) {
-            warnings.push(
-              `LspService ignorado: consorcio "${ls.consortiumName}" no encontrado para proveedor ${ls.provider} nro ${ls.clientNumber}`
-            );
-            continue;
-          }
-          const providerId = providerMap.get(ls.provider.toUpperCase()) ?? null;
-          if (!providerId) {
-            console.warn(`[sync-directory] Provider no encontrado para LspService: ${ls.provider}`);
-          }
-          validLspServices.push({
-            clientId,
-            consortiumId,
-            providerName: ls.provider,
-            providerId,
-            clientNumber: ls.clientNumber.replace(/\s+/g, "").replace(/^0+/, "") || ls.clientNumber,
-            description: ls.description,
-          });
-        }
-
-        if (validLspServices.length > 0) {
-          await tx.lspService.createMany({ data: validLspServices });
-        }
-      } else {
-        await tx.lspService.deleteMany({ where: { clientId } });
-      }
-    }, txOpts);
-    console.log(`[sync-directory] ✓ LspServices completado (${Date.now() - t5}ms)`);
-
-    // Resolver providerId NULL en registros históricos
-    const pendingLsp = await prisma.lspService.findMany({
-      where: { clientId, providerId: null },
-      select: { id: true, providerName: true },
-    });
-
-    if (pendingLsp.length > 0) {
-      console.log(`[sync-directory] → Resolviendo providerId NULL en ${pendingLsp.length} LspService(s) históricos...`);
-      let resolved = 0;
-      for (const lsp of pendingLsp) {
-        const p = await prisma.provider.findFirst({
-          where: { clientId, canonicalName: lsp.providerName },
-          select: { id: true },
-        });
-        if (p) {
-          await prisma.lspService.update({
-            where: { id: lsp.id },
-            data: { providerId: p.id },
-          });
-          resolved++;
-        }
-      }
-      if (resolved > 0) {
-        console.log(`[sync-directory] ✓ Resueltos ${resolved}/${pendingLsp.length} providerId históricos`);
-      }
-    }
-
-    // Guardar fecha de última sincronización
     await prisma.schedulerState.upsert({
       where: { clientId },
       update: { lastDirectorySyncAt: syncedAt },
       create: { clientId, lastDirectorySyncAt: syncedAt },
     });
 
-    const totalMs = Date.now() - startTime;
-    console.log(`[sync-directory] ✅ Sincronización completada en ${totalMs}ms — consorcios=${directory.consortiums.length} proveedores=${directory.providers.length} rubros=${directory.rubros.length} coeficientes=${directory.coeficientes.length} lspServices=${directory.lspServices.length}`);
-    if (warnings.length > 0) {
-      console.warn(`[sync-directory] ⚠️ Warnings: ${warnings.join(" | ")}`);
+    console.log(`[sync-directory] ✅ Completado en ${Date.now() - startTime}ms`);
+    if (report.warnings.length > 0) {
+      console.warn(`[sync-directory] ⚠️ Warnings: ${report.warnings.join(" | ")}`);
     }
 
     return NextResponse.json({
       ok: true,
+      report,
+      syncedAt,
       consortiumsCount: directory.consortiums.length,
       providersCount: directory.providers.length,
       rubrosCount: directory.rubros.length,
       coeficientesCount: directory.coeficientes.length,
       lspServicesCount: directory.lspServices.length,
-      syncedAt,
-      ...(warnings.length > 0 && { warnings }),
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Error al sincronizar";
@@ -373,8 +93,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json(
         {
           ok: false,
-          error:
-            "Sin permisos de lectura en el archivo ALTA. Compartilo con la cuenta de servicio de Google.",
+          error: "Sin permisos de lectura en el archivo ALTA. Compartilo con la cuenta de servicio de Google.",
         },
         { status: 403 }
       );
