@@ -6,7 +6,7 @@ Actualizado al 17/08/2026 (sesión 56 — el sync de directorio deja de borrar +
 
 **Estado: implementado y verificado (typecheck + lint 0 errores + 636 tests + build + build:jobs OK).
 Migraciones `20260817000000_provider_type_servicio` y `20260817000100_backfill_provider_type_servicio`
-**YA APLICADAS** por el owner (37 migraciones, cliente 6.19.2 regenerado). Sin commitear.**
+**YA APLICADAS** por el owner (37 migraciones, cliente 6.19.2 regenerado). Commiteado en `c4aa43f`.**
 
 Spec: `docs/superpowers/specs/2026-08-17-provider-type-servicio-design.md`
 Plan: `docs/superpowers/plans/2026-08-17-provider-type-servicio.md`
@@ -26,15 +26,29 @@ Hecho:
 - **`SERVICIO` cae en la rama de proveedor común** en `PagosView` (pago parcial) e `InvoiceModal`
   (CUIT, no CUIL). Correcto por omisión, ahora fijado con tests. **+9 tests (627 → 636).**
 
-**⏳ Pendiente del owner:** **escribir `SERVICIO` en la columna E de `_Proveedores`** para Edesur,
-Edenor, AySA, Metrogas, Naturgy, Camuzzi, Litoral Gas y Personal, **antes del próximo sync**. El
-backfill ya los marcó en la base, pero la hoja es la fuente de verdad: si la columna queda vacía, el
-sync los devuelve a `PROVEEDOR` y el reporte muestra un aviso por cada uno.
+**Columna E ya cargada por el owner** (2026-08-17) para los cinco proveedores que tienen servicios:
+EDESUR, METROGAS, AYSA, TELECOM ARGENTINA (Personal) y EDENOR.
+
+**Nota de campo — el sync corrido antes del deploy revirtió el backfill.** El owner sincronizó con la
+imagen vieja todavía en producción: el parseo anterior sólo entiende `EMPLEADO`, así que leyó
+`SERVICIO` de la hoja y lo mandó a `PROVEEDOR` en los cinco. También volvió a borrar y recrear los
+`LspService` (ids nuevos), sin pérdida porque las boletas ya estaban en `lspServiceId = null`. Nada
+estructural se perdió: 1054 boletas, ninguna sin consorcio ni sin período. **Se corrige solo con el
+primer sync posterior al deploy**, que es cuando el código nuevo lee bien la columna. Por eso ese
+primer sync va a mostrar proveedores actualizados; los de rutina deberían dar 0.
+
+**Consolidación de un CUIT duplicado (2026-08-17).** La revisión previa al sync encontró dos
+proveedores compartiendo `20-12311114-2` — la misma persona con el nombre invertido (`CARLOS ALBERTO
+RIOS` / `RIOS CARLOS ALBERTO`), con 4 y 1 boletas. Como el matching de proveedor es **sólo por CUIT**,
+el pipeline venía repartiendo las boletas entre los dos de forma no determinística. Se consolidó por
+SQL (reasignar `Invoice` y `Receipt` al que queda, después borrar) y se sacó la fila sobrante del
+ALTA. Con el código nuevo, un CUIT que matchea a más de un registro se reporta como **ambiguo** y no
+se toca.
 
 ## 🛡️ Sync de directorio: sin borrado, con confirmación de renombres y sin timeout (2026-08-17)
 
-**Estado: implementado y verificado (typecheck + lint 0 errores + 625 tests + build + build:jobs OK).
-Sin migración. Sin commitear.**
+**Estado: implementado y verificado (typecheck + lint 0 errores + 636 tests con la entrega de
+`SERVICIO` + build + build:jobs OK). Sin migración. Commiteado en `c4aa43f`.**
 
 Spec: `docs/superpowers/specs/2026-08-17-sync-directory-sin-borrado-y-rendimiento-design.md`
 Plan: `docs/superpowers/plans/2026-08-17-sync-directory-sin-borrado-y-rendimiento.md`
