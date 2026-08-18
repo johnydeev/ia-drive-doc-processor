@@ -588,6 +588,47 @@ ${BARCODE_TIGRE}`
     });
   });
 
+  describe("colector de diagnóstico (corrida selectiva)", () => {
+    it("entrega el diagnóstico completo de la boleta, con el texto que vio la IA", async () => {
+      const ctx = makeContext();
+      const onDiagnostics = vi.fn();
+      (ctx as unknown as { onDiagnostics: unknown }).onDiagnostics = onDiagnostics;
+      const summary = createBaseSummary(1);
+
+      await processDriveFile(makeFile(), asContext(ctx), summary);
+
+      expect(onDiagnostics).toHaveBeenCalledTimes(1);
+      expect(onDiagnostics.mock.calls[0][0]).toMatchObject({
+        fileId: "file-1",
+        fileName: "boleta.pdf",
+        result: "ok",
+        promptText: expect.stringContaining("30-65511651-2"),
+      });
+    });
+
+    it("se emite también cuando la boleta NO entra (es cuando más sirve)", async () => {
+      const ctx = makeContext();
+      ctx.providerRepository.findAllForMatching.mockResolvedValue([]);
+      const onDiagnostics = vi.fn();
+      (ctx as unknown as { onDiagnostics: unknown }).onDiagnostics = onDiagnostics;
+      const summary = createBaseSummary(1);
+
+      await processDriveFile(makeFile(), asContext(ctx), summary);
+
+      expect(onDiagnostics.mock.calls[0][0]).toMatchObject({ result: "unassigned" });
+    });
+
+    it("sin colector, el pipeline se comporta igual que antes", async () => {
+      const ctx = makeContext();
+      const summary = createBaseSummary(1);
+
+      await processDriveFile(makeFile(), asContext(ctx), summary);
+
+      expect(summary.processed).toBe(1);
+      expect(metricsCore().result).toBe("ok");
+    });
+  });
+
   describe("PDF escaneado (páginas imagen) → extracción por Gemini Vision", () => {
     /**
      * Instala un geminiModule cuyo `extractStructuredDataFromImage` devuelve `data`.

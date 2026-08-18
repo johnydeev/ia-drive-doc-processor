@@ -4,6 +4,70 @@ Registro de decisiones tomadas ante problemas reales encontrados en producción.
 
 ---
 
+## 2026-08-18 — La corrida selectiva encola: el worker nunca miró el flag del scheduler
+
+### Problema
+
+El owner pidió elegir a mano qué boletas procesar, con esta regla: "si el scheduler está apagado las
+corre; si está prendido y hay algo en curso, las encola en un lote aparte".
+
+### Decisión
+
+**Se encola siempre.** Los dos casos del pedido salen con un solo mecanismo, porque el worker **no
+depende del flag del scheduler**: es otro contenedor y su claim filtra solo por `status: "PENDING"`
+(`jobWorkerMain.ts:59`), cada 2 segundos. El toggle Pausar/Ejecutar solo detiene el **escaneo** de
+Drive, no el procesamiento de lo ya encolado — algo que no era evidente ni para el owner.
+
+Procesar dentro del request habría metido 10 boletas × ~8,5s ≈ 85s en una conexión que el túnel de
+Cloudflare corta a los 100s, con el agravante conocido: el corte **no detiene el proceso del
+servidor**, así que se ve un error mientras el trabajo sigue. Es el runaway de `close-all`
+(2026-08-06).
+
+**Sin prioridad en la cola** (decisión explícita del owner): los jobs manuales van al final. Con el
+scheduler apagado la cola suele estar vacía.
+
+### El diagnóstico: lo que ya existía y no se veía
+
+El pipeline emite una línea `[metrics]` por boleta en **todos** sus caminos de salida, con la
+información que hace falta para diagnosticar. Pero vive en el stdout del contenedor y los snapshots
+de lo extraído salen **solo con `debugMode`**. En la práctica, para entender por qué una boleta
+rebotó había que bajar el PDF a mano — que es exactamente lo que se hizo todo el día de hoy con los
+19 de Sin Asignar.
+
+Se agrega un seam opcional `onDiagnostics` en `ProcessingContext`, invocado en el mismo `finally` que
+emite las métricas. **Si no está definido, el pipeline se comporta exactamente como antes** — hay un
+test que lo fija. Solo el worker lo inyecta, y solo cuando el job trae `diagnosticRunId`.
+
+Se guarda el **texto exacto que se le mandó al modelo**. Sin eso no se puede distinguir un fallo del
+prompt de un fallo de la extracción de texto, que fue la distinción clave en los diagnósticos de hoy
+(GESTIONPRO vs. los `FB0004`).
+
+### Idempotencia del reporte sin columna extra
+
+El nombre del reporte lleva el id de la corrida y antes de subir se chequea si ya existe en Drive.
+Drive es la fuente de verdad de "ya se escribió", así que no hace falta un flag en la DB ni un claim
+atómico. Si la subida falla, se loguea y **no arrastra al procesamiento**, que ya terminó bien: el
+reporte es una ayuda, no parte del resultado.
+
+### Alternativas descartadas
+
+- **Procesar en el request cuando el scheduler está apagado** (el pedido literal). Riesgo de 524 y
+  runaway, sin ganancia: encolar procesa igual.
+- **Prioridad en la cola.** Requería otra columna y el owner la descartó.
+- **Un flag booleano en vez de `diagnosticRunId`.** El id agrupa los jobs de una corrida, que es lo
+  que permite consolidar un reporte por corrida y seguir su avance en el modal.
+- **Escribir un reporte por boleta.** Evita consolidar, pero llena Drive y pierde la vista de conjunto,
+  que es justo lo que sirve para comparar boletas entre sí.
+
+### Impacto
+
+Migración `20260818000000_processing_job_diagnostics` (dos columnas nullable en `ProcessingJob`).
+`lib/diagnosticsReport.ts` + `lib/manualRun.ts` (puros, 22 tests) ·
+`services/diagnosticsRun.service.ts` · seam en `pipeline/runner.ts` · `jobWorkerMain.ts` ·
+3 endpoints · `useManualRun` + `ManualRunModal`. 717 tests, verdes.
+
+---
+
 ## 2026-08-18 — El OCR aporta CUITs, no caracteres: la longitud era el criterio equivocado
 
 ### Problema

@@ -12,6 +12,7 @@ import { formatAliasesInline } from "@/lib/paymentAliases";
 import { safeDebugLog } from "@/lib/debugSanitize";
 import { accumulateTokenUsage } from "@/types/aiUsage.types";
 import { ExtractedDocumentData } from "@/types/extractedDocument.types";
+import type { BoletaDiagnostics } from "@/lib/diagnosticsReport";
 import { ProcessJobSummary } from "@/types/process.types";
 import { ClientGoogleConfig } from "@/types/client.types";
 import { ConsortiumRepository } from "@/repositories/consortium.repository";
@@ -96,6 +97,12 @@ export type ProcessingContext = {
   resolveStatementsFolders?: ResolveStatementsFolders;
   buildInvoiceFileName?: BuildInvoiceFileName;
   linkInvoiceToObligation?: LinkInvoiceToObligation;
+  /**
+   * Colector de diagnóstico de la corrida selectiva. Solo lo inyecta el worker
+   * cuando el job trae `diagnosticRunId`; en las corridas normales no existe y el
+   * pipeline se comporta exactamente igual que antes.
+   */
+  onDiagnostics?: (payload: BoletaDiagnostics) => void;
 };
 
 // Fuente única del mapping por defecto (ver clientProcessingConfig). Se re-exporta
@@ -177,7 +184,8 @@ function normalizeMatchMethod(m: string | null | undefined): string | null {
 
 async function createProcessingContext(
   config: ProcessJobConfig,
-  mapping: SheetsRowMapping
+  mapping: SheetsRowMapping,
+  onDiagnostics?: (payload: BoletaDiagnostics) => void
 ): Promise<ProcessingContext> {
   const driveService = new GoogleDriveService(config.googleConfig);
   const pdfExtractor = new PdfTextExtractorService();
@@ -220,6 +228,7 @@ async function createProcessingContext(
     geminiModule, aiChain,
     geminiApiKey, geminiModel,
     existingDuplicateKeys,
+    onDiagnostics,
   };
 }
 
@@ -1467,11 +1476,12 @@ export async function processPendingDocumentsJob(
 export async function processSingleDriveFileJob(
   config: ProcessJobConfig,
   file: ProcessDriveFileInput,
-  mapping?: SheetsRowMapping
+  mapping?: SheetsRowMapping,
+  onDiagnostics?: (payload: BoletaDiagnostics) => void
 ): Promise<ProcessJobSummary> {
   const resolvedConfig = normalizeConfig(config, mapping);
   const resolvedMapping = resolvedConfig.mapping ?? DEFAULT_MAPPING;
-  const context = await createProcessingContext(resolvedConfig, resolvedMapping);
+  const context = await createProcessingContext(resolvedConfig, resolvedMapping, onDiagnostics);
   const summary = createBaseSummary(1);
   summary.clientId = resolvedConfig.clientId;
   summary.clientName = resolvedConfig.clientName;

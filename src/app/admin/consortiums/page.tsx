@@ -39,6 +39,8 @@ import { useConsortiumConfig } from "./hooks/useConsortiumConfig";
 import { ConfigModal } from "./components/ConfigModal";
 import { useBanks } from "./hooks/useBanks";
 import { BanksModal } from "./components/BanksModal";
+import { ManualRunModal } from "./components/ManualRunModal";
+import { useManualRun } from "./hooks/useManualRun";
 import { BankGrid } from "./components/BankGrid";
 import { groupByBank, UNASSIGNED_BANK_ID } from "./lib/groupByBank";
 
@@ -94,6 +96,8 @@ export default function ConsortiumsPage() {
   // Catálogo de bancos + navegación de 2 niveles de la vista general:
   // nivel 0 = cards de banco, nivel 1 = grilla de edificios del banco elegido.
   const banks = useBanks();
+  const [manualRunOpen, setManualRunOpen] = useState(false);
+  const manualRun = useManualRun(manualRunOpen);
   const [selectedBankId, setSelectedBankId] = useState<string | null>(null);
 
   const fetchProviders = useCallback(async () => {
@@ -401,9 +405,9 @@ export default function ConsortiumsPage() {
           <button
             type="button"
             className={styles.navSidebarItem}
-            onClick={() => { handleRunNow(); setNavMobileOpen(false); }}
+            onClick={() => { setManualRunOpen(true); setNavMobileOpen(false); }}
             disabled={busyAction !== null}
-            title="Forzar una corrida inmediata del scheduler"
+            title="Elegir boletas de Pendientes y encolarlas con diagnóstico"
           >
             <span className={styles.navSidebarItemIcon}>⚡</span>
             {!navCollapsed && <span className={styles.navSidebarItemLabel}>Ejecutar ahora</span>}
@@ -961,6 +965,27 @@ export default function ConsortiumsPage() {
           onConfirmDelete={banks.setConfirmDeleteId}
           onEdit={banks.setEditingId}
           onClose={() => { banks.close(); void fetchConsortiums(); }}
+        />
+      )}
+
+      {/* ── Corrida selectiva: elegir boletas de Pendientes y encolarlas ──
+          Se ENCOLAN (las procesa el worker, que no mira el flag del scheduler) y
+          al terminar queda el reporte de diagnóstico en Drive. */}
+      {manualRunOpen && (
+        <ManualRunModal
+          files={manualRun.files}
+          selected={manualRun.selected}
+          loading={manualRun.loading}
+          error={manualRun.error}
+          max={manualRun.max}
+          runId={manualRun.runId}
+          progress={manualRun.progress}
+          done={manualRun.done}
+          report={manualRun.report}
+          onToggle={manualRun.toggle}
+          onEnqueue={manualRun.enqueue}
+          onReset={manualRun.reset}
+          onClose={() => { setManualRunOpen(false); manualRun.reset(); }}
         />
       )}
 

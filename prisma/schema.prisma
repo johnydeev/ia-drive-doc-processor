@@ -110,6 +110,12 @@ model ProcessingJob {
   attempts      Int       @default(0)
   maxAttempts   Int       @default(3)
   errorMessage  String?
+  /// Agrupa los jobs de una corrida selectiva (el owner eligió estas boletas a
+  /// mano). `null` = job normal encolado por el scheduler.
+  diagnosticRunId String?
+  /// Diagnóstico de esta boleta (métricas + extraído + texto que vio la IA). Solo
+  /// se llena en corridas selectivas; después se consolida en el reporte de Drive.
+  diagnosticsJson Json?
   createdAt     DateTime  @default(now())
   startedAt     DateTime?
   finishedAt    DateTime?
@@ -117,6 +123,7 @@ model ProcessingJob {
 
   @@index([clientId])
   @@index([status])
+  @@index([diagnosticRunId])
 }
 
 model Invoice {

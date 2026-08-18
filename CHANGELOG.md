@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Added
+- **Corrida selectiva de boletas con diagnóstico (2026-08-18)**. **Ejecutar ahora** ya no procesa todo
+  lo que haya en Pendientes: abre un modal donde se eligen hasta 10 boletas, se encolan y se sigue su
+  avance archivo por archivo. Las procesa el worker, que nunca dependió del flag del scheduler, así
+  que funciona igual con el scheduler prendido o apagado. Al terminar queda un reporte en
+  `Pendientes/_diagnosticos`: un JSON con el detalle de cada boleta —métricas, lo que extrajo la IA
+  antes y después de canonizar, y el texto exacto que se le mandó al modelo— y un `.md` con el
+  resumen. Requiere la migración `20260818000000_processing_job_diagnostics`.
+
 ### Fixed
 - **El texto del OCR ya no se descarta por ser más corto (2026-08-18)**. Las facturas con el cuerpo
   en texto y el membrete en imagen rebotaban por SIN PROVEEDOR aunque el proveedor estuviera cargado:

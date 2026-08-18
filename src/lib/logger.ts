@@ -197,6 +197,11 @@ export const workerLog = {
     log("warn", "worker", `Cliente inactivo para job ${shortId(jobId)} — "${clientName}"`);
   },
 
+  /** Corrida selectiva cerrada: el reporte de diagnóstico ya está en Drive. */
+  diagnosticsReportReady(runId: string, url: string | null) {
+    log("info", "worker", `📄 Reporte de diagnóstico listo (corrida ${runId}): ${url ?? "sin link"}`);
+  },
+
   unhandledError(jobId: string, error: string) {
     log("error", "worker", `Error no manejado en job ${shortId(jobId)}: ${error}`);
   },

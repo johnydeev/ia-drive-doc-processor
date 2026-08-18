@@ -2,6 +2,42 @@
 
 Actualizado al 18/08/2026 (sesión 57 — diagnóstico de las boletas rebotadas + Vision para PDFs escaneados + CUIT del código de barras AFIP).
 
+## 🎯 Corrida selectiva con diagnóstico (2026-08-18)
+
+**Estado: implementado y verificado (typecheck + lint 0 errores + 717 tests + build + build:jobs OK).
+Migración `20260818000000_processing_job_diagnostics` **YA APLICADA** por el owner. Sin commitear.**
+
+Diseño: `docs/superpowers/specs/2026-08-18-corrida-selectiva-diagnostico-design.md`
+
+Origen: el owner quería probar boletas puntuales en vez de que **Ejecutar ahora** procesara todo lo
+que hubiera en Pendientes, y guardar lo extraído para analizar fallas de extracción.
+
+Hecho:
+- **Modal nuevo** en **Ejecutar ahora**: lista los archivos de Pendientes con checkboxes (tope 10),
+  marcando los que ya tienen job en curso o boleta cargada. Después muestra el avance por archivo
+  (`en espera` → `procesando` → `lista`/`error`) y termina con el link al reporte.
+- **Se encola, no se procesa en el request.** El worker no depende del flag del scheduler (su claim
+  filtra solo por `status: "PENDING"`), así que encolar cubre los dos casos que pedía el owner con un
+  solo mecanismo. Procesar inline habría metido ~85s en un request que el túnel corta a los 100s.
+- **Reporte de diagnóstico en Drive**, solo en este modo: subcarpeta `_diagnosticos` dentro de
+  Pendientes, con un **JSON** (detalle completo) y un **`.md`** (resumen legible) por corrida.
+  Incluye, por boleta, las métricas del pipeline + lo extraído por la IA antes y después de canonizar
+  + **el texto exacto que se le mandó al modelo** — sin eso no se puede distinguir un fallo de prompt
+  de uno de extracción de texto.
+- **El seam `onDiagnostics`** se dispara en TODOS los caminos de salida, incluidos los que fallan
+  (que es cuando más sirve). Sin colector el pipeline se comporta idéntico a antes; tiene test.
+- El reporte es **idempotente sin columna extra**: el nombre lleva el id de la corrida y antes de
+  subir se chequea si ya existe. Si la subida falla, se loguea y **no arrastra al procesamiento**.
+
+Archivos: `lib/diagnosticsReport.ts` (12 tests) · `lib/manualRun.ts` (10 tests) ·
+`services/diagnosticsRun.service.ts` · seam en `pipeline/runner.ts` + `processPendingDocuments.job.ts`
+(3 tests) · `jobWorkerMain.ts` · 3 endpoints en `api/client/manual-run/` ·
+`hooks/useManualRun.ts` (7 tests) + `components/ManualRunModal.tsx`.
+
+**⏳ Pendiente del owner:** smoke — abrir el modal, elegir 2 o 3 boletas, verificar que se encolan y
+avanzan, y que al terminar aparece el reporte en `Pendientes/_diagnosticos` con el `.md` legible y el
+JSON con el texto de cada boleta.
+
 ## 🔎 El texto del OCR ya no se descarta por ser más corto (2026-08-18)
 
 **Estado: implementado y verificado (typecheck + lint 0 errores + 682 tests + build + build:jobs OK).

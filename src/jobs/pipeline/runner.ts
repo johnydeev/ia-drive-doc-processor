@@ -97,5 +97,26 @@ export async function runPipeline(steps: PipelineStep[], ctx: PipelineContext): 
       { extracted: m.extracted, canonical: m.canonical, reasonText: m.reasonText },
       !!resolvedConfig.debugMode
     );
+
+    // Corrida selectiva: además de loguear, se entrega el diagnóstico completo al
+    // colector para que termine en el reporte de Drive. Sin colector (todas las
+    // corridas normales) esto no existe y el pipeline se comporta igual que antes.
+    deps.onDiagnostics?.({
+      fileId: file.id,
+      fileName: file.name,
+      result: m.result,
+      reason: m.reason,
+      reasonText: m.reasonText,
+      textSource: m.textSource,
+      textChars: m.textChars,
+      emitterBlock: m.emitterBlock,
+      lsp: m.lsp,
+      ai: m.ai,
+      match: m.match,
+      ms: m.ms,
+      extracted: m.extracted,
+      canonical: m.canonical,
+      promptText: ctx.docText,
+    });
   }
 }

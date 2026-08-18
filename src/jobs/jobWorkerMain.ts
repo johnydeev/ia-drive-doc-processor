@@ -5,6 +5,8 @@ import { processSingleDriveFileJob } from "@/jobs/processPendingDocuments.job";
 import { getPrismaClient } from "@/lib/prisma";
 import { withDbRetry } from "@/lib/dbRetry";
 import { workerLog } from "@/lib/logger";
+import { DiagnosticsRunService } from "@/services/diagnosticsRun.service";
+import type { BoletaDiagnostics } from "@/lib/diagnosticsReport";
 import {
   resolveAiConfig,
   resolveGoogleConfig,
@@ -138,6 +140,8 @@ async function handleJob(job: {
   attempts: number;
   maxAttempts: number;
   startedAt: Date | null;
+  /** Corrida selectiva a la que pertenece este job (null = job del scheduler). */
+  diagnosticRunId: string | null;
 }): Promise<ProcessJobSummary | null> {
   const prisma = getPrismaClient();
 
@@ -178,6 +182,15 @@ async function handleJob(job: {
   let errorMessage: string | undefined;
   let summary: ProcessJobSummary | null = null;
 
+  // Corrida selectiva: se captura el diagnóstico de la boleta para el reporte de
+  // Drive. En los jobs normales del scheduler el colector no existe y el pipeline
+  // corre exactamente igual que siempre.
+  const diagnosticsService = job.diagnosticRunId ? new DiagnosticsRunService() : null;
+  let diagnostics: BoletaDiagnostics | null = null;
+  const onDiagnostics = diagnosticsService
+    ? (payload: BoletaDiagnostics) => { diagnostics = payload; }
+    : undefined;
+
   try {
     const sheetName = resolveSheetName(client);
     const mapping = resolveMapping(client);
@@ -205,7 +218,9 @@ async function handleJob(job: {
       {
         id: job.driveFileId,
         name: job.driveFileName ?? job.driveFileId,
-      }
+      },
+      undefined,
+      onDiagnostics
     );
 
     if (summary.failed > 0) {
@@ -216,7 +231,30 @@ async function handleJob(job: {
   }
 
   const success = summary !== null && summary.failed === 0;
+
+  // El diagnóstico se guarda ANTES de cerrar el job: así, cuando el último job de
+  // la corrida pase a COMPLETED, su dato ya está y el reporte sale completo.
+  if (diagnosticsService && diagnostics) {
+    try {
+      await diagnosticsService.saveJobDiagnostics(job.id, diagnostics);
+    } catch (error) {
+      workerLog.unhandledError(job.id, `No se pudo guardar el diagnóstico: ${errMessage(error)}`);
+    }
+  }
+
   await finalizeJob(job.id, job.driveFileName, job.attempts, job.maxAttempts, job.startedAt, success, errorMessage);
+
+  if (diagnosticsService && job.diagnosticRunId) {
+    const links = await diagnosticsService.finalizeIfComplete(
+      job.diagnosticRunId,
+      { id: client.id, name: client.name },
+      resolveGoogleConfig(client),
+      resolveFolders(client).pending
+    );
+    if (links) {
+      workerLog.diagnosticsReportReady(job.diagnosticRunId, links.markdownUrl ?? links.jsonUrl);
+    }
+  }
 
   // Circuit breaker de cuota IA: si la boleta se difirió por 429 en TODOS los
   // proveedores, pausar el ENCOLADO del cliente hasta el próximo reset de
