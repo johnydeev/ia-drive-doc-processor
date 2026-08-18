@@ -1,4 +1,5 @@
 import { PDFParse } from "pdf-parse";
+import { shouldMergeOcrText } from "@/lib/ocrMerge";
 
 export class PdfTextExtractorService {
   private static readonly MIN_USEFUL_CHARS = 100;
@@ -80,7 +81,7 @@ export class PdfTextExtractorService {
       const cleanOcr = this.cleanText(ocrText);
       this.lastOcrMs = Date.now() - ocrStart;
 
-      if (cleanOcr.length > directText.length) {
+      if (shouldMergeOcrText(directText, cleanOcr)) {
         console.warn(`[pdf-extractor] OCR exitoso — texto enriquecido (${cleanOcr.length} chars)`);
         this.lastTextSource = "merged";
         return this.mergeTexts(directText, cleanOcr);

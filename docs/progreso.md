@@ -1,6 +1,100 @@
 # Progreso del proyecto — drive-doc-processor
 
-Actualizado al 17/08/2026 (sesión 57 — diagnóstico de las boletas rebotadas de agosto + Vision para PDFs escaneados).
+Actualizado al 18/08/2026 (sesión 57 — diagnóstico de las boletas rebotadas + Vision para PDFs escaneados + CUIT del código de barras AFIP).
+
+## 🔎 El texto del OCR ya no se descarta por ser más corto (2026-08-18)
+
+**Estado: implementado y verificado (typecheck + lint 0 errores + 682 tests + build + build:jobs OK).
+Sin migración. Sin commitear.**
+
+Origen: `FC-0002-00208193-B` (CASTRO BARROS 1310) rebotó por SIN PROVEEDOR **teniendo el proveedor
+cargado**: el emisor es `ROMERO MIGUEL ANGEL` (Fumigaciones Miguel), CUIT `20-16654129-9`, y está en
+el directorio como `ROMERO MIGUEL A` con ese CUIT exacto. El CUIT está impreso en el papel, pero
+dentro de la imagen del membrete.
+
+**La causa:** `PdfTextExtractorService` decidía si conservar el texto del OCR **por longitud**
+(`cleanOcr.length > directText.length`). En estas facturas —cuerpo en texto, membrete en imagen— el
+texto directo trae 1673 caracteres (ítems, importes, CAE) y el del OCR apenas ~200: solo el bloque
+del emisor. El OCR se descartaba entero, con el CUIT adentro, y la boleta quedaba dependiendo del
+fallback visual.
+
+Hecho:
+- **`src/lib/ocrMerge.ts`** — `ocrAddsNewCuits()` + `shouldMergeOcrText()`. El texto del OCR se
+  conserva si es más largo (criterio histórico) **o si aporta un CUIT que el texto directo no tiene**.
+  Los CUITs se comparan por dígitos y solo cuentan los que pasan checksum, así que el ruido del OCR
+  no cuenta como aporte. 9 tests.
+- El extractor usa esa decisión; el resto del flujo queda igual.
+
+**Verificación end-to-end contra el directorio de producción**, simulando el OCR del membrete sobre
+la factura real:
+
+| | Criterio viejo | Criterio nuevo |
+|---|---|---|
+| OCR (193 chars) vs directo (1673) | descartado | conservado |
+| Proveedor | SIN MATCH → Sin Asignar | **ROMERO MIGUEL A** por CUIT |
+
+**⏳ Pendiente del owner:** el smoke real. La prueba de arriba usa un OCR **simulado** (el texto que
+tesseract debería sacar del membrete); acá no hay poppler para correrlo de verdad. Reprocesar las
+tres facturas de Fumigaciones Miguel (`FC-0002-00208193-B`, `FC-0002-00208625-B`,
+`FC-0003-00001430-C`) y confirmar que entran. Si tesseract lee mal un dígito, el checksum lo rechaza
+y la boleta cae al fallback visual como hasta ahora — no empeora nada.
+
+## 🔢 CUIT del emisor desde el código de barras AFIP (2026-08-18)
+
+**Estado: implementado y verificado (typecheck + lint 0 errores + 673 tests + build + build:jobs OK).
+Sin migración. Sin commitear.**
+
+Salió de revisar la carpeta Sin Asignar en Drive: `Fact. 51837` (ARAOZ 192) rebotó por SIN PROVEEDOR
+teniendo el CUIT del emisor **en el propio texto**, escondido dentro de la cadena de 40 dígitos del
+código de barras. El emisor era `BPACE E HIJOS S.R.L.`, que ya estaba cargado.
+
+El código de barras de la RG 1702 tiene tramos fijos: CUIT del emisor (11) + tipo de comprobante (2)
++ punto de venta (4) + CAE (14) + vencimiento del CAE `AAAAMMDD` (8) + dígito verificador (1). Es
+obligatorio en comprobantes A, B, C, E y M, así que el formato es universal.
+
+Hecho:
+- **`src/lib/afipBarcode.ts`** — librería pura, sin IA: `parseAfipBarcodes()` +
+  `extractEmitterCuitFromBarcode()`. 10 tests.
+- **Corre ANTES del fallback visual** en `assignmentStep`, con el mismo disparador (falta el CUIT del
+  proveedor o del consorcio). Cuando acierta, ahorra la llamada a Gemini Vision.
+- **Cinco filtros contra el falso positivo**, que no es teórico: en la medición, una boleta de Edesur
+  entregaba `00-90001061-1` leyendo lo que en realidad era un **código de pago electrónico** — otra
+  corrida larga de dígitos. Sin validación, el "fix" habría empezado a colgarle boletas al proveedor
+  equivocado, justo el bug prohibido el 2026-07-02. Los filtros: prefijo de CUIT válido, checksum
+  módulo 11, vencimiento con forma de fecha, **corroboración cruzada** contra el CAE y el punto de
+  venta impresos aparte, y como red final el directorio del cliente (un CUIT que no esté cargado no
+  matchea con nadie). El peor caso es el comportamiento actual, nunca una asignación equivocada.
+
+**Cobertura medida sobre 60 boletas reales ya procesadas** (donde se conoce el proveedor correcto):
+50 con texto, de las cuales **3 traen el código como texto (6%), y las 3 dan el CUIT correcto**; 0
+falsos positivos con la validación puesta. En los 19 archivos de Sin Asignar, lo trae **1**.
+
+**La RG obliga a IMPRIMIR el código, no a que los dígitos queden como texto extraíble**: la mayoría
+de los sistemas dibujan solo las barras. Es un refuerzo barato y seguro, no la solución de la clase
+"membrete en imagen" — para eso sigue estando el fallback visual.
+
+## 🗂️ Revisión de la carpeta Sin Asignar en Drive (2026-08-18)
+
+Se accedió a la carpeta `unassigned` con la service account del cliente (el MCP de Drive de la cuenta
+personal del owner no la ve). **19 archivos**, contra los 14 de la muestra que había apartado:
+
+- **4 · Emisor solo en el membrete (imagen).** El consorcio matchea; falta el CUIT del proveedor.
+  `Fact. 51837` (ARAOZ 192) se resuelve con el código de barras. Los otros 3 son del sistema
+  GESTIONPRO (`FC-0003-00001430-C` y `FC-0002-00208625-B` de EVA PERON 1761, `FC-0002-00208193-B` de
+  CASTRO BARROS 1310) y no imprimen los dígitos → dependen del fallback visual, que no los resolvió.
+  **Pendiente: entender por qué** (solo se ve en logs de producción o reprocesando).
+- **2 · No son boletas.** `Pedido_85734652` es un **pedido** de PATAGONIA con precios unitarios de
+  $1.00; `ADM MORINIGO` es un **estado de cuenta** ("Saldo de facturas pendientes de Cobro") de Del
+  Parque Matafuegos, que sí está cargado como proveedor.
+- **3 · Faltan en el ALTA.** Consorcio `BELGRANO 3443` (no existe; hay 1429 y 2458); `EVA PERON 1711`
+  con CUIT `30-54541287-6` — la base tiene EVA PERON **1761** con CUIT `33-54541416-9`, o sea es
+  **otro edificio**, no un alias; y la cuenta Edesur `100188012`, que no está en `_LspServices`.
+- **2 · VEP** (`312 352 mayo2026` de G.B Grupo, `VEP AUT NATALIA M` de autónomos) — ignorados por
+  decisión del owner.
+- **5 · LSD** — spec aparte.
+
+Los dos `FB0004` **no están en Sin Asignar**: están en Revisión, lo que confirma el `no_amount` del
+diagnóstico.
 
 ## 📷 PDFs escaneados: extracción por Gemini Vision (2026-08-17)
 

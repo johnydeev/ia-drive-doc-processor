@@ -2,7 +2,22 @@
 
 ## [Unreleased]
 
+### Fixed
+- **El texto del OCR ya no se descarta por ser más corto (2026-08-18)**. Las facturas con el cuerpo
+  en texto y el membrete en imagen rebotaban por SIN PROVEEDOR aunque el proveedor estuviera cargado:
+  el OCR leía bien el CUIT del emisor, pero como su resultado era más corto que el texto de pdf-parse
+  se tiraba entero. El criterio pasa a ser qué aporta y no cuánto mide — el OCR se conserva si trae
+  un CUIT que el texto directo no tiene, validado por checksum. Detectado en tres facturas de
+  Fumigaciones Miguel cuyo proveedor ya estaba en el directorio.
+
 ### Added
+- **El CUIT del emisor se recupera del código de barras AFIP (2026-08-18)**. Las facturas con el
+  membrete en imagen rebotaban por SIN PROVEEDOR aunque el CUIT estuviera en el texto, escondido
+  dentro de los 40 dígitos del código de barras (RG 1702). Ahora se extrae de ahí, antes del
+  fallback visual y sin gastar tokens. Se valida en cinco capas —prefijo de CUIT, checksum, fecha
+  del CAE, y corroboración contra el CAE y el punto de venta impresos— porque sin eso el parser
+  confundía códigos de pago electrónico con comprobantes y devolvía un CUIT falso. Cobertura medida
+  sobre 60 boletas reales: 6% las trae como texto, con 0 falsos positivos.
 - **Los PDFs escaneados se leen con Gemini Vision (2026-08-17)**. Un PDF cuyas páginas son imágenes
   no tiene texto propio: el OCR devolvía algo ilegible, la IA no encontraba el importe y la boleta
   terminaba en Revisión por SIN MONTO sin llegar nunca a la base. Ahora, cuando pdf-parse no saca

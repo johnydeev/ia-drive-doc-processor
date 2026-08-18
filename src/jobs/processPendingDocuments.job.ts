@@ -2,7 +2,8 @@ import { env } from "@/config/env";
 import { DEFAULT_SHEETS_MAPPING } from "@/lib/clientProcessingConfig";
 import { normalizeConsortiumName } from "@/lib/consortiumNormalizer";
 import { matchConsortium, matchProvider, normName } from "@/lib/assignmentMatching";
-import { cuitDigits, formatCuit, extractCuitsFromText } from "@/lib/cuit";
+import { cuitDigits, formatCuit, extractCuitsFromText, cuitsEqual } from "@/lib/cuit";
+import { extractEmitterCuitFromBarcode } from "@/lib/afipBarcode";
 import { identifyLSPProvider, LSPProvider, LSP_FALLBACK_NAMES, annotateSindicalProvider, usesConsortiumCuit } from "@/lib/extraction";
 import { refineExtractionWithRawText } from "@/lib/extraction";
 import { createEmptyTokenUsageSummary } from "@/lib/createEmptyTokenUsageSummary";
@@ -1004,9 +1005,35 @@ async function assignmentStep(ctx: PipelineContext): Promise<StepResult> {
   // tokens: si ya matchearon ambos por CUIT, no se dispara. Cerebras es texto puro
   // (no ve imágenes) → la visión es siempre vía Gemini multimodal. Tolerancia 0:
   // el CUIT que devuelve Gemini debe matchear EXACTO contra la DB, sino Sin Asignar.
-  const cuitMissing =
+  let cuitMissing =
     assignment.reasonCategory === "provider_not_found" ||
     assignment.reasonCategory === "consortium_not_found";
+
+  // ── Fallback determinístico (0 tokens): CUIT del emisor en el código de barras
+  // AFIP (RG 1702). Va ANTES del visual porque no cuesta nada y no puede
+  // equivocarse de proveedor: si el CUIT que sale del código no está en el
+  // directorio, no matchea con nadie y la boleta queda como estaba. Cubre las
+  // facturas cuyo membrete es imagen pero imprimen los dígitos del código.
+  if (cuitMissing && ctx.docText) {
+    const barcodeCuit = extractEmitterCuitFromBarcode(ctx.docText);
+
+    if (barcodeCuit && !extracted.allTaxIds?.some((c) => cuitsEqual(c, barcodeCuit))) {
+      pipelineLog.stepStart(cid, `→ CUIT del código de barras AFIP: ${barcodeCuit}`);
+      extracted.allTaxIds = [...(extracted.allTaxIds ?? []), barcodeCuit];
+
+      const barcodeAssignment = await resolveAssignment(
+        extracted, cid, file.id, consortiumRepository, providerRepository, lspServiceRepository, lspProvider
+      );
+
+      if (!barcodeAssignment.unassigned) {
+        pipelineLog.stepStart(cid, "✅ Asignación resuelta por el código de barras (sin gastar tokens)");
+        assignment = barcodeAssignment;
+        cuitMissing = false;
+      } else {
+        pipelineLog.stepStart(cid, "⚠️ El CUIT del código de barras no está en el directorio → sigue el fallback visual");
+      }
+    }
+  }
 
   if (cuitMissing && geminiModule && geminiApiKey) {
     // Recorte del membrete a alta DPI (mejor lectura del CUIT); si falla, cae al

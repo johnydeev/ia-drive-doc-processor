@@ -4,6 +4,125 @@ Registro de decisiones tomadas ante problemas reales encontrados en producción.
 
 ---
 
+## 2026-08-18 — El OCR aporta CUITs, no caracteres: la longitud era el criterio equivocado
+
+### Problema
+
+`FC-0002-00208193-B` (CASTRO BARROS 1310) rebotó por SIN PROVEEDOR **con el proveedor cargado**: el
+emisor es `ROMERO MIGUEL ANGEL` (Fumigaciones Miguel), CUIT `20-16654129-9`, y está en el directorio
+como `ROMERO MIGUEL A` con ese CUIT exacto. El CUIT estaba impreso, dentro de la imagen del membrete.
+
+El OCR se dispara justo para eso: cuando el bloque del emisor no aparece en el texto
+(`hasEmitterBlock=false`, que es el caso). Pero `PdfTextExtractorService` decidía si conservar su
+resultado **por longitud**:
+
+```ts
+if (cleanOcr.length > directText.length) { /* merge */ }
+if (directText.length > 0) return directText;  // OCR descartado entero
+```
+
+En esta clase de factura —cuerpo en texto, membrete en imagen, típica de GESTIONPRO— el texto directo
+trae ~1670 caracteres y el del OCR ~200, porque lo único que el OCR agrega es el bloque del emisor.
+Es decir: **el OCR se descartaba precisamente cuando hacía bien su trabajo.** Cuanto más completo el
+texto directo, más seguro era tirar el dato que faltaba.
+
+### Decisión
+
+El criterio pasa a ser **qué aporta**, no cuánto mide: el texto del OCR se conserva si es más largo
+(comportamiento histórico, para escaneos) **o si aporta un CUIT que el texto directo no tiene**.
+
+Los CUITs se comparan por dígitos y solo cuentan los que pasan checksum —`extractCuitsFromText` ya
+filtra por regex + módulo 11—, así que el ruido del OCR no cuenta como aporte. Si tesseract lee mal
+un dígito, el checksum lo rechaza y el documento sigue el camino de antes.
+
+Se aisló en `src/lib/ocrMerge.ts` en vez de dejarlo inline en el servicio: la decisión es lógica pura
+y así queda cubierta por tests sin tener que mockear `PDFParse` ni `OcrService`.
+
+### Alternativas descartadas
+
+- **Mezclar siempre que el OCR devuelva algo.** Mete texto ilegible en el prompt de todas las boletas
+  que pasan por OCR, gastando tokens y ensuciando la extracción, para beneficiar a unas pocas.
+- **Bajar el umbral de longitud** (ej. mezclar si el OCR supera N caracteres). Sigue midiendo lo que
+  no importa: un OCR largo de basura pasaría y uno corto con el CUIT bueno no.
+- **Ir directo al fallback visual.** Ya existe y es el que estaba fallando en estos casos; además
+  cuesta tokens. Si el OCR ya leyó el CUIT, gastar una llamada a Vision es tirar plata.
+
+### Verificación
+
+End-to-end contra el directorio de producción, con el texto real de la factura y un OCR **simulado**
+del membrete: con el criterio viejo el OCR se descarta (193 < 1673 chars) y el proveedor queda SIN
+MATCH; con el nuevo se conserva y matchea `ROMERO MIGUEL A` por CUIT.
+
+Queda pendiente el smoke con tesseract de verdad: local no hay poppler, solo corre en la imagen
+Docker.
+
+### Impacto
+
+`src/lib/ocrMerge.ts` (nuevo, puro, 9 tests) + `src/services/pdfTextExtractor.service.ts`.
+682 tests en total, verdes.
+
+---
+
+## 2026-08-18 — El código de barras AFIP se valida contra el propio papel, no se cree
+
+### Problema
+
+`Fact. 51837` rebotó por SIN PROVEEDOR con el CUIT del emisor **presente en el texto**: viajaba
+dentro de la cadena de 40 dígitos del código de barras (RG 1702), y `extractCuitsFromText` no lo veía
+porque busca CUITs sueltos, no incrustados en una corrida de dígitos. El emisor —`BPACE E HIJOS
+S.R.L.`— ya estaba cargado en el directorio.
+
+### Decisión
+
+Se extrae el CUIT del emisor del código de barras, **antes** del fallback visual: cuesta 0 tokens, es
+determinístico (ningún modelo interviene) y cuando acierta ahorra la llamada a Gemini Vision.
+
+**La parte importante no es el parseo, es la validación.** Al medir sobre boletas reales apareció un
+falso positivo concreto: una boleta de Edesur devolvía `00-90001061-1` porque el parser había leído
+un **código de pago electrónico**, que también es una corrida larga de dígitos. Un CUIT inventado
+asignándole la boleta a otro proveedor es exactamente el bug que se prohibió el 2026-07-02.
+
+Cinco filtros, del más barato al más fuerte:
+
+1. Corrida CONTIGUA de 40 dígitos (no se pegan números separados por espacios: concatenar cifras
+   vecinas inventa códigos que no existen).
+2. Prefijo de CUIT válido (`20/23/24/25/26/27/30/33/34`) — solo esto ya mata el caso de Edesur.
+3. Checksum módulo 11.
+4. Vencimiento del CAE con forma de fecha (`AAAAMMDD` plausible).
+5. **Corroboración cruzada**: el CAE y el punto de venta que salen del código tienen que coincidir con
+   los impresos aparte en el papel. Que 18 dígitos den iguales por casualidad no pasa. Si el
+   documento imprime alguno y no coincide, el código se descarta; si no imprime ninguno, se acepta
+   el validado estructuralmente.
+
+Y la red final, que ya existía: el CUIT tiene que estar en el directorio del cliente. **El peor caso
+del código de barras es el comportamiento actual** —Sin Asignar—, nunca una asignación equivocada.
+Es la diferencia con el fallback visual, donde un modelo lee una imagen y puede confundir un dígito.
+
+### Cobertura real (medida, no estimada)
+
+Sobre 60 boletas ya procesadas: 50 con texto, **3 traen el código como texto (6%)** y las 3 dan el
+CUIT correcto, con 0 falsos positivos. En los 19 de Sin Asignar, lo trae 1.
+
+El formato es universal, pero **la RG obliga a imprimir el código, no a que los dígitos queden como
+texto extraíble**: la mayoría de los sistemas dibujan solo las barras. Se implementó sabiendo que es
+un refuerzo barato, no la solución de la clase "membrete en imagen".
+
+### Alternativas descartadas
+
+- **Parsear sin validar.** Se probó primero y produjo el CUIT falso de Edesur. Descartado por el
+  incidente de 2026-07-02.
+- **Unir dígitos separados por espacios** para levantar más códigos. Sube la cobertura inventando
+  cadenas: dos números vecinos no relacionados pueden formar 40 dígitos que pasen los filtros.
+- **Reemplazar el fallback visual.** Con 6% de cobertura no reemplaza nada; se suma antes.
+
+### Impacto
+
+`src/lib/afipBarcode.ts` (nuevo, puro, 10 tests) + `assignmentStep` en
+`src/jobs/processPendingDocuments.job.ts` (bloque nuevo antes del visual, 2 tests de pipeline).
+673 tests en total, verdes.
+
+---
+
 ## 2026-08-17 — PDF escaneado: la señal es el texto de pdf-parse, no el del OCR
 
 ### Problema

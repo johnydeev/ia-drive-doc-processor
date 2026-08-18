@@ -501,6 +501,66 @@ describe("processDriveFile — caracterización de los 7 caminos de salida", () 
       expect(metricsCore().result).toBe("no_amount");
     });
 
+    /**
+     * Código de barras AFIP (RG 1702) cuyo emisor es TIGRE ASCENSORES (30-65511651-2,
+     * el proveedor cargado en la DB de estos tests): CUIT + tipo 06 + pto vta 0010 +
+     * CAE + vencimiento + dígito verificador.
+     */
+    const BARCODE_TIGRE = "3065511651206001086095857203130202603121";
+
+    it("el CUIT del código de barras resuelve la asignación SIN llamar a Vision", async () => {
+      const ctx = makeContext();
+      // Membrete en imagen: el único CUIT suelto del texto es el del consorcio.
+      // El del proveedor viaja dentro del código de barras.
+      ctx.pdfExtractor.extractTextFromPdf.mockResolvedValue(
+        `factura importe total a pagar consorcio 30-11111111-1
+Nro. de CAE: 86095857203130
+${BARCODE_TIGRE}`
+      );
+      ctx.pdfExtractor.extractMembreteImage = vi.fn().mockResolvedValue(Buffer.from("membrete-png"));
+      ctx.aiChain.run.mockImplementation(async (_t, cb) => {
+        cb?.("cerebras", true);
+        return {
+          data: okExtraction({ providerTaxId: null, allTaxIds: ["30-11111111-1"] }),
+          usage: null, provider: "cerebras",
+        };
+      });
+      const spy = withGeminiVision(ctx, { providerTaxId: "30-65511651-2" });
+      const summary = createBaseSummary(1);
+
+      await processDriveFile(makeFile(), asContext(ctx), summary);
+
+      expect(spy).not.toHaveBeenCalled();
+      expect(ctx.pdfExtractor.extractMembreteImage).not.toHaveBeenCalled();
+      expect(ctx.sheetsService.insertRow).toHaveBeenCalledTimes(1);
+      expect(summary.processed).toBe(1);
+      expect(metricsCore().result).toBe("ok");
+    });
+
+    it("código de barras con un CUIT que no está en la DB: sigue con Vision", async () => {
+      const ctx = makeContext();
+      // Emisor 30-70741550-5: código válido, pero ese proveedor no está cargado.
+      ctx.pdfExtractor.extractTextFromPdf.mockResolvedValue(
+        `factura importe total a pagar consorcio 30-11111111-1
+3070741550506001086095857203130202603121`
+      );
+      ctx.pdfExtractor.extractMembreteImage = vi.fn().mockResolvedValue(Buffer.from("membrete-png"));
+      ctx.aiChain.run.mockImplementation(async (_t, cb) => {
+        cb?.("cerebras", true);
+        return {
+          data: okExtraction({ providerTaxId: null, allTaxIds: ["30-11111111-1"] }),
+          usage: null, provider: "cerebras",
+        };
+      });
+      const spy = withGeminiVision(ctx, { providerTaxId: "30-65511651-2" });
+      const summary = createBaseSummary(1);
+
+      await processDriveFile(makeFile(), asContext(ctx), summary);
+
+      expect(spy).toHaveBeenCalledTimes(1);
+      expect(metricsCore().result).toBe("ok");
+    });
+
     it("CUIT del membrete no está en la DB → sigue en Sin Asignar", async () => {
       const ctx = makeContext();
       ctx.pdfExtractor.extractTextFromPdf.mockResolvedValue(
