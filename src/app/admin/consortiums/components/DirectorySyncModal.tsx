@@ -17,6 +17,7 @@ const ETIQUETAS: Array<[keyof DirectorySyncReport, string]> = [
   ["rubros", "Rubros"],
   ["coeficientes", "Coeficientes"],
   ["lspServices", "Servicios"],
+  ["oficios", "Oficios"],
 ];
 
 /**

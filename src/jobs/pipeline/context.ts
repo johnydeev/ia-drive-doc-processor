@@ -88,6 +88,19 @@ export interface PipelineContext {
   isDuplicate: boolean;
   /** El archivo es una imagen (JPG/PNG) → extracción Vision. */
   isImage: boolean;
+  /**
+   * PNG de la página 1 cuando el PDF es un ESCANEO (páginas imagen, sin capa de
+   * texto). Lo rinde el OCR; si está, `aiExtractStep` extrae por Vision en vez de
+   * mandar el texto pobre del OCR a la cadena. `null` = PDF con texto propio, o el
+   * OCR no pudo renderizar.
+   */
+  scannedPdfPng: Buffer | null;
+  /**
+   * La extracción salió de Vision sobre la imagen del documento. El texto del OCR
+   * NO es testigo válido de lo que leyó Vision: `cuitSanitizeStep` no descarta sus
+   * CUITs por "no aparecen en el texto".
+   */
+  visionResolved: boolean;
   /** Datos extraídos (IA / cache / OCR_ONLY), luego canonizados. */
   extracted: ExtractedDocumentData | null;
   /** Empresa de servicios detectada por el router (o null si no es LSP). */
@@ -146,6 +159,8 @@ export function createPipelineContext(
     existingByHash: null,
     isDuplicate: false,
     isImage: false,
+    scannedPdfPng: null,
+    visionResolved: false,
     extracted: null,
     lspProvider: null,
     docText: "",

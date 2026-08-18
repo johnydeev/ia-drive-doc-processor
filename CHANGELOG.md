@@ -2,6 +2,27 @@
 
 ## [Unreleased]
 
+### Added
+- **Los PDFs escaneados se leen con Gemini Vision (2026-08-17)**. Un PDF cuyas páginas son imágenes
+  no tiene texto propio: el OCR devolvía algo ilegible, la IA no encontraba el importe y la boleta
+  terminaba en Revisión por SIN MONTO sin llegar nunca a la base. Ahora, cuando pdf-parse no saca
+  texto, la página 1 que ya renderizó el OCR va a Vision — el mismo camino que usan los archivos
+  JPG/PNG. La degradación no pierde boletas: si Vision falla sigue la cadena de texto, si se queda
+  sin cuota el PDF vuelve a Pendientes, y sin Gemini configurado todo queda como estaba. El CUIT que
+  lee Vision queda exento del saneo anti-alucinación, que lo habría descartado por no aparecer en el
+  texto del OCR.
+
+### Diagnosed
+- **Por qué rebotaron las boletas de agosto (2026-08-17)**. Se diagnosticaron los 14 PDFs que apartó
+  el owner. Ninguna causa era el prompt. La principal: la tabla `LspService` estuvo vacía hasta que
+  la carga del ALTA de hoy insertó los 77 servicios, y el fast-path de asignación por número de
+  cliente es terminal — mandó a Sin Asignar toda boleta de servicio en la que la IA leyó el número.
+  No entró **ninguna** boleta de EDENOR en todo agosto. El resto: tres casos que ya funcionan (el
+  consorcio o el proveedor se cargaron después del rebote), un CUIT de proveedor sin cargar
+  (`ASCENSORES CHERE`), dos PDFs escaneados sin texto que el OCR no resolvió, y dos tipos de
+  documento fuera de alcance (liquidación de sueldos y VEP de AFIP). Sin cambios de código; detalle
+  en `docs/progreso.md` y `docs/decisiones.md`.
+
 ### Fixed
 - **El sync de directorio ya no puede destruir datos (2026-08-17)**. Sincronizar con un nombre
   cambiado en el archivo ALTA borraba el registro viejo **en silencio**: el `try/catch` que prometía

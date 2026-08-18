@@ -1,13 +1,125 @@
 # Progreso del proyecto — drive-doc-processor
 
-Actualizado al 17/08/2026 (sesión 56 — sync sin borrado + rendimiento + `SERVICIO` + terminología/alias/oficio).
+Actualizado al 17/08/2026 (sesión 57 — diagnóstico de las boletas rebotadas de agosto + Vision para PDFs escaneados).
+
+## 📷 PDFs escaneados: extracción por Gemini Vision (2026-08-17)
+
+**Estado: implementado y verificado (typecheck + lint 0 errores + 661 tests + build + build:jobs OK).
+Sin migración. Sin commitear.**
+
+Salió del diagnóstico de abajo: `FB0004-00033366` y `FB0004-00034082` son PDFs cuyas páginas son
+imágenes (12 caracteres de texto), el OCR no alcanzó y terminaron en Revisión por SIN MONTO. Nunca
+llegaron a `Invoice`.
+
+El pipeline ya tenía Gemini Vision en dos lugares — archivos imagen (JPG/PNG) y el recorte del
+membrete cuando falla el CUIT. Faltaba el caso del medio: **PDF con capa de imagen y sin texto
+propio**.
+
+Hecho:
+- **`PdfTextExtractorService.isLastPdfScanned()`**: se mide sobre el texto de **pdf-parse**, no sobre
+  el resultado final. Es la clave del diseño: el OCR puede devolver mucho texto ilegible y tapar la
+  señal, así que preguntarle al texto final "¿sos corto?" no sirve.
+- **Rama nueva en `aiExtractStep`**: si el PDF es un escaneo y el OCR dejó renderizada la página 1
+  (`getLastOcrPng()`), esa imagen va a `extractStructuredDataFromImage` en lugar de mandarle el texto
+  pobre a la cadena. La extracción por imagen y la de archivos JPG/PNG ahora comparten el helper
+  `runVisionExtraction`.
+- **Degradación en capas, sin pérdida**: Vision falla por algo que no sea cuota → sigue la cadena de
+  texto (peor extracción, pero la boleta no se pierde). Vision devuelve 429 → `RateLimitError`, o
+  sea el PDF vuelve a **Pendientes** para reintentar, nunca a Revisión. Sin Gemini configurado o sin
+  PNG (poppler caído) → exactamente el comportamiento de antes.
+- **`ctx.visionResolved` exime al saneo de CUIT.** `cuitSanitizeStep` descarta todo CUIT que no
+  aparezca en el texto (anti-alucinación), y acá el CUIT se leyó de la IMAGEN mientras el texto del
+  OCR es justo lo que no alcanzaba: sin la excepción, el CUIT bueno se descartaba y la boleta caía en
+  SIN PROVEEDOR. Es el mismo criterio que ya regía para los archivos imagen, que llegan con `docText`
+  vacío. Tiene test propio.
+- `m.textSource = "vision"` para poder contarlas en los `[metrics]`.
+
+7 tests nuevos en `processPendingDocuments.job.test.ts` (uno por camino: OK, CUIT no descartado, sin
+Gemini, Vision falla, 429, PDF con texto que no debe gastar Vision, y sin PNG).
+
+**⏳ Pendiente del owner:** smoke real — reprocesar `FB0004-00033366` y `FB0004-00034082` (borrarlas
+desde Boletas entrantes las devuelve a `pending`) y confirmar que entran con monto. Es el único paso
+que no se puede verificar local: el OCR necesita poppler, que solo está en la imagen Docker.
+
+## 🔍 Diagnóstico: boletas rebotadas de agosto 2026 (2026-08-17)
+
+**Estado: diagnóstico cerrado, sin cambios de código. La causa raíz principal ya quedó resuelta
+al cargarse `_LspServices`; el resto son acciones del owner o specs aparte.**
+
+Material: 14 PDFs que el owner apartó en `Desktop/pruebas de LLMs`, agrupados por síntoma en 5
+subcarpetas. Método: `scripts/diag-boleta.ts` (determinístico, 0 tokens) sobre los 14 +
+`scripts/llm-testbench.ts` (pipeline lógico con Cerebras) + consultas a la DB de producción.
+
+### Causa raíz del rebote masivo de boletas de servicios
+
+**La tabla `LspService` estuvo vacía hasta el 17/08/2026 15:04**, cuando la carga del archivo ALTA
+insertó los 77 servicios de golpe (Edesur 23, Metrogas 23, AySA 20, Telecom 7, Edenor 4).
+
+El fast-path de `resolveAssignment` (paso 0) es **terminal por diseño**: si el router identifica la
+empresa y la IA extrae el número de cliente, la asignación se resuelve por
+`LspService(clientId, providerName, clientNumber)` y **si no lo encuentra corta en
+`lsp_clientnumber_not_registered` → Sin Asignar, sin caer al matching por CUIT**. Es el criterio que
+confirmó el owner: en los servicios el número de cliente es el identificador inequívoco del
+consorcio, el CUIT casi nunca está en el papel. Con la tabla vacía, ese corte mandó a Sin Asignar
+toda boleta de servicio en la que la IA sí leyó el número.
+
+Evidencia:
+- **0 boletas de EDENOR entraron en agosto** (Metrogas 8, AySA 5, Telecom 5 en el mismo período).
+- Las 5 boletas históricas de EDENOR en la DB tienen `lspServiceId = NULL`: entraron por el matching
+  normal, en las corridas donde la IA **no** leyó el número de cliente. Cuando sí lo leía, rebotaba.
+- La boleta que rebotó (`0027-47098983`, PUEYRREDON 2418, $1.487.188,08) usa la cuenta
+  `8 620 004 726`, y hoy existe `EDENOR S.A. | 8620004726 | PUEYRREDON 2418`. No está en `Invoice`.
+
+**Acción:** reprocesar las boletas de servicios de agosto que quedaron en Sin Asignar (borrarlas
+desde Boletas entrantes las devuelve a `pending`). No requiere cambio de código.
+
+**Riesgo que queda abierto:** todo servicio que no esté en `_LspServices` rebota, sin fallback. Ya
+se detectó uno faltante: la cuenta AySA `1015440` de SAN ANTONIO 345.
+
+### Los 14 casos, uno por uno
+
+| Caso | Veredicto hoy | Causa |
+|---|---|---|
+| THAMES 647 (fumigación, Factura C sin CUIT del consorcio) | **ok** | El consorcio se cargó después del rebote. La IA saca `CONSORCIO THAMES 647-` del detalle del ítem y normaliza a `THAMES 647` |
+| AySA SAN ANTONIO 345 | **ok** | Ídem. Matchea por nombre/dirección; su `LspService` igual falta |
+| DON BOSCO 3859 / PONCE MIGUEL ANGEL | **ok** | Ídem |
+| EDENOR PUEYRREDON 2418 | resuelto al cargar ALTA | `LspService` vacío (arriba) |
+| Reparación BELGRANO 1431 | falta dato | CUIT `23-07773623-9` (ASCENSORES CHERE) no está en `_Proveedores`. Existe `CHERE TOBIAS NICOLAS` con `20-41914174-8`, que es otra persona |
+| `FB0004-00033366` / `FB0004-00034082` | Revisión | PDFs escaneados: 12 caracteres de texto. Nunca llegaron a `Invoice` (no hay boletas con monto nulo desde el 08/06). Problema de OCR/visión, no de prompt |
+| LSD ×5 | fuera de alcance | Ver pendiente abajo |
+| VEP AFIP ×2 | fuera de alcance | Decisión del owner: ignorarlos |
+
+### Hallazgos colaterales
+
+- **`scripts/llm-testbench.ts` no simula el fast-path de LSP** (usa solo `matchConsortium` /
+  `matchProvider`): reporta `provider_not_found` en boletas de servicios que el pipeline real
+  resuelve por número de cliente. Su veredicto no es confiable para LSP.
+- **Cerebras devolvió `402` (sin cuota)** durante el diagnóstico. En agosto resolvió 156/170 boletas;
+  si se agota, la cadena cae a Gemini (que ya venía resolviendo 14).
+- **Metrogas:** la DB tiene `30-65786367-6` y `CLAUDE.md` documenta `30-65786442-4`. **El owner lo
+  está verificando** (2026-08-17).
+- **NATURGY: desestimado.** Tiene prompt y entrada en `LSP_ROUTER_TO_CANONICAL`, pero el owner no
+  opera con esa empresa — no está ni en la base ni en el ALTA. No se toca.
+- **`CLAUDE.md` desactualizado:** la tabla de prompts dice que cada uno hardcodea el CUIT de su
+  empresa. Ya no es así — los prompts le piden a la IA que lo busque en el encabezado.
+- El OCR local no corre (falta `pdftoppm`/poppler); en producción está en la imagen Docker. Los
+  diagnósticos locales de PDFs escaneados no son concluyentes.
+
+### Pendientes que salieron de acá
+
+- [ ] **Spec de liquidación de sueldos (LSD).** Decisión del owner: registrar el gasto por
+      **sueldo neto de cada empleado**, con el empleado como **persona física identificada por su
+      CUIL**, **desglosado uno por empleado** (no un total del libro) e imputado al consorcio del
+      encabezado. Probablemente con carga manual. Falta definir vencimiento y número de comprobante.
+      Hoy los 5 LSD caen en Sin Asignar y gastan tokens; 2 de 5 además dan **falso positivo FATERYH**
+      en el router (el texto trae el nombre del convenio colectivo de la federación).
+- [x] **PDFs escaneados sin texto útil** — resuelto el 2026-08-17 con la rama de Vision (ver arriba).
+- [ ] Cargar `ASCENSORES CHERE` (`23-07773623-9`) y completar los `_LspServices` faltantes.
 
 ## 🏷️ `_Proveedores`: terminología, alias múltiples y oficio (2026-08-17)
 
-**Estado: implementado. Verificación PARCIAL — lint 0 errores + 653 tests OK. El typecheck y los
-builds quedan pendientes de la migración: el cliente Prisma todavía no conoce `Oficio` ni
-`oficioId` (6 errores en `directorySync.service.ts` y `providers/route.ts`). Es lo esperado.
-Sin commitear.**
+**Estado: implementado y verificado (typecheck + lint 0 errores + 654 tests + build + build:jobs OK).
+Migración `20260817000200_oficio` **YA APLICADA** por el owner. Sin commitear.**
 
 Spec: `docs/superpowers/specs/2026-08-17-proveedores-terminologia-alias-oficio-design.md`
 Plan: `docs/superpowers/plans/2026-08-17-proveedores-terminologia-alias-oficio.md`
@@ -29,11 +141,20 @@ Hecho:
   el comportamiento viejo quedó invertido.
 - `aliasCbu` de la planilla pasó de `string | null` a `string[]`. **+17 tests (636 → 653).**
 
-**⏳ Pendiente del owner:**
-1. `npx prisma migrate deploy` → `npx prisma generate` (migración `20260817000200_oficio`).
-2. Correr la verificación bloqueada: `npm run typecheck` + `npm run build` + `npm run build:jobs`.
-3. La hoja `_Oficios` ya está cargada con 8 oficios. Falta completar la **columna F** de
-   `_Proveedores` y, donde corresponda, los alias adicionales en la columna D separados por `|`.
+**Bug encontrado en el primer sync post-deploy (2026-08-17):** el modal listaba **cinco** entidades —
+`oficios` estaba en el reporte del backend y en el tipo del servicio, pero faltaba en el tipo espejo
+de `consortiums/lib/types.ts` y en la tabla `ETIQUETAS` del modal. El sync de oficios funcionaba
+(8 creados, 3 proveedores vinculados); simplemente no se veía. Los tipos no lo atraparon porque el
+espejo de la UI es una declaración aparte, más laxa que la del servicio. Arreglado, con un test de
+regresión que verifica las seis filas.
+
+**Estado del ALTA (2026-08-17):** `_Oficios` cargada con 8 oficios; la columna F usa **listas
+desplegables** que referencian esa hoja, así que no puede haber typos. 3 proveedores ya tienen oficio
+(Ascensores, Energía, Gas). Los alias múltiples todavía no se usan: ningún proveedor tiene más de uno.
+
+**⏳ Pendiente del owner:** completar la columna F del resto de los proveedores y, donde corresponda,
+los alias adicionales en la columna D separados por `|`. Ninguna de las dos cosas es obligatoria: una
+celda vacía deja al proveedor sin oficio y con un solo alias, sin avisos.
 
 ## 🏷️ `SERVICIO` en `ProviderType` (2026-08-17)
 

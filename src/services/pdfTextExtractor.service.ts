@@ -6,9 +6,22 @@ export class PdfTextExtractorService {
   private lastHasEmitterBlock = false;
   private lastTextSource: "direct" | "ocr" | "merged" = "direct";
   private lastOcrMs = 0;
+  private lastDirectChars = 0;
 
   getLastOcrPng(): Buffer | null {
     return this.lastOcrPngBuffer;
+  }
+
+  /**
+   * ¿El PDF de la última llamada era un ESCANEO? (sus páginas son imágenes: no
+   * tiene capa de texto propia).
+   *
+   * Se mide sobre el texto de pdf-parse, NO sobre el resultado final: el OCR
+   * puede devolver mucho texto ilegible y tapar la señal. Un PDF escaneado
+   * necesita Vision, no la cadena de texto.
+   */
+  isLastPdfScanned(): boolean {
+    return this.lastDirectChars < PdfTextExtractorService.MIN_USEFUL_CHARS;
   }
 
   getLastHasEmitterBlock(): boolean {
@@ -31,6 +44,7 @@ export class PdfTextExtractorService {
     this.lastTextSource = "direct";
     this.lastOcrMs = 0;
     const directText = await this.extractTextDirectly(buffer, maxPages);
+    this.lastDirectChars = directText.length;
 
     const hasEnoughText = directText.length >= PdfTextExtractorService.MIN_USEFUL_CHARS;
 

@@ -642,16 +642,48 @@ async function textExtractStep(ctx: PipelineContext): Promise<StepResult> {
   ctx.docText = reflowAfipTotals(text);
   ctx.lspProvider = lspProvider;
 
+  // PDF escaneado (páginas imagen): el texto del OCR es lo único que hay y suele
+  // no alcanzar — la boleta terminaba en Revisión por SIN MONTO. Si el OCR dejó
+  // renderizada la página 1, `aiExtractStep` la manda a Vision.
+  if (pdfExtractor.isLastPdfScanned()) {
+    ctx.scannedPdfPng = pdfExtractor.getLastOcrPng();
+    pipelineLog.stepStart(
+      cid,
+      ctx.scannedPdfPng
+        ? "→ PDF escaneado (sin texto propio) — extracción por Gemini Vision"
+        : "⚠️ PDF escaneado sin render de página 1 — se intenta con el texto del OCR"
+    );
+  }
+
   if (resolvedConfig.debugMode) {
     pipelineLog.stepStart(cid, `[DEBUG-OCR] texto (${text.length} chars, sanitizado):\n${safeDebugLog(text)}`);
   }
   return { kind: "continue" };
 }
 
+/**
+ * Extracción por Gemini Vision sobre una imagen del documento. La usan el flujo de
+ * archivos imagen (JPG/PNG) y el de PDFs escaneados (página 1 renderizada).
+ * Propaga el error tal cual: cada llamador decide qué hacer con el 429.
+ */
+async function runVisionExtraction(
+  ctx: PipelineContext,
+  image: Buffer,
+  mimeType: "image/jpeg" | "image/png",
+  label: string
+): Promise<{ extracted: ExtractedDocumentData; usage: import("@/types/aiUsage.types").AiUsageMetrics | null }> {
+  const { geminiModule, geminiApiKey, geminiModel } = ctx.deps;
+  const extractor = new geminiModule!.GeminiExtractorService({ apiKey: geminiApiKey, model: geminiModel });
+  const extracted = await ctx.runStep(label, () => extractor.extractStructuredDataFromImage(image, mimeType), "ai");
+  const usage = extractor.getLastUsage?.() ?? null;
+  accumulateTokenUsage(ctx.summary.tokenUsage, usage);
+  return { extracted, usage };
+}
+
 /** 3b. Extracción de DATOS por IA (Vision / cacheado / cadena IA sobre el texto). */
 async function aiExtractStep(ctx: PipelineContext): Promise<StepResult> {
   const { file, summary } = ctx;
-  const { resolvedConfig, geminiModule, aiChain, geminiApiKey, geminiModel } = ctx.deps;
+  const { resolvedConfig, geminiModule, aiChain, geminiApiKey } = ctx.deps;
   const m = ctx.m;
   const runStep = ctx.runStep;
   const cid = resolvedConfig.clientId;
@@ -675,14 +707,9 @@ async function aiExtractStep(ctx: PipelineContext): Promise<StepResult> {
       const imageMimeType: "image/jpeg" | "image/png" =
         file.mimeType?.includes("png") ? "image/png" : "image/jpeg";
       try {
-        const extractor = new geminiModule.GeminiExtractorService({ apiKey: geminiApiKey, model: geminiModel });
-        extracted = await runStep(
-          "Extracción IA (Gemini Vision)",
-          () => extractor.extractStructuredDataFromImage(buffer, imageMimeType),
-          "ai"
-        );
-        fileAiUsage = extractor.getLastUsage?.() ?? null;
-        accumulateTokenUsage(summary.tokenUsage, fileAiUsage);
+        const vision = await runVisionExtraction(ctx, buffer, imageMimeType, "Extracción IA (Gemini Vision)");
+        extracted = vision.extracted;
+        fileAiUsage = vision.usage;
         pipelineLog.aiExtraction(cid, "gemini", true);
       } catch (error) {
         const msg = error instanceof Error ? error.message : "Gemini Vision error";
@@ -708,7 +735,30 @@ async function aiExtractStep(ctx: PipelineContext): Promise<StepResult> {
     extracted = { ...storedFields };
     extractionWasCached = true;
     extracted = refineExtractionWithRawText(extracted, docText);
-  } else {
+  } else if (ctx.scannedPdfPng && geminiModule && geminiApiKey) {
+    // ── Flujo PDF escaneado: sus páginas son imágenes, así que se lee la página 1
+    // con Vision en vez de mandarle a la cadena el texto pobre del OCR (que
+    // terminaba en Revisión por SIN MONTO). Si Vision falla por algo que no sea
+    // falta de cuota, se sigue con la cadena: peor extracción, pero no se pierde.
+    try {
+      const vision = await runVisionExtraction(ctx, ctx.scannedPdfPng, "image/png", "Extracción IA (Gemini Vision — PDF escaneado)");
+      extracted = vision.extracted;
+      fileAiUsage = vision.usage;
+      ctx.visionResolved = true;
+      m.textSource = "vision";
+      pipelineLog.aiExtraction(cid, "gemini", true);
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : "Gemini Vision error";
+      pipelineLog.aiExtraction(cid, "gemini", false, msg);
+      // Sin cuota (429): dejar el PDF en Pendientes para reintento posterior.
+      if (isRateLimitError(error)) {
+        throw new RateLimitError("IA Vision sin cuota (429)");
+      }
+      pipelineLog.stepStart(cid, "→ Vision falló en PDF escaneado — se intenta con el texto del OCR");
+    }
+  }
+
+  if (extracted === null && !ctx.isImage && !existingByHash?.extraction) {
     // ── Flujo PDF: extracción normal vía cadena IA sobre el texto ya extraído ──
     // Fallback IA Gemini→OpenAI→Claude vía cadena reutilizable. El logging
     // por intento se inyecta vía callback; el timing acumulado ("ai") lo
@@ -847,7 +897,13 @@ async function cuitSanitizeStep(ctx: PipelineContext): Promise<StepResult> {
   // ── Saneo de CUIT inventado (solo NO-LSP): si la IA devolvió un CUIT que no
   // está en el texto del documento, se descarta (era alucinado). LSP de
   // servicios se excluye: su CUIT viene del prompt (no del papel).
-  if (lspProvider === null && docText) {
+  //
+  // Los PDFs escaneados resueltos por Vision también se excluyen: ahí el CUIT se
+  // leyó de la IMAGEN y el texto del OCR es justamente lo que no alcanzaba —
+  // usarlo de testigo descartaría un CUIT bueno y mandaría la boleta a SIN
+  // PROVEEDOR. Es el mismo criterio que ya rige para los archivos imagen, que
+  // llegan acá con `docText` vacío.
+  if (lspProvider === null && docText && !ctx.visionResolved) {
     if (extracted.providerTaxId && !cuitAppearsInText(extracted.providerTaxId, docText)) {
       pipelineLog.stepStart(cid, `⚠️ CUIT descartado: no aparece en el texto del documento (probable invención de la IA)`);
       extracted.providerTaxId = null;

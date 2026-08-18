@@ -4,6 +4,107 @@ Registro de decisiones tomadas ante problemas reales encontrados en producción.
 
 ---
 
+## 2026-08-17 — PDF escaneado: la señal es el texto de pdf-parse, no el del OCR
+
+### Problema
+
+Dos boletas de agosto (`FB0004-00033366`, `FB0004-00034082`) terminaron en Revisión por SIN MONTO y
+nunca llegaron a `Invoice`. Son PDFs cuyas páginas son imágenes: pdf-parse saca 12 caracteres, el OCR
+corre y lo que devuelve no alcanza para que la IA encuentre el importe.
+
+El pipeline ya tenía Gemini Vision para archivos imagen (JPG/PNG) y para el recorte del membrete
+cuando falla el CUIT. El caso del medio —PDF con capa de imagen— no estaba cubierto.
+
+### Decisión
+
+**El disparador se mide sobre el texto de pdf-parse (`lastDirectChars < MIN_USEFUL_CHARS`), no sobre
+el texto final.** Es lo no obvio de este cambio: cuando el OCR corre, el resultado final puede ser
+`merged` (directo + OCR) y superar cualquier umbral de longitud con texto ilegible. Preguntarle al
+texto final "¿sos corto?" no distingue un escaneo malo de un PDF con texto. El texto de pdf-parse sí:
+si el PDF tiene capa de texto, la tiene; si no, no.
+
+Cuando el PDF es un escaneo y el OCR dejó renderizada la página 1, esa imagen va a Vision. La
+degradación es en capas y ninguna pierde la boleta: Vision falla por algo que no sea cuota → sigue la
+cadena de texto; Vision devuelve 429 → `RateLimitError` y el PDF vuelve a **Pendientes**, nunca a
+Revisión; sin Gemini o sin PNG → el comportamiento de antes, intacto.
+
+**`ctx.visionResolved` exime a `cuitSanitizeStep`.** Ese paso descarta todo CUIT que no aparezca en
+el texto del documento (anti-alucinación, y es una buena regla). Pero acá el CUIT se leyó de la
+IMAGEN, y el texto del OCR es exactamente lo que no alcanzaba: usarlo de testigo descarta un CUIT
+bueno y manda la boleta a SIN PROVEEDOR — cambia un rebote por otro. Es el mismo criterio que ya
+regía de hecho para los archivos imagen, que llegan a ese paso con `docText` vacío y por eso lo
+esquivan sin que nadie lo hubiera escrito. Tiene test propio.
+
+### Alternativas descartadas
+
+- **Umbral sobre el texto final.** El `merged` del OCR lo vuelve inútil (arriba).
+- **Renderizar la página aparte para Vision.** El OCR ya deja el PNG de la página 1 en
+  `getLastOcrPng()`. Rendirla de nuevo es otra pasada de poppler por boleta, sin ganancia.
+- **Mandar siempre los PDFs a Vision.** Multiplicaría el costo por token de toda la cartera para
+  resolver el puñado de boletas escaneadas.
+- **Reemplazar el OCR por Vision.** El OCR sigue siendo necesario: rinde el PNG y su texto es el
+  respaldo cuando Vision falla.
+
+### Impacto
+
+`src/services/pdfTextExtractor.service.ts` (`isLastPdfScanned()`), `src/jobs/pipeline/context.ts`
+(`scannedPdfPng`, `visionResolved`), `src/jobs/processPendingDocuments.job.ts` (helper
+`runVisionExtraction` compartido con el flujo imagen + rama nueva en `aiExtractStep` + excepción en
+`cuitSanitizeStep`). 7 tests nuevos; 661 en total, verdes.
+
+---
+
+## 2026-08-17 — Las boletas de servicios se asignan por número de cliente, sin excepción
+
+### Problema
+
+En agosto rebotaron muchas boletas. El owner apartó 14 en `Desktop/pruebas de LLMs` sospechando que
+había que corregir prompts. El diagnóstico mostró otra cosa: **ninguna de las causas era el prompt**.
+
+La más grave: **no entró ni una sola boleta de EDENOR en todo agosto**, mientras Metrogas metía 8,
+AySA 5 y Telecom 5. La tabla `LspService` estuvo **vacía hasta el 17/08 15:04**, cuando la carga del
+ALTA insertó los 77 servicios de una vez.
+
+El fast-path de `resolveAssignment` es **terminal**: si el router identifica la empresa y la IA
+extrae el número de cliente, busca `LspService(clientId, providerName, clientNumber)` y, si no lo
+encuentra, corta en `lsp_clientnumber_not_registered` → Sin Asignar. No cae al matching por CUIT.
+Con la tabla vacía, ese corte se comió toda boleta de servicio en la que la IA leyó el número.
+
+Perversamente, las que **sí** entraban eran las peores extracciones: las 5 boletas históricas de
+EDENOR en la base tienen `lspServiceId = NULL` porque en esas corridas la IA no leyó el número y el
+documento cayó al matching normal por CUIT.
+
+### Decisión
+
+**Se mantiene el corte terminal.** Criterio del owner, textual: en los servicios el número de cliente
+es el identificador inequívoco que apunta al consorcio, el CUIT casi nunca está en el papel — primero
+identificar la empresa, después ir por el número de cliente sí o sí, sin excepción.
+
+La consecuencia se acepta a conciencia: **un servicio que no esté en `_LspServices` rebota**, y
+rebota sin intentar nada más. Es preferible a la alternativa, que es lo que ya se había prohibido en
+2026-07-02 con los proveedores: adivinar por nombre y colgarle la boleta al edificio equivocado.
+
+### Alternativas descartadas
+
+- **Fallback al matching por CUIT cuando el número no está registrado.** Reintroduce la asignación
+  silenciosa a un consorcio equivocado, que es justo lo que el corte previene.
+- **Habilitar el match por nombre para los LSP no sindicales** (era la propuesta inicial de esta
+  sesión, antes de que el owner corrigiera el criterio). El nombre identifica a la EMPRESA, no al
+  edificio: no resuelve el problema real, que es a qué consorcio pertenece el suministro.
+- **Hardcodear el CUIT de cada empresa de servicio en el código.** Ya hay dos CUITs distintos para
+  Edesur entre el código y la base, y uno para Metrogas que no coincide con `CLAUDE.md`. Un CUIT
+  desactualizado dejaría de matchear TODAS las boletas de esa empresa.
+
+### Impacto
+
+Sin cambios de código. La causa raíz se resolvió al cargar el ALTA. Queda como acción del owner
+reprocesar las boletas de servicios que quedaron en Sin Asignar y completar los servicios faltantes
+(ya se detectó la cuenta AySA `1015440` de SAN ANTONIO 345).
+
+Detalle de los 14 casos y hallazgos colaterales en `docs/progreso.md` (2026-08-17).
+
+---
+
 ## 2026-08-17 — `_Proveedores`: terminología del administrador, alias múltiples y oficio
 
 Tres cambios sobre la misma hoja del ALTA, pedidos por el owner.

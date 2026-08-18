@@ -122,6 +122,7 @@ export type DirectorySyncReport = {
   rubros: SyncEntityReport;
   coeficientes: SyncEntityReport;
   lspServices: SyncEntityReport;
+  oficios: SyncEntityReport;
   pendingRenames: SyncPendingRename[];
   ambiguous: string[];
   warnings: string[];

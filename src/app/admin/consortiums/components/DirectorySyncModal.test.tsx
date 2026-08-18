@@ -12,6 +12,7 @@ const base: DirectorySyncReport = {
   rubros: vacio,
   coeficientes: vacio,
   lspServices: vacio,
+  oficios: { created: 3, updated: 0, orphans: [] },
   pendingRenames: [],
   ambiguous: [],
   warnings: [],
@@ -39,6 +40,16 @@ describe("DirectorySyncModal", () => {
     expect(screen.getByText(/1 en la base que no están en el ALTA/)).toBeInTheDocument();
     expect(screen.getByText("VIEJO 1")).toBeInTheDocument();
     expect(screen.getByText("5 boleta(s)")).toBeInTheDocument();
+  });
+
+  // Regresión: la entidad estaba en el reporte del backend pero faltaba en la
+  // tabla del modal, así que el sync de oficios corría sin verse.
+  it("lista las seis entidades, incluida Oficios", () => {
+    render(<DirectorySyncModal report={base} onClose={vi.fn()} onApplyRenames={vi.fn()} />);
+    for (const etiqueta of ["Edificios", "Proveedores", "Rubros", "Coeficientes", "Servicios", "Oficios"]) {
+      expect(screen.getByText(etiqueta)).toBeInTheDocument();
+    }
+    expect(screen.getByText(/3 nuevos, 0 actualizados/)).toBeInTheDocument();
   });
 
   it("sin renombres no ofrece el botón de aplicar", () => {

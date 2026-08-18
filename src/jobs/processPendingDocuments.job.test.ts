@@ -103,6 +103,7 @@ function makeContext(configOver: Partial<ProcessJobConfig> = {}) {
     getLastHasEmitterBlock: vi.fn().mockReturnValue(true),
     getLastOcrMs: vi.fn().mockReturnValue(0),
     getLastOcrPng: vi.fn().mockReturnValue(null),
+    isLastPdfScanned: vi.fn().mockReturnValue(false),
     extractMembreteImage: vi.fn().mockResolvedValue(null),
   };
 
@@ -524,6 +525,125 @@ describe("processDriveFile — caracterización de los 7 caminos de salida", () 
       expect(ctx.sheetsService.insertRow).not.toHaveBeenCalled();
       expect(summary.unassigned).toBe(1);
       expect(metricsCore().result).toBe("unassigned");
+    });
+  });
+
+  describe("PDF escaneado (páginas imagen) → extracción por Gemini Vision", () => {
+    /**
+     * Instala un geminiModule cuyo `extractStructuredDataFromImage` devuelve `data`.
+     * Es el mismo servicio que usa el flujo de archivos imagen (JPG/PNG).
+     */
+    function withVisionExtraction(ctx: TestContext, data: ReturnType<typeof okExtraction> | Error) {
+      const spy = data instanceof Error
+        ? vi.fn().mockRejectedValue(data)
+        : vi.fn().mockResolvedValue(data);
+      (ctx as unknown as { geminiModule: unknown }).geminiModule = {
+        GeminiExtractorService: class {
+          extractStructuredDataFromImage = spy;
+          getLastUsage = () => null;
+        },
+      };
+      (ctx as unknown as { geminiApiKey?: string }).geminiApiKey = "gemini-key";
+      return spy;
+    }
+
+    /** Deja el extractor en el estado de un PDF escaneado: sin texto propio, con PNG del OCR. */
+    function asScannedPdf(ctx: TestContext, ocrText = "") {
+      ctx.pdfExtractor.extractTextFromPdf.mockResolvedValue(ocrText);
+      ctx.pdfExtractor.isLastPdfScanned.mockReturnValue(true);
+      ctx.pdfExtractor.getLastOcrPng.mockReturnValue(Buffer.from("pagina-1-png"));
+    }
+
+    it("PDF sin texto propio: extrae por Vision y la boleta entra OK (no cae en SIN MONTO)", async () => {
+      const ctx = makeContext();
+      asScannedPdf(ctx);
+      const spy = withVisionExtraction(ctx, okExtraction());
+      const summary = createBaseSummary(1);
+
+      await processDriveFile(makeFile(), asContext(ctx), summary);
+
+      expect(spy).toHaveBeenCalledTimes(1);
+      expect(ctx.aiChain.run).not.toHaveBeenCalled();
+      expect(ctx.sheetsService.insertRow).toHaveBeenCalledTimes(1);
+      expect(summary.processed).toBe(1);
+      expect(metricsCore().result).toBe("ok");
+    });
+
+    it("el CUIT que leyó Vision NO se descarta aunque no esté en el texto del OCR", async () => {
+      const ctx = makeContext();
+      // El OCR devolvió algo, pero ilegible: no es testigo válido de los CUITs.
+      // Sin la excepción, cuitSanitizeStep descartaría el CUIT → SIN PROVEEDOR.
+      asScannedPdf(ctx, "escaneo ilegible sin datos utiles");
+      withVisionExtraction(ctx, okExtraction());
+      const summary = createBaseSummary(1);
+
+      await processDriveFile(makeFile(), asContext(ctx), summary);
+
+      expect(ctx.sheetsService.insertRow).toHaveBeenCalledTimes(1);
+      expect(summary.processed).toBe(1);
+      expect(metricsCore().result).toBe("ok");
+    });
+
+    it("sin Gemini configurado: mantiene el comportamiento actual (cadena sobre el texto del OCR)", async () => {
+      const ctx = makeContext();
+      asScannedPdf(ctx, "texto pobre del ocr");
+      const summary = createBaseSummary(1);
+
+      await processDriveFile(makeFile(), asContext(ctx), summary);
+
+      expect(ctx.aiChain.run).toHaveBeenCalledTimes(1);
+    });
+
+    it("Vision falla (error común): cae a la cadena de texto, no rompe", async () => {
+      const ctx = makeContext();
+      asScannedPdf(ctx, "texto pobre del ocr");
+      const spy = withVisionExtraction(ctx, new Error("vision boom"));
+      const summary = createBaseSummary(1);
+
+      await processDriveFile(makeFile(), asContext(ctx), summary);
+
+      expect(spy).toHaveBeenCalledTimes(1);
+      expect(ctx.aiChain.run).toHaveBeenCalledTimes(1);
+      expect(summary.failed).toBe(0);
+    });
+
+    it("Vision sin cuota (429): vuelve a Pendientes, no degrada a Revisión", async () => {
+      const ctx = makeContext({ driveProcessingFolderId: "processing" });
+      asScannedPdf(ctx);
+      withVisionExtraction(ctx, new Error("429 quota exceeded"));
+      const summary = createBaseSummary(1);
+
+      await processDriveFile(makeFile(), asContext(ctx), summary);
+
+      expect(ctx.driveService.moveFileToFolder).toHaveBeenCalledWith("file-1", "processing", "pending");
+      expect(summary.rateLimited).toBe(1);
+      expect(metricsCore().result).toBe("rate_limited");
+    });
+
+    it("PDF con texto propio: NO llama a Vision (ahorro de tokens)", async () => {
+      const ctx = makeContext();
+      const spy = withVisionExtraction(ctx, okExtraction());
+      const summary = createBaseSummary(1);
+
+      await processDriveFile(makeFile(), asContext(ctx), summary);
+
+      expect(spy).not.toHaveBeenCalled();
+      expect(ctx.aiChain.run).toHaveBeenCalledTimes(1);
+      expect(metricsCore().result).toBe("ok");
+    });
+
+    it("PDF escaneado sin PNG del OCR (poppler caído): cae a la cadena", async () => {
+      const ctx = makeContext();
+      ctx.pdfExtractor.extractTextFromPdf.mockResolvedValue("texto pobre del ocr");
+      ctx.pdfExtractor.isLastPdfScanned.mockReturnValue(true);
+      ctx.pdfExtractor.getLastOcrPng.mockReturnValue(null);
+      const spy = withVisionExtraction(ctx, okExtraction());
+      const summary = createBaseSummary(1);
+
+      await processDriveFile(makeFile(), asContext(ctx), summary);
+
+      expect(spy).not.toHaveBeenCalled();
+      expect(ctx.aiChain.run).toHaveBeenCalledTimes(1);
     });
   });
 });
