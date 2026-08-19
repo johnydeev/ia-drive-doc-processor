@@ -118,7 +118,11 @@ describe("planCuitEntity", () => {
     expect(plan.ambiguous).toEqual(["FRIAS 324"]);
   });
 
-  it("guarda 3: si el CUIT apunta a alguien que la hoja ya nombra, es un alta", () => {
+  it("guarda 3: dos nombres con el MISMO CUIT ya no dan de alta — se informan", () => {
+    // Cambio de criterio del owner (2026-08-18): el CUIT es la identidad y no se
+    // repite nunca. Antes esta hoja daba de alta "FRIAS 324" como edificio nuevo,
+    // y quedaban DOS consorcios compartiendo CUIT — con el matching por CUIT
+    // eligiendo cualquiera de los dos. Ahora la hoja se reporta y no se aplica.
     const plan = planCuitEntity({
       sheetRows: [
         { canonicalName: "FRIAS 320", cuit: "30-11111111-1", matchNames: null },
@@ -128,8 +132,10 @@ describe("planCuitEntity", () => {
       compareFields: CAMPOS,
     });
     expect(plan.renames).toEqual([]);
-    expect(plan.creates).toHaveLength(1);
-    expect(plan.creates[0].canonicalName).toBe("FRIAS 324");
+    expect(plan.creates).toEqual([]);
+    expect(plan.duplicates).toEqual([
+      { kind: "cuit", value: "30-11111111-1", names: ["FRIAS 320", "FRIAS 324"] },
+    ]);
   });
 
   it("el renombrado no aparece además como sobrante", () => {
@@ -208,5 +214,96 @@ describe("normalizeLspClientNumber", () => {
 
   it("si queda vacío devuelve el original", () => {
     expect(normalizeLspClientNumber("000")).toBe("000");
+  });
+});
+
+describe("planCuitEntity — filas repetidas en la hoja", () => {
+  it("informa el CUIT repetido y NO aplica esas filas", () => {
+    // El caso grave: dos razones sociales distintas con el mismo CUIT. Sin esto
+    // quedarían dos proveedores compartiendo CUIT y el matching le colgaría la
+    // boleta a cualquiera de los dos.
+    const plan = planCuitEntity({
+      sheetRows: [
+        { canonicalName: "ROMERO MIGUEL A", cuit: "20-16654129-9", matchNames: null },
+        { canonicalName: "ROMERO MIGUEL ANGEL", cuit: "20-16654129-9", matchNames: null },
+      ],
+      existing: [],
+      compareFields: CAMPOS,
+    });
+
+    expect(plan.creates).toEqual([]);
+    expect(plan.duplicates).toEqual([
+      { kind: "cuit", value: "20-16654129-9", names: ["ROMERO MIGUEL A", "ROMERO MIGUEL ANGEL"] },
+    ]);
+  });
+
+  it("informa la razón social repetida (el caso real de ROMERO RENZI CAMILA)", () => {
+    // Dos filas con la misma razón social y distinto nombre de fantasía producían
+    // dos updates contra el mismo id: cuál ganaba lo decidía Postgres.
+    const plan = planCuitEntity({
+      sheetRows: [
+        { canonicalName: "ROMERO RENZI CAMILA", cuit: "27-33516399-6", matchNames: "FUMIGACIONES MIGUEL" },
+        { canonicalName: "ROMERO RENZI CAMILA", cuit: "27-33516399-6", matchNames: "CAMILA ROMERO RENZI | FUMIGACIONES MIGUEL" },
+      ],
+      existing: [existente({ id: "p1", canonicalName: "ROMERO RENZI CAMILA", cuit: "27-33516399-6" })],
+      compareFields: CAMPOS,
+    });
+
+    expect(plan.updates).toEqual([]);
+    expect(plan.duplicates.map((d) => d.kind).sort()).toEqual(["cuit", "name"]);
+  });
+
+  it("el registro repetido NO se reporta como sobrante", () => {
+    // Bloquear la fila no puede hacer que el registro parezca ausente de la hoja:
+    // el reporte diría que sobra y el usuario lo borraría.
+    const plan = planCuitEntity({
+      sheetRows: [
+        { canonicalName: "ROMERO RENZI CAMILA", cuit: "27-33516399-6", matchNames: "A" },
+        { canonicalName: "ROMERO RENZI CAMILA", cuit: "27-33516399-6", matchNames: "B" },
+      ],
+      existing: [existente({ id: "p1", canonicalName: "ROMERO RENZI CAMILA", cuit: "27-33516399-6" })],
+      compareFields: CAMPOS,
+    });
+
+    expect(plan.orphans).toEqual([]);
+  });
+
+  it("las filas sanas se aplican igual aunque otra esté repetida", () => {
+    const plan = planCuitEntity({
+      sheetRows: [
+        { canonicalName: "ROMERO RENZI CAMILA", cuit: "27-33516399-6", matchNames: "A" },
+        { canonicalName: "ROMERO RENZI CAMILA", cuit: "27-33516399-6", matchNames: "B" },
+        { canonicalName: "RENZI MARIANA DEL PILAR", cuit: "27-16635120-6", matchNames: "FUMIGACIONES MIGUEL" },
+      ],
+      existing: [],
+      compareFields: CAMPOS,
+    });
+
+    expect(plan.creates.map((c) => c.canonicalName)).toEqual(["RENZI MARIANA DEL PILAR"]);
+  });
+
+  it("sin repetidos, no informa nada", () => {
+    const plan = planCuitEntity({
+      sheetRows: [{ canonicalName: "FRIAS 320", cuit: "30-11111111-1", matchNames: null }],
+      existing: [existente()],
+      compareFields: CAMPOS,
+    });
+
+    expect(plan.duplicates).toEqual([]);
+  });
+
+  it("varias filas sin CUIT no cuentan como CUIT repetido", () => {
+    // SUTERH, FATERYH y ARCA no tienen CUIT propio: los nulos no colisionan.
+    const plan = planCuitEntity({
+      sheetRows: [
+        { canonicalName: "SUTERH", cuit: null, matchNames: null },
+        { canonicalName: "FATERYH", cuit: null, matchNames: null },
+      ],
+      existing: [],
+      compareFields: CAMPOS,
+    });
+
+    expect(plan.duplicates).toEqual([]);
+    expect(plan.creates).toHaveLength(2);
   });
 });

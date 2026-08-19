@@ -95,6 +95,25 @@ export function DirectorySyncModal({ report, onClose, onApplyRenames }: Props) {
           </>
         )}
 
+        {report.duplicates.length > 0 && (
+          <>
+            <p className={styles.modalBody}>
+              <strong>Filas repetidas en el ALTA — no se aplicaron.</strong> Dejá una sola
+              y volvé a sincronizar. El CUIT no se repite nunca: identifica al registro
+              aunque cambie la razón social.
+            </p>
+            <ul className={styles.closeAllList}>
+              {report.duplicates.map((d, i) => (
+                <li key={i}>
+                  {d.kind === "cuit"
+                    ? `CUIT ${d.value} repetido en: ${d.names.join(" · ")}`
+                    : `Razón social repetida: ${d.value}`}
+                </li>
+              ))}
+            </ul>
+          </>
+        )}
+
         {report.ambiguous.length > 0 && (
           <p className={styles.modalBody}>
             Sin tocar por ambigüedad de CUIT: {report.ambiguous.join(", ")}

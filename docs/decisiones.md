@@ -4,6 +4,89 @@ Registro de decisiones tomadas ante problemas reales encontrados en producción.
 
 ---
 
+## 2026-08-18 — El CUIT es la identidad: no se repite, y el sync deja de elegir en silencio
+
+### Problema
+
+El owner cargó dos veces a `ROMERO RENZI CAMILA` en el ALTA, con distinto nombre de fantasía. Al
+revisar la hoja completa aparecieron **dos** filas repetidas, no una (`CAMPANA JORGE ARIEL` también).
+
+Qué hacía el sync: las dos filas tienen la misma razón social, así que caían sobre el mismo registro y
+generaban **dos updates contra el mismo id**, que terminaban juntos en el `UPDATE ... FROM (VALUES ...)`.
+Cuál ganaba lo decidía Postgres. En la práctica: el alias `CAMILA ROMERO RENZI` podía desaparecer sin
+que nada lo avisara.
+
+Y el caso grave era peor y estaba abierto: `Provider` tenía unique en `(clientId, canonicalName)` pero
+**no en el CUIT**. Dos registros del mismo cliente podían compartir CUIT, y el matching
+(`allProviders.find(...)`) le habría colgado la boleta al primero que devolviera la base, sin orden
+garantizado.
+
+### Decisión
+
+Criterio del owner, textual: **la razón social puede cambiar, el CUIT no cambia nunca; el que manda es
+el CUIT**. Se valida en dos capas:
+
+1. **En el plan del sync** (`findSheetDuplicates`, puro): se detectan filas repetidas por CUIT y por
+   razón social. Las involucradas **no se aplican** —ni alta ni update— y se informan en el modal.
+   Es el mismo criterio que rige desde el 2026-08-17 para sobrantes y renombres: el sync no decide
+   callado, informa y el humano resuelve.
+2. **Índice único `(clientId, cuit)`** en `Provider` y `Consortium`, como red final para los caminos
+   que no pasan por el ALTA (import Excel, altas futuras por UI). Postgres trata los NULL como
+   distintos, así que los proveedores sin CUIT propio (SUTERH, FATERYH, ARCA) conviven sin problema.
+
+Se verificó antes de aplicar: **0 CUITs repetidos** en los 186 proveedores y los 46 consorcios, y
+ninguno repetido en el ALTA. Era el momento de poner el candado — sobre datos ya sucios no entra.
+
+### Cambio de comportamiento: la "guarda 3" ya no da de alta
+
+La guarda 3 del sync (2026-08-17) decía: si el CUIT de una fila apunta a un registro que **otra fila
+ya nombra**, no es un renombre sino un alta. Con dos filas de distinta razón social y el mismo CUIT
+eso creaba un segundo registro compartiendo CUIT — exactamente lo que el owner acaba de prohibir.
+
+Ahora esa hoja se reporta y no se aplica. El test que fijaba el comportamiento viejo se actualizó
+dejando escrito por qué cambió.
+
+### Alternativas descartadas
+
+- **Sólo avisar, aplicando igual las filas.** El daño es silencioso: boletas colgadas del proveedor
+  equivocado, que nadie detecta hasta que los números no cierran.
+- **Sólo validar en el sync, sin índice único.** Deja abiertos el import Excel y cualquier alta por UI.
+- **Quedarse con la última fila repetida.** Sigue siendo elegir en silencio; el owner no se entera de
+  que la hoja está mal.
+
+### El alta por UI: el consorcio no validaba nada
+
+Al revisar los caminos de escritura apareció una asimetría: el alta de **proveedores** ya rechazaba el
+CUIT repetido con un 409 claro, pero la de **consorcios** metía `cuit: body.cuit` derecho a la base,
+sin validar **ni normalizar**.
+
+Lo segundo era lo peor: sin normalizar, cargar `30711111111` cuando ya existe `30-71111111-1` produce
+dos strings distintos, y **el índice único tampoco los ve como iguales**. El duplicado entraba por la
+puerta de adelante, con el candado puesto.
+
+Ahora el consorcio hace lo mismo que el proveedor: guarda el CUIT canónico y compara por dígitos,
+devolviendo 409 con un mensaje que se entiende. Sin esto, después de la migración el usuario habría
+visto el error crudo de Postgres (`Unique constraint failed on the fields: (clientId,cuit)`).
+
+La comparación quedó en `lib/duplicateCuit.ts` (`isDuplicateCuit`, 5 tests), usada por los dos
+endpoints: eran las mismas diez líneas duplicadas, y es lógica que no puede divergir entre ellos.
+
+### Impacto
+
+`lib/directorySyncPlan.ts` (detección + `duplicates` en el plan, 6 tests nuevos) ·
+`lib/duplicateCuit.ts` (nuevo, compartido por las dos altas por UI, 5 tests) ·
+`services/directorySync.service.ts` (lo propaga al reporte) · `DirectorySyncModal` (bloque nuevo,
+3 tests) · migración `20260818120000_unique_cuit_por_cliente`, que además dropea el índice común
+`Provider_clientId_cuit_idx` que el unique deja redundante. 738 tests, verdes.
+
+> **Pendiente aparte:** el modelo no representa que varios CUITs sean **la misma empresa** (el caso
+> Fumigaciones Miguel: tres personas físicas facturando por el mismo negocio). Hoy eso rompe la
+> vinculación de obligaciones, que compara `providerId` exacto: si el gasto fijo apunta a un CUIT y
+> factura otro de la familia, la obligación queda PENDING aunque el trabajo llegó. El owner decidió
+> tratarlo en otra sesión.
+
+---
+
 ## 2026-08-18 — El vencimiento del CAE se descarta por código, no por prompt
 
 ### Problema

@@ -32,6 +32,20 @@ export type EntityUpdate = { id: string; values: Record<string, unknown> };
 export type EntityRename = { id: string; from: string; to: string; cuit: string };
 export type EntityOrphan = { id: string; name: string };
 
+/**
+ * Fila de la hoja repetida. El CUIT es la identidad real —la razón social cambia
+ * (casamiento, cambio de denominación), el CUIT no— así que repetirlo es el caso
+ * grave: dos registros distintos compartiendo CUIT hacen que el matching por CUIT
+ * (`.find()`) le cuelgue la boleta a cualquiera de los dos, sin orden garantizado.
+ */
+export type EntityDuplicate = {
+  kind: "cuit" | "name";
+  /** El CUIT repetido, o la razón social repetida. */
+  value: string;
+  /** Razones sociales involucradas (una sola, repetida, si `kind` es "name"). */
+  names: string[];
+};
+
 export type CuitEntityPlan<TRow> = {
   creates: TRow[];
   updates: EntityUpdate[];
@@ -39,7 +53,43 @@ export type CuitEntityPlan<TRow> = {
   orphans: EntityOrphan[];
   /** Nombres de la hoja cuyo CUIT matchea a más de un registro: no se tocan. */
   ambiguous: string[];
+  /** Filas repetidas en la HOJA: se informan y no se aplican. */
+  duplicates: EntityDuplicate[];
 };
+
+/**
+ * Detecta filas repetidas en la hoja, por CUIT y por razón social.
+ *
+ * Se hace ANTES de armar el plan porque una fila repetida no tiene una respuesta
+ * correcta: dos filas con la misma razón social y distinto nombre de fantasía
+ * producían dos updates contra el mismo id, y cuál ganaba lo decidía Postgres. El
+ * sync no elige en silencio — informa y el humano resuelve, igual que con los
+ * sobrantes y los renombres.
+ */
+function findSheetDuplicates(rows: readonly CuitSheetRow[]): EntityDuplicate[] {
+  const duplicates: EntityDuplicate[] = [];
+
+  const byCuit = new Map<string, string[]>();
+  const byName = new Map<string, number>();
+
+  for (const row of rows) {
+    byName.set(row.canonicalName, (byName.get(row.canonicalName) ?? 0) + 1);
+    const digits = cuitDigits(row.cuit);
+    if (!digits) continue;
+    byCuit.set(digits, [...(byCuit.get(digits) ?? []), row.canonicalName]);
+  }
+
+  for (const [digits, names] of byCuit) {
+    if (names.length > 1) {
+      duplicates.push({ kind: "cuit", value: formatCuit(digits) ?? digits, names: [...new Set(names)] });
+    }
+  }
+  for (const [name, count] of byName) {
+    if (count > 1) duplicates.push({ kind: "name", value: name, names: [name] });
+  }
+
+  return duplicates;
+}
 
 /**
  * El CUIT se normaliza al formato canónico antes de comparar y de guardar, igual
@@ -59,7 +109,16 @@ export function planCuitEntity<TRow extends CuitSheetRow>({
   existing: CuitExistingRow[];
   compareFields: readonly string[];
 }): CuitEntityPlan<TRow> {
+  const duplicates = findSheetDuplicates(sheetRows);
+
+  // Las filas repetidas quedan fuera del plan: no se crean ni se actualizan hasta
+  // que el usuario deje una sola en la hoja.
+  const blockedNames = new Set(duplicates.flatMap((d) => d.names));
+  const rows = sheetRows.filter((r) => !blockedNames.has(r.canonicalName));
+
   const byName = new Map(existing.map((e) => [e.canonicalName, e]));
+  // Los nombres bloqueados igual cuentan como "presentes en la hoja": si no, el
+  // registro figuraría como sobrante y el reporte pediría borrarlo.
   const namesInSheet = new Set(sheetRows.map((r) => r.canonicalName));
 
   const byCuit = new Map<string, CuitExistingRow[]>();
@@ -77,7 +136,7 @@ export function planCuitEntity<TRow extends CuitSheetRow>({
   const ambiguous: string[] = [];
   const renamedIds = new Set<string>();
 
-  for (const row of sheetRows) {
+  for (const row of rows) {
     const hit = byName.get(row.canonicalName);
 
     if (hit) {
@@ -125,7 +184,7 @@ export function planCuitEntity<TRow extends CuitSheetRow>({
     .filter((e) => !namesInSheet.has(e.canonicalName) && !renamedIds.has(e.id))
     .map((e) => ({ id: e.id, name: e.canonicalName }));
 
-  return { creates, updates, renames, orphans, ambiguous };
+  return { creates, updates, renames, orphans, ambiguous, duplicates };
 }
 
 export type KeyedEntityPlan<TRow> = {

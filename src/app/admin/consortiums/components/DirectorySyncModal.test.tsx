@@ -15,6 +15,7 @@ const base: DirectorySyncReport = {
   oficios: { created: 3, updated: 0, orphans: [] },
   pendingRenames: [],
   ambiguous: [],
+  duplicates: [],
   warnings: [],
 };
 
@@ -97,5 +98,48 @@ describe("DirectorySyncModal", () => {
     expect(onApplyRenames).toHaveBeenCalledTimes(1);
 
     resolver?.();
+  });
+});
+
+describe("DirectorySyncModal — filas repetidas en el ALTA", () => {
+  it("avisa el CUIT repetido con los nombres involucrados", () => {
+    render(
+      <DirectorySyncModal
+        report={{
+          ...base,
+          duplicates: [
+            { entity: "provider", kind: "cuit", value: "20-16654129-9", names: ["ROMERO MIGUEL A", "ROMERO MIGUEL ANGEL"] },
+          ],
+        }}
+        onClose={vi.fn()}
+        onApplyRenames={vi.fn()}
+      />
+    );
+
+    expect(screen.getByText(/no se aplicaron/i)).toBeInTheDocument();
+    expect(screen.getByText(/CUIT 20-16654129-9 repetido en: ROMERO MIGUEL A · ROMERO MIGUEL ANGEL/)).toBeInTheDocument();
+  });
+
+  it("avisa la razón social repetida", () => {
+    render(
+      <DirectorySyncModal
+        report={{
+          ...base,
+          duplicates: [
+            { entity: "provider", kind: "name", value: "ROMERO RENZI CAMILA", names: ["ROMERO RENZI CAMILA"] },
+          ],
+        }}
+        onClose={vi.fn()}
+        onApplyRenames={vi.fn()}
+      />
+    );
+
+    expect(screen.getByText(/Razón social repetida: ROMERO RENZI CAMILA/)).toBeInTheDocument();
+  });
+
+  it("sin repetidos no muestra el bloque", () => {
+    render(<DirectorySyncModal report={base} onClose={vi.fn()} onApplyRenames={vi.fn()} />);
+
+    expect(screen.queryByText(/no se aplicaron/i)).not.toBeInTheDocument();
   });
 });

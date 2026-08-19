@@ -380,6 +380,7 @@ model Consortium {
   obligations            ExpenseObligation[]
 
   @@unique([clientId, canonicalName])
+  @@unique([clientId, cuit])
   @@index([clientId])
   @@index([bankId])
 }
@@ -428,7 +429,7 @@ model Provider {
   fixedExpenses       FixedExpense[]
 
   @@unique([clientId, canonicalName])
-  @@index([clientId, cuit])
+  @@unique([clientId, cuit])
   @@index([clientId])
 }
 

@@ -2,7 +2,8 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { requireAuthenticatedSession } from "@/lib/adminAuth";
 import { getPrismaClient } from "@/lib/prisma";
-import { cuitDigits, cuitsEqual, formatCuit } from "@/lib/cuit";
+import { cuitDigits, formatCuit } from "@/lib/cuit";
+import { isDuplicateCuit } from "@/lib/duplicateCuit";
 
 const createSchema = z.object({
   canonicalName: z.string().min(2),
@@ -52,7 +53,7 @@ export async function POST(request: Request) {
       where: { clientId: auth.session.clientId },
       select: { cuit: true },
     });
-    if (existingCuits.some((p) => cuitsEqual(p.cuit, body.cuit))) {
+    if (isDuplicateCuit(existingCuits, body.cuit)) {
       return NextResponse.json(
         { ok: false, error: "Ya existe un proveedor con ese CUIT para este cliente" },
         { status: 409 }

@@ -2,6 +2,39 @@
 
 Actualizado al 18/08/2026 (sesión 57 — diagnóstico de boletas + Vision + código de barras + corrida selectiva + guard del CAE).
 
+## 🆔 El CUIT no se repite: validación en el sync + unique en la base (2026-08-18)
+
+**Estado: implementado y verificado (typecheck + lint 0 errores + 743 tests + build + build:jobs OK).
+Migración `20260818120000_unique_cuit_por_cliente` PENDIENTE de aplicar por el owner.**
+
+Origen: el owner cargó dos veces a `ROMERO RENZI CAMILA` en el ALTA. Al revisar la hoja aparecieron
+**dos** filas repetidas (también `CAMPANA JORGE ARIEL`), y al mirar el schema, el agujero grande:
+`Provider` tenía unique en la razón social pero **no en el CUIT**.
+
+Hecho:
+- **Detección de repetidos en el plan del sync** (`findSheetDuplicates`, puro): por CUIT y por razón
+  social. Las filas involucradas **no se aplican** y se informan. Un cuidado: el registro repetido
+  **no** se reporta como sobrante — si no, el reporte pediría borrar lo que en realidad está bien.
+- **Bloque nuevo en el modal de sincronización** con qué está repetido y qué hacer.
+- **Índice único `(clientId, cuit)`** en `Provider` y `Consortium`, para los caminos que no pasan por
+  el ALTA (import Excel, altas por UI). Los NULL no colisionan en Postgres, así que SUTERH/FATERYH/ARCA
+  (sin CUIT propio) siguen funcionando. La migración además dropea el índice común que queda redundante.
+- **Cambio de comportamiento de la "guarda 3"** del 2026-08-17: dos razones sociales con el mismo CUIT
+  ya no dan de alta un segundo registro; se reportan. El test viejo se actualizó explicando por qué.
+
+- **El alta por UI de consorcios ahora valida y normaliza.** Era la asimetría del sistema: el alta de
+  proveedores ya rechazaba el CUIT repetido con un 409 claro, la de consorcios no validaba **ni
+  normalizaba** — y sin normalizar, `30711111111` contra `30-71111111-1` son dos strings distintos,
+  así que **ni el índice único los frenaba**. La comparación quedó en `lib/duplicateCuit.ts`,
+  compartida por los dos endpoints.
+
+**Verificado antes de aplicar:** 0 CUITs repetidos entre los 186 proveedores y los 46 consorcios, y
+ninguno en el ALTA. El índice entra limpio.
+
+**⏳ Pendiente del owner:** aplicar la migración; borrar la fila repetida de `ROMERO RENZI CAMILA`
+(dejar la que tiene `CAMILA ROMERO RENZI | FUMIGACIONES MIGUEL`) y la de `CAMPANA JORGE ARIEL`;
+sincronizar para que entre `RENZI MARIANA DEL PILAR` (`27-16635120-6`), que ya está en la hoja.
+
 ## 📅 Guard del vencimiento del CAE (2026-08-18)
 
 **Estado: implementado y verificado (typecheck + lint 0 errores + 729 tests + build + build:jobs OK).

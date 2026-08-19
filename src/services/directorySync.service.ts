@@ -8,6 +8,7 @@ import {
   type EntityOrphan,
   type EntityRename,
   type EntityUpdate,
+  type EntityDuplicate,
 } from "@/lib/directorySyncPlan";
 import type { ProviderTypeValue } from "@/lib/providerType";
 import type { DirectoryData } from "./googleSheets.service";
@@ -28,6 +29,8 @@ export type DirectorySyncReport = {
   /** Renombres detectados, pendientes de confirmación del usuario. */
   pendingRenames: Array<EntityRename & { entity: "consortium" | "provider"; invoices: number; periods: number }>;
   ambiguous: string[];
+  /** Filas repetidas en la hoja (por CUIT o por razón social): NO se aplicaron. */
+  duplicates: Array<EntityDuplicate & { entity: "consortium" | "provider" }>;
   warnings: string[];
 };
 
@@ -65,6 +68,7 @@ export async function syncDirectory(
 ): Promise<DirectorySyncReport> {
   const warnings = [...directory.warnings];
   const ambiguous: string[] = [];
+  const duplicates: Array<EntityDuplicate & { entity: "consortium" | "provider" }> = [];
   const pendingRenames: DirectorySyncReport["pendingRenames"] = [];
 
   // ---- Consorcios ----
@@ -79,6 +83,7 @@ export async function syncDirectory(
     compareFields: ["cuit", "matchNames"],
   });
   ambiguous.push(...consortiumPlan.ambiguous);
+  duplicates.push(...consortiumPlan.duplicates.map((d) => ({ ...d, entity: "consortium" as const })));
 
   await prisma.$transaction(async (tx) => {
     if (consortiumPlan.creates.length > 0) {
@@ -173,6 +178,7 @@ export async function syncDirectory(
     compareFields: ["cuit", "matchNames", "paymentAlias", "providerType", "oficioId"],
   });
   ambiguous.push(...providerPlan.ambiguous);
+  duplicates.push(...providerPlan.duplicates.map((d) => ({ ...d, entity: "provider" as const })));
 
   await prisma.$transaction(async (tx) => {
     if (providerPlan.creates.length > 0) {
@@ -418,6 +424,7 @@ export async function syncDirectory(
     },
     pendingRenames,
     ambiguous,
+    duplicates,
     warnings,
   };
 }

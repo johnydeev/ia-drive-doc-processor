@@ -125,7 +125,17 @@ export type DirectorySyncReport = {
   oficios: SyncEntityReport;
   pendingRenames: SyncPendingRename[];
   ambiguous: string[];
+  /** Filas repetidas en la hoja: se informan y NO se aplican. */
+  duplicates: SyncDuplicate[];
   warnings: string[];
+};
+
+/** Fila repetida en el ALTA, por CUIT o por razón social. */
+export type SyncDuplicate = {
+  entity: "consortium" | "provider";
+  kind: "cuit" | "name";
+  value: string;
+  names: string[];
 };
 
 /** Sección Banco del acordeón de Config: banco asignado + datos de la cuenta. */

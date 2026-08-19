@@ -12,6 +12,14 @@
   resumen. Requiere la migración `20260818000000_processing_job_diagnostics`.
 
 ### Fixed
+- **El CUIT ya no se puede repetir (2026-08-18)**. `Provider` tenía unique en la razón social pero no
+  en el CUIT: dos registros podían compartirlo y el matching le colgaba la boleta a cualquiera de los
+  dos, sin orden garantizado. Ahora el sync detecta filas repetidas en el ALTA —por CUIT y por razón
+  social—, las informa en el modal y **no las aplica**, y un índice único cierra la puerta para los
+  demás caminos de alta. Lo destapó una fila cargada dos veces; en la hoja había dos casos. El alta
+  de edificios desde el panel, que no validaba ni normalizaba el CUIT, ahora hace lo mismo que la
+  de proveedores: guarda el formato canónico y avisa con un mensaje claro en vez del error crudo
+  de Postgres. Requiere la migración `20260818120000_unique_cuit_por_cliente`.
 - **El vencimiento del CAE ya no entra como fecha de pago (2026-08-18)**. Una factura entró con el
   vencimiento del CAE como `dueDate` — un dato falso, silencioso, que después alimenta la deuda del
   mes. El prompt ya lo prohibía; el modelo lo devolvió igual, y su boleta hermana con el mismo layout

@@ -559,6 +559,12 @@ seam `onDiagnostics` en `pipeline/runner.ts` · `api/client/manual-run/` · `hoo
       fast-path por número de cliente es terminal, mandó a Sin Asignar toda boleta de servicio del
       mes (0 boletas de EDENOR en agosto). Un servicio que falta en la hoja rebota sin fallback y no
       hay forma de verlo desde el panel.
+- [ ] **Agrupar proveedores que son la misma empresa** (caso Fumigaciones Miguel: tres personas
+      físicas facturando por el mismo negocio, con CUITs distintos). Hoy rompe la vinculación de
+      obligaciones, que compara `providerId` exacto: si el gasto fijo del edificio apunta a un CUIT y
+      factura otro de la familia, la obligación queda PENDING aunque el trabajo llegó y se pagó.
+      Tampoco alcanza con cargar los tres como gastos fijos del mismo edificio: serían 3 obligaciones
+      por mes con 2 siempre incumplidas. Decisión del owner el 2026-08-18: se trata en otra sesión.
 - [ ] **Spec de liquidación de sueldos (LSD)**: registrar el gasto por **sueldo neto de cada
       empleado**, con el empleado como persona física identificada por su **CUIL**, desglosado uno
       por empleado, imputado al consorcio del encabezado. Falta definir vencimiento y número de
