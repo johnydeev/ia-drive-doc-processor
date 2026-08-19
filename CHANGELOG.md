@@ -12,6 +12,12 @@
   resumen. Requiere la migración `20260818000000_processing_job_diagnostics`.
 
 ### Fixed
+- **El vencimiento del CAE ya no entra como fecha de pago (2026-08-18)**. Una factura entró con el
+  vencimiento del CAE como `dueDate` — un dato falso, silencioso, que después alimenta la deuda del
+  mes. El prompt ya lo prohibía; el modelo lo devolvió igual, y su boleta hermana con el mismo layout
+  no. Ahora un guard determinístico anula el vencimiento si coincide con una fecha que el papel
+  rotula como del CAE, sin depender de que el modelo obedezca. Lo detectó el primer reporte de la
+  corrida selectiva, el mismo día que se estrenó.
 - **El texto del OCR ya no se descarta por ser más corto (2026-08-18)**. Las facturas con el cuerpo
   en texto y el membrete en imagen rebotaban por SIN PROVEEDOR aunque el proveedor estuviera cargado:
   el OCR leía bien el CUIT del emisor, pero como su resultado era más corto que el texto de pdf-parse

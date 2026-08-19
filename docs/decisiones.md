@@ -4,6 +4,69 @@ Registro de decisiones tomadas ante problemas reales encontrados en producción.
 
 ---
 
+## 2026-08-18 — El vencimiento del CAE se descarta por código, no por prompt
+
+### Problema
+
+**Lo encontró el primer reporte de la corrida selectiva**, apenas se estrenó la feature. La factura
+`00002-00208625` (Fumigaciones Miguel → EVA PERON 1761, $69.200) entró como `ok` con
+`dueDate = 2026-07-07`, que es exactamente su **"Fecha de Vto. de CAE: 07/07/2026"** — la caducidad de
+la autorización de AFIP, no una fecha de pago.
+
+Los prompts lo prohíben explícitamente desde siempre ("si la fecha está junto a un número de CAE → es
+del CAE → null"). Y la boleta **hermana** —`00002-00208193`, mismo emisor, mismo layout, mismo
+sistema de facturación— devolvió `null` correctamente en la misma corrida.
+
+O sea: **no es el prompt, es inconsistencia del modelo** (`gemini-2.5-flash-lite`) sobre el mismo
+documento. Un prompt más enfático no arregla esto.
+
+Y es peor que un rebote: la boleta **entra en silencio** con un vencimiento falso, que después se usa
+para la deuda del mes y la liquidación. Nadie se entera.
+
+### Decisión
+
+Guard determinístico en `lib/caeDueDateGuard.ts`: si el `dueDate` que devolvió el modelo coincide con
+una fecha que el papel rotula como vencimiento de CAE, se anula. Mismo patrón que el guard de IVA
+contenido y el código de barras: barato, sin tokens, y **no depende de que el modelo obedezca**.
+
+Va en `refineExtractionWithRawText`, que es el único lugar por donde pasan **todos** los extractores
+(Cerebras, Gemini, OpenAI, Claude lo llaman cada uno). Se aplica **antes** del early-return de
+`isUtilityBill`, o sea también a los LSP: el vencimiento del CAE no es fecha de pago en ningún tipo de
+comprobante.
+
+**La detección se hace por la ventana de texto ANTERIOR a cada fecha, no por el rótulo "Vto"** —
+porque "Vto" también rotula el vencimiento de pago, que es el bueno. Si esa ventana menciona el CAE,
+la fecha es del CAE. Cubre las tres formas reales:
+
+```
+Fecha de Vto. de CAE: 07/07/2026
+Fecha de Vito. de CAE: 11/07/2026                      (así lo leyó el OCR)
+Nro. de CAE: 86095857203130 - Fecha de Vto.: 12/03/26  (año de dos dígitos)
+```
+
+Dos frenos contra el falso positivo, que acá sería **peor que el bug** (anular un vencimiento bueno):
+
+1. **La ventana no cruza el salto de línea.** Con 60 caracteres planos se comía la línea siguiente y
+   marcaba como CAE la fecha de emisión (`Fecha 27/06/2026`). Lo agarró un test antes de llegar a
+   producción.
+2. **Si la ventana menciona un PAGO, la fecha se deja intacta**: los prompts tratan el vencimiento
+   "para el pago" como siempre válido, y esa regla manda sobre este guard.
+
+### Verificación contra el caso real
+
+Corrido sobre el texto exacto que guardó el reporte de producción: corrige la boleta que estaba mal
+(`2026-07-07` → `null`) y **no toca** las otras dos, que ya venían en `null`. 12 tests propios.
+
+### Impacto
+
+`src/lib/caeDueDateGuard.ts` (nuevo, puro) + una llamada al principio de
+`refineExtractionWithRawText`. 729 tests, verdes.
+
+> **Nota para el owner:** la boleta `00002-00208625` ya está en la base con el vencimiento equivocado.
+> El guard evita los próximos, no corrige el pasado.
+
+---
+
 ## 2026-08-18 — La corrida selectiva encola: el worker nunca miró el flag del scheduler
 
 ### Problema

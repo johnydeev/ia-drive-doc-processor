@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { formatCuit } from "@/lib/cuit";
+import { correctCaeDueDate } from "@/lib/caeDueDateGuard";
 import { correctVatContainedAmount } from "@/lib/vatContainedAmountGuard";
 import { ExtractedDocumentData } from "@/types/extractedDocument.types";
 
@@ -1134,6 +1135,19 @@ export function refineExtractionWithRawText(
   extracted: ExtractedDocumentData,
   rawText: string
 ): ExtractedDocumentData {
+  // ── Guard del vencimiento del CAE ────────────────────────────────────────
+  // Va PRIMERO y aplica a todo, LSPs incluidos: el vencimiento del CAE no es una
+  // fecha de pago en ningún tipo de comprobante. Los prompts ya lo prohíben, pero
+  // el modelo lo devuelve igual (visto en producción el 2026-08-18) y la boleta
+  // entra en silencio con un vencimiento falso — peor que rebotar.
+  const caeCorrection = correctCaeDueDate(extracted.dueDate ?? null, rawText);
+  if (caeCorrection.corrected) {
+    console.warn(
+      `[cae-guard] dueDate descartado: "${extracted.dueDate}" es el vencimiento del CAE, no de pago`
+    );
+    extracted = { ...extracted, dueDate: null };
+  }
+
   // Para LSPs no aplicar el refinamiento de consorcio por "Razón Social:"
   // porque esa sección puede pertenecer al cliente, no al consorcio.
   //

@@ -1,6 +1,55 @@
 # Progreso del proyecto — drive-doc-processor
 
-Actualizado al 18/08/2026 (sesión 57 — diagnóstico de las boletas rebotadas + Vision para PDFs escaneados + CUIT del código de barras AFIP).
+Actualizado al 18/08/2026 (sesión 57 — diagnóstico de boletas + Vision + código de barras + corrida selectiva + guard del CAE).
+
+## 📅 Guard del vencimiento del CAE (2026-08-18)
+
+**Estado: implementado y verificado (typecheck + lint 0 errores + 729 tests + build + build:jobs OK).
+Sin migración. Sin commitear.**
+
+**Lo encontró el primer reporte de la corrida selectiva**, el mismo día que se estrenó la feature. La
+factura `00002-00208625` (Fumigaciones Miguel → EVA PERON 1761) entró como `ok` con
+`dueDate = 2026-07-07`, que es su "Fecha de Vto. de CAE". Su boleta hermana, mismo emisor y layout,
+devolvió `null` bien: es inconsistencia del modelo, no del prompt — que ya lo prohíbe.
+
+Hecho:
+- **`src/lib/caeDueDateGuard.ts`** (puro, 12 tests): anula el `dueDate` si coincide con una fecha que
+  el papel rotula como vencimiento de CAE.
+- Va en `refineExtractionWithRawText`, el único punto por el que pasan **todos** los extractores, y
+  **antes** del early-return de `isUtilityBill` (el vencimiento del CAE no es fecha de pago en ningún
+  comprobante).
+- **Detección por la ventana anterior a la fecha, no por el rótulo "Vto"** (que también rotula el
+  vencimiento bueno). Cubre las tres formas reales, incluida la que deformó el OCR (`Vito.`) y la de
+  año con dos dígitos.
+- Dos frenos contra el falso positivo, que acá sería peor que el bug: la ventana **no cruza el salto
+  de línea** (sin eso marcaba la fecha de emisión de la línea de abajo — lo agarró un test), y si
+  menciona un **PAGO** la fecha se deja intacta.
+
+**Verificado contra el texto real del reporte de producción**: corrige la boleta que estaba mal y no
+toca las otras dos.
+
+**⏳ Pendiente del owner:** la boleta `00002-00208625` ya está en la base con el vencimiento
+equivocado — el guard evita los próximos, no corrige el pasado.
+
+## 🔬 Primera corrida selectiva real: qué mostró (2026-08-18)
+
+Tres boletas de Fumigaciones Miguel, tres resultados distintos, y el reporte alcanzó para
+diagnosticar las tres sin bajar un solo PDF:
+
+| Boleta | Resultado | Qué pasó |
+|---|---|---|
+| `FC-0002-00208625-B` (EVA PERON 1761) | `ok` | **Entró gracias al fix del OCR de hoy** (`textSource: merged` en las 3) — pero con el vencimiento del CAE, que originó el guard de arriba |
+| `FC-0002-00208193-B` (CASTRO BARROS 1310) | `duplicate` | Ya estaba cargada desde el 07/07/2026. El PDF volvió a Pendientes; el dedup por hash hizo lo correcto |
+| `FC-0003-00001430-C` | `unassigned` (`provider_not_registered`) | **Es de otra persona**: `MARIANA DEL PILAR RENZI`, CUIT `27-16635120-6`, monotributista, que factura bajo la misma marca (mismo domicilio, teléfono y web que Romero Miguel Ángel). No está cargada |
+
+El directorio ya tiene dos de esa familia con fantasía "FUMIGACIONES MIGUEL" (`ROMERO MIGUEL A`
+20-16654129-9 y `ROMERO RENZI CAMILA` 27-33516399-6). Falta la tercera.
+
+**⏳ Pendiente del owner:** cargar `MARIANA DEL PILAR RENZI` (`27-16635120-6`) en `_Proveedores`.
+
+**Detalle menor detectado:** en la Factura C la IA extrajo `consortium: "CONSUMIDOR FINAL"` — tomó la
+condición de IVA del receptor como nombre del edificio. No molestó porque el consorcio matcheó por
+CUIT, pero en una boleta sin el CUIT del consorcio sería un rebote.
 
 ## 🎯 Corrida selectiva con diagnóstico (2026-08-18)
 

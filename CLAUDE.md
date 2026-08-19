@@ -130,6 +130,8 @@ Client          → Tenant. Roles: ADMIN / CLIENT / VIEWER. consortiumsEnabled (
   │                           + invoiceId? (se vincula solo cuando llega la boleta). Unique (periodId, fixedExpenseId)
   ├── ConsortiumProvider → Relación N:M consorcio↔proveedor. Unique (consortiumId, providerId)
   ├── ProcessingJob → Cola de jobs (PENDING/PROCESSING/COMPLETED/FAILED)
+  │                    diagnosticRunId? → agrupa los jobs de una corrida selectiva
+  │                    diagnosticsJson? → diagnóstico de esa boleta (solo corrida selectiva)
   ├── SchedulerState → Estado runtime del scheduler por cliente
   │                    lastDirectorySyncAt: última sincronización ALTA
   ├── ProcessingLog  → Historial de ejecuciones
@@ -259,8 +261,8 @@ Siempre usar `resolveGoogleConfig(client)` para construir el `GoogleSheetsServic
 
 1. **Download** PDF desde Drive
 2. **Dedup hash** → SHA256 del binario
-3. **Extracción texto** (`textExtractStep`, sin tokens) → pdf-parse → fallback OCR (tesseract). Luego **triage capa 1** (`documentTriageGate`): heurística `classifyDocumentType` sobre el texto ANTES de la IA → si es claramente no-boleta (oblea, certificado de fumigación, plano…) se renombra `[NO BOLETA]` y va a Revisión **sin gastar tokens** (sesgo conservador: ante la duda, es boleta).
-4. **Extracción IA** (`aiExtractStep`) → cadena Cerebras → Gemini → OpenAI → Claude (fallback final OCR_ONLY). Luego **triage capa 2** (`isBoletaGate`): si la IA devolvió `isBoleta=false` → `[NO BOLETA]` + Revisión.
+3. **Extracción texto** (`textExtractStep`, sin tokens) → pdf-parse → fallback OCR (tesseract). El texto del OCR se conserva si es más largo **o si aporta un CUIT que el texto directo no tiene** (`lib/ocrMerge.ts`, 2026-08-18): antes se descartaba por longitud y con él se iba el CUIT del membrete. Si pdf-parse no saca texto propio, el PDF es un **escaneo** (`isLastPdfScanned()`). Luego **triage capa 1** (`documentTriageGate`): heurística `classifyDocumentType` sobre el texto ANTES de la IA → si es claramente no-boleta (oblea, certificado de fumigación, plano…) se renombra `[NO BOLETA]` y va a Revisión **sin gastar tokens** (sesgo conservador: ante la duda, es boleta).
+4. **Extracción IA** (`aiExtractStep`) → **PDF escaneado**: la página 1 que rindió el OCR va a **Gemini Vision** (2026-08-18); si falla sigue la cadena, si da 429 vuelve a Pendientes. Resto: cadena Cerebras → Gemini → OpenAI → Claude (fallback final OCR_ONLY). Luego **triage capa 2** (`isBoletaGate`): si la IA devolvió `isBoleta=false` → `[NO BOLETA]` + Revisión.
 5. **Dedup business key** → boletaNumber + providerTaxId + dueDate + amount
 6. **Resolve assignment** → match consorcio + proveedor + período activo del consorcio
 7. **Canonización** → reemplazar datos OCR por datos canónicos de DB
@@ -278,6 +280,14 @@ Siempre usar `resolveGoogleConfig(client)` para construir el `GoogleSheetsServic
 2. **Fuzzy** → todos los tokens de `canonicalName` aparecen en `rawOcr`
 3. **Alias** → el rawOcr coincide con algún alias registrado en `consortium.aliases`
 ### Matching de proveedor (SOLO CUIT desde 2026-07-02)
+> **Orden de rescate cuando falta el CUIT del proveedor** (`assignmentStep`):
+> 1. **Código de barras AFIP** (`lib/afipBarcode.ts`, 2026-08-18) — determinístico, 0 tokens. Cubre
+>    ~6% de las boletas: la RG 1702 obliga a imprimir el código, no a que los dígitos queden como
+>    texto. Valida prefijo + checksum + fecha del CAE + corroboración contra el CAE y punto de venta
+>    impresos, porque sin eso confundía códigos de pago electrónico con comprobantes.
+> 2. **Fallback visual** (Gemini Vision sobre el membrete).
+>
+> En ambos, la red final es el directorio: un CUIT que no esté cargado no matchea con nadie.
 - **CUIT normalizado** (solo dígitos) — excluye el CUIT del consorcio. Si la boleta no trae el
   CUIT del proveedor (o está solo en el logo/imagen sin buen OCR) → **Sin Asignar por diseño**.
 - **Excepción:** el match por nombre queda habilitado (parámetro `allowNameMatch`) SOLO para
@@ -295,22 +305,28 @@ Analiza los primeros 4000 caracteres y retorna:
 - `"GENERIC_LSP"` → prompt genérico LSP (fallback)
 - `null` → no es LSP → usa `buildInvoicePrompt` (facturas normales)
 ### Prompts por empresa implementados
-| Empresa | Función | CUIT hardcodeado |
-|---------|---------|-----------------|
-| Edesur | `buildEdesurPrompt()` | 30-65511651-2 |
-| Edenor | `buildEdenorPrompt()` | 30-65511620-2 |
-| AySA | `buildAysaPrompt()` | 30-70956507-5 |
-| Metrogas | `buildGasPrompt()` | 30-65786442-4 |
-| Naturgy | `buildGasPrompt()` | 30-53330905-7 |
-| Camuzzi | `buildGasPrompt()` | 30-65786613-3 |
-| Litoral Gas | `buildGasPrompt()` | 30-66176173-2 |
-| Personal | `buildPersonalPrompt()` | 30-63945373-8 |
-| Sindicales (SUTERH/FATERYH/SERACARH) | `buildSindicalPrompt()` | — (CUIT del papel = consorcio) |
-| ARCA F931 (SUSS) | `buildArcaPrompt()` | — (CUIT del papel = consorcio; total en el VEP/pág. 2) |
-| Genérico LSP | `buildGenericUtilityBillPrompt()` | — |
-| Facturas normales | `buildInvoicePrompt()` | — |
+> **Los prompts NO hardcodean el CUIT de la empresa** (corregido en la doc el 2026-08-18: la tabla
+> vieja listaba un CUIT por empresa y ya no es así). Cada prompt le indica a la IA **dónde buscarlo**
+> en el encabezado y le advierte que el CUIT del cliente/consorcio no es el del emisor. Para los
+> servicios eso casi nunca alcanza —el CUIT suele estar en el logo— y por eso la asignación real se
+> resuelve por **número de cliente** contra `LspService`.
+
+| Empresa | Función |
+|---------|---------|
+| Edesur | `buildEdesurPrompt()` |
+| Edenor | `buildEdenorPrompt()` |
+| AySA | `buildAysaPrompt()` |
+| Metrogas | `buildGasPrompt()` |
+| Naturgy | `buildGasPrompt()` (no operado por MorinigoAdm — desestimado 2026-08-18) |
+| Camuzzi | `buildGasPrompt()` |
+| Litoral Gas | `buildGasPrompt()` |
+| Personal | `buildPersonalPrompt()` |
+| Sindicales (SUTERH/FATERYH/SERACARH) | `buildSindicalPrompt()` |
+| ARCA F931 (SUSS) | `buildArcaPrompt()` |
+| Genérico LSP | `buildGenericUtilityBillPrompt()` |
+| Facturas normales | `buildInvoicePrompt()` |
 ### Reglas compartidas entre prompts LSP
-- **CUIT**: cada prompt indica explícitamente el CUIT de la empresa y advierte que el CUIT del cliente/consorcio NO debe usarse como providerTaxId.
+- **CUIT**: cada prompt indica dónde buscar el CUIT del EMISOR y advierte que el del cliente/consorcio NO debe usarse como providerTaxId. En los servicios el CUIT suele estar solo en el logo: el vínculo real lo resuelve el número de cliente.
 - **Dirección**: reglas unificadas en `CONSORTIUM_ADDRESS_RULES` para limpiar ceros, sufijos, CP, piso/depto.
 - **Fechas inválidas**: reglas en `INVALID_DATE_RULES` compartidas (CESP, CAE, emisión, próxima liquidación).
 - **clientNumber**: cada prompt LSP indica dónde buscar el número de cliente específico de esa empresa.
@@ -492,6 +508,24 @@ Customizable por cliente en `extractionConfigJson.columnMapping`. Fuente única 
   borrar avisa cuántos edificios quedarán sin banco (la FK es `SetNull`).
 - Agrupación pura en `lib/groupByBank.ts`; paleta en `lib/bankPalette.ts` (fuente única compartida
   con el Zod de los endpoints).
+### Ejecutar ahora → corrida selectiva (2026-08-18)
+El botón ya **no** procesa todo lo que haya en Pendientes: abre un modal donde se eligen hasta **10**
+boletas (tope validado en el server), se **encolan** como `ProcessingJob` con un `diagnosticRunId`
+común y el modal sigue su avance archivo por archivo.
+
+**Se encola, no se procesa en el request**: el worker no depende del flag del scheduler (su claim
+filtra solo por `status: "PENDING"`), así que funciona prendido o apagado. Procesar inline habría
+metido ~85s en un request que el túnel corta a los 100s.
+
+Al terminar la última boleta, el worker escribe un **reporte de diagnóstico** en
+`Pendientes/_diagnosticos`: un JSON con métricas + lo extraído antes y después de canonizar + **el
+texto exacto que vio la IA**, y un `.md` con el resumen. Es la única forma de analizar fallas de
+extracción sin volver a bajar los PDFs a mano.
+
+Archivos: `lib/manualRun.ts` · `lib/diagnosticsReport.ts` · `services/diagnosticsRun.service.ts` ·
+seam `onDiagnostics` en `pipeline/runner.ts` · `api/client/manual-run/` · `hooks/useManualRun.ts` +
+`components/ManualRunModal.tsx`.
+
 ### Cerrar Periodo General (modal de 2 pasos)
 1. **Preview** (`GET /api/client/periods/close-all/preview`): calcula mes mayoritario entre períodos ACTIVE del cliente. Retorna `{ majorityMonth, nextMonth, toClose, toSkip }`.
 2. **Execute** (`POST /api/client/periods/close-all`): recalcula mes mayoritario server-side, cierra períodos del mes mayoritario (ACTIVE→CLOSED) y crea el siguiente como ACTIVE. Retorna `{ closed, created, skipped, warnings }`.
@@ -520,7 +554,21 @@ Customizable por cliente en `extractionConfigJson.columnMapping`. Fuente única 
 - [ ] UI de gestión de carpetas Drive por cliente desde el panel
 - [ ] Resincronización automática con Sheets cuando Google falla
 - [ ] UI para asignar Rubro y Coeficiente a invoices individuales desde el panel (Stage 2)
-- [ ] UI de gestión de LspServices desde el panel (hoy solo via archivo ALTA)
+- [ ] **UI de gestión de LspServices desde el panel** (hoy solo via archivo ALTA). **Subió de
+      prioridad el 2026-08-18**: la tabla estuvo VACÍA hasta que se cargó el ALTA, y como el
+      fast-path por número de cliente es terminal, mandó a Sin Asignar toda boleta de servicio del
+      mes (0 boletas de EDENOR en agosto). Un servicio que falta en la hoja rebota sin fallback y no
+      hay forma de verlo desde el panel.
+- [ ] **Spec de liquidación de sueldos (LSD)**: registrar el gasto por **sueldo neto de cada
+      empleado**, con el empleado como persona física identificada por su **CUIL**, desglosado uno
+      por empleado, imputado al consorcio del encabezado. Falta definir vencimiento y número de
+      comprobante. Hoy los LSD caen en Sin Asignar y 2 de 5 dan falso positivo FATERYH en el router
+      (el texto trae el nombre del convenio colectivo).
+- [ ] **Mostrar `ProcessingLog` en la UI**: guarda el resumen de CADA ejecución desde siempre y
+      ninguna pantalla lo muestra.
+- [ ] **Facturas con el membrete en imagen que el fallback visual no resuelve** (sistema GESTIONPRO):
+      el proveedor está cargado y el CUIT se lee a simple vista en el PDF, pero la boleta rebota. Hay
+      que ver por qué falla el fallback — solo visible en logs de producción o reprocesando.
 - [ ] Job en background para operaciones batch (bulk-move / bulk-delete): la cola ProcessingJob +
       worker ya existen — spec propio pendiente. **Bajó de prioridad el 2026-08-06**: el frontend
       ahora chunkea en tandas de 5 (`RUN_CHUNK` en `boletas/hooks/useBatchRunner.ts`), así que el
