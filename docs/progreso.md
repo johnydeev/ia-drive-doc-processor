@@ -1,6 +1,65 @@
 # Progreso del proyecto — drive-doc-processor
 
-Actualizado al 18/08/2026 (sesión 57 — diagnóstico de boletas + Vision + código de barras + corrida selectiva + guard del CAE).
+Actualizado al 20/08/2026 (sesión 58 — obligaciones por período: cada mes es una hoja cerrada).
+
+## 🗓️ Obligaciones por período: cada mes es una hoja cerrada (2026-08-20)
+
+**Estado: implementado y verificado (typecheck + lint 0 errores + 768 tests + build + build:jobs OK).
+Migración `20260820000000_invoice_carry_over_requested` **YA APLICADA** por el owner. Sin commitear.**
+
+Spec: `docs/superpowers/specs/2026-08-20-obligaciones-por-periodo-design.md`
+Plan: `docs/superpowers/plans/2026-08-20-obligaciones-por-periodo.md`
+
+Origen: el owner abrió la vista y encontró **31 boletas de marzo a julio** en un edificio **sin gastos
+fijos cargados**. El bloque "impagas de meses anteriores" listaba toda boleta con `isPaid: false` de
+períodos cerrados — y como **los pagos se hacen fuera de la app**, eso era el histórico entero: 1124
+de 1125 boletas. El sistema decía la verdad, pero la verdad era inservible.
+
+Hecho:
+- **La vista es por MES calendario y navegable**, no por "período activo". Muestra los edificios que
+  tienen período de ese mes, **esté abierto o cerrado**: un mes cerrado sigue siendo operable, porque
+  es al cerrar cuando el owner sabe qué quedó sin pagar.
+- **Nada se arrastra solo.** Se eliminó la consulta `unpaid`. Lo único que cruza de un mes a otro es
+  lo que el owner empujó a mano.
+- **El traspaso se marca en el origen** (`Invoice.carryOverRequestedAt`) y **no mueve nada**: el
+  traslado ocurre después de cerrar, cuando ya existe el período destino.
+- **Se ejecuta por tandas de 5** desde la UI (`useCarryOverRun`, reusando `useBatchRunner`), con barra
+  de avance. El límite de 100s del túnel es **por request**, así que el total deja de tener techo.
+  Secuencial a propósito: la cuota de Sheets es 60 escrituras/minuto.
+- **"Quedaron N sin pasar — continuar"** si se cierra la pestaña a mitad de camino. Nada queda a
+  medias: cada traslado es individual e idempotente.
+- **Deshacer en sus dos formas**: desmarcar antes de ejecutar, y devolver al mes de origen una ya
+  trasladada (funciona aunque el origen esté cerrado).
+- **El PDF ya tenía la sección aparte** desde la Parte 2: sólo se renombró a "VIENEN DEL MES ANTERIOR".
+
+**Decisión del owner que atraviesa todo:** los pagos se registran **fuera de la app** y la página no
+los admite hasta nuevo aviso. Consecuencia: **no se puede filtrar por "impaga"** porque para el
+sistema todas lo están. Qué pasa al mes siguiente lo decide el owner con un botón.
+
+**Lo que encontró la re-revisión** (se codeó sin plan previo y el owner pidió revisar):
+1. **El arrastre encadenado se había perdido**: una boleta que pasó de julio a agosto y en agosto
+   tampoco se pagaba quedaba atrapada, porque el botón vivía sólo en las filas de gastos fijos y una
+   arrastrada nunca se vincula a una obligación en el destino.
+2. **Faltaba el deshacer de un traslado ejecutado**, que el spec pedía.
+3. **Dead code**: `handleRunNow` quedó sin usar en el panel de clientes.
+
+**⏳ Pendiente del owner:** smoke — marcar una boleta, cerrar el período, ver la barra avanzar y
+confirmar que aparece en el mes siguiente bajo "Vienen del mes anterior".
+
+**⏳ Pendiente chico:** pintar en cada edificio si su período está abierto o cerrado (el dato ya viaja
+en `periodStatus`).
+
+### "Edificio de Prueba" para los smokes (2026-08-20)
+
+Como **no hay staging** —cada commit a `master` es un deploy real— los smokes se hacen contra
+producción. Para no tocar consorcios reales se creó el consorcio ficticio **"Edificio de Prueba"**.
+
+**No borrarlo:** es infraestructura de verificación. El detalle de cómo está armado, qué contamina y
+cómo limpiarlo está en `CLAUDE.md` (sección propia), que es el archivo que se lee al iniciar sesión.
+
+Lo esencial: va en el archivo ALTA (si no, el sync lo reporta como sobrante para siempre), lleva CUIT
+placeholder —que **no matchea por CUIT**, porque no pasa checksum— y conviene asignarle un banco
+propio para que quede agrupado aparte en la vista de obligaciones.
 
 ## 🆔 El CUIT no se repite: validación en el sync + unique en la base (2026-08-18)
 

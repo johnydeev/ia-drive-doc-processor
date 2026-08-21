@@ -180,7 +180,7 @@ export default function ConsortiumsPage() {
   // Scheduler + acciones de toolbar (Tanda 3c).
   const {
     schedulerEnabled, busyAction,
-    handleToggleScheduler, handleRunNow, handleSyncDirectory,
+    handleToggleScheduler, handleSyncDirectory,
     handleSyncPayments, handleSetupSheetProtection, handleUnprotectSheet,
     syncReport, closeSyncReport, applyRenames,
   } = useScheduler({

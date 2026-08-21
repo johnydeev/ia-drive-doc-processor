@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Changed
+- **La vista de obligaciones es por mes y no arrastra nada sola (2026-08-20)**. Mostraba todas las
+  boletas impagas de períodos cerrados, que con los pagos fuera de la app eran 1124 de 1125: una
+  pantalla llena de ruido que tapaba lo único que importa, lo que hay que pagar este mes. Ahora se
+  elige un mes y se ve sólo eso, con flechas para navegar. Lo único que cruza de un mes a otro es lo
+  que se marca a mano con "Pasar al mes siguiente"; el traslado se ejecuta después de cerrar el
+  período, por tandas y con barra de avance. Se puede deshacer antes o después de ejecutarlo.
+  Requiere la migración `20260820000000_invoice_carry_over_requested`.
+
 ### Added
 - **Corrida selectiva de boletas con diagnóstico (2026-08-18)**. **Ejecutar ahora** ya no procesa todo
   lo que haya en Pendientes: abre un modal donde se eligen hasta 10 boletas, se encolan y se sigue su

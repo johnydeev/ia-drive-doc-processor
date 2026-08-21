@@ -9,6 +9,7 @@ const consortium: OverviewConsortium = {
   consortiumName: "FRANKLIN 25",
   bankId: null, bankName: null, bankColor: null,
   periodId: "per1", periodLabel: "julio 2026",
+  periodStatus: "ACTIVE",
   lspServices: [
     { id: "l1", providerName: "AYSA", clientNumber: "66757", description: null, providerId: null },
   ],

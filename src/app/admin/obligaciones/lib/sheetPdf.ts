@@ -18,12 +18,12 @@ export type PdfTable = {
   subtitle: string;
   head: string[][];
   body: string[][];
-  /** Bloque "Impagas de meses anteriores", debajo de la tabla del mes. */
+  /** Bloque "Vienen del mes anterior", debajo de la tabla del mes. */
   carried: string[][];
 };
 
 /** Título del bloque de impagas dentro de la hoja del edificio. */
-export const CARRIED_TITLE = "IMPAGAS DE MESES ANTERIORES";
+export const CARRIED_TITLE = "VIENEN DEL MES ANTERIOR";
 
 const money = new Intl.NumberFormat("es-AR", { style: "currency", currency: "ARS" });
 
@@ -156,8 +156,9 @@ export async function downloadSheetsPdf(
 
     autoTable(doc, { startY: 30, head: table.head, body: table.body, ...tableStyles });
 
-    // Las impagas van en una segunda tabla de la MISMA hoja, debajo de la del
-    // mes: el administrador ve primero lo corriente y después lo atrasado.
+    // Lo arrastrado va en una segunda tabla de la MISMA hoja, debajo de la del
+    // mes: el administrador ve primero lo corriente y después lo que viene
+    // atrasado, distinguible de un vistazo.
     if (table.carried.length > 0) {
       // `lastAutoTable` existe en runtime (verificado con jspdf-autotable 5.0.8:
       // devuelve `{ finalY }`), pero la v5 no lo declara en sus tipos — el

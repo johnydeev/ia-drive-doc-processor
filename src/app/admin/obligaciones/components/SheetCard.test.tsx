@@ -12,16 +12,17 @@ const sheet: SheetData = {
   bankColor: "red",
   periodId: "per1",
   periodLabel: "julio 2026",
+  periodStatus: "ACTIVE",
   rows: [
     { fixedExpenseId: "fx1", obligationId: "ob1", providerId: null, lspServiceId: "l1",
       facturas: "4804882", concepto: "EDESUR", monto: 118000, aliasCbu: ["edesur.pago"],
-      status: "RECEIVED", active: true },
+      status: "RECEIVED", active: true, invoiceId: "inv1", carryOverRequested: false, carriedIn: false },
     { fixedExpenseId: "fx2", obligationId: "ob2", providerId: "p1", lspServiceId: null,
       facturas: null, concepto: "SEGURO LA CAJA", monto: null, aliasCbu: [],
-      status: "PENDING", active: true },
+      status: "PENDING", active: true, invoiceId: null, carryOverRequested: false, carriedIn: false },
     { fixedExpenseId: "fx3", obligationId: "ob3", providerId: "p2", lspServiceId: null,
       facturas: null, concepto: "N.G. FUMIGACION", monto: null, aliasCbu: [],
-      status: "SKIPPED", active: true },
+      status: "SKIPPED", active: true, invoiceId: null, carryOverRequested: false, carriedIn: false },
   ],
   carried: [],
 };
@@ -32,7 +33,8 @@ function renderCard(overrides: Partial<React.ComponentProps<typeof SheetCard>> =
     onAdd: vi.fn(),
     onToggle: vi.fn(),
     onSetStatus: vi.fn(),
-    onCarryOver: vi.fn(),
+    onToggleCarryOver: vi.fn(),
+    onUndoCarryOver: vi.fn(),
     onSetLateAmount: vi.fn(),
     ...overrides,
   };
@@ -171,7 +173,7 @@ describe("SheetCard", () => {
   it("marca la tarjeta como imprimible sólo si le queda alguna fila para el papel", () => {
     const noop = {
       onAdd: vi.fn(), onToggle: vi.fn(), onSetStatus: vi.fn(),
-      onCarryOver: vi.fn(), onSetLateAmount: vi.fn(),
+      onToggleCarryOver: vi.fn(), onUndoCarryOver: vi.fn(), onSetLateAmount: vi.fn(),
     };
 
     const { container, unmount } = render(<SheetCard sheet={sheet} {...noop} />);
@@ -193,7 +195,7 @@ describe("SheetCard", () => {
       carried: [
         { invoiceId: "inv-ago", facturas: null, concepto: "EDESUR S.A.", monto: 980000,
           originalAmount: 980000, lateAmount: null, aliasCbu: [],
-          fromLabel: "agosto 2026", alreadyCarried: false, canCarry: true },
+          fromLabel: "agosto 2026", carryOverRequested: false },
       ],
     };
     const { container: c3 } = render(<SheetCard sheet={soloImpaga} {...noop} />);
@@ -208,61 +210,87 @@ describe("SheetCard", () => {
 
   it("un edificio sin impagas no dibuja el bloque", () => {
     renderCard();
-    expect(screen.queryByText(/Impagas de meses anteriores/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Vienen del mes anterior/i)).not.toBeInTheDocument();
   });
 
-  it("una impaga pasable muestra el bloque y ofrece pasarla", async () => {
-    const props = renderCard({
-      sheet: {
-        ...sheet,
-        carried: [
-          { invoiceId: "inv-ago", facturas: "4804882", concepto: "EDESUR S.A.", monto: 980000,
-            originalAmount: 980000, lateAmount: null, aliasCbu: ["edesur.pago"],
-            fromLabel: "agosto 2026", alreadyCarried: false, canCarry: true },
-        ],
-      },
-    });
-
-    expect(screen.getByText(/Impagas de meses anteriores/i)).toBeInTheDocument();
-    expect(screen.getByText(/de agosto 2026/)).toBeInTheDocument();
-
-    await userEvent.click(screen.getByRole("button", { name: "Pasar a este período" }));
-    expect(props.onCarryOver).toHaveBeenCalledWith("inv-ago");
-  });
-
-  it("una impaga que no es del mes anterior no se puede pasar", () => {
+  it("el bloque de abajo muestra lo que vino del mes anterior", () => {
     renderCard({
       sheet: {
         ...sheet,
         carried: [
-          { invoiceId: "inv-jun", facturas: null, concepto: "AYSA", monto: 5000,
-            originalAmount: 5000, lateAmount: null, aliasCbu: [],
-            fromLabel: "junio 2026", alreadyCarried: false, canCarry: false },
+          { invoiceId: "inv9", facturas: null, concepto: "ASCENSORES POTENZA", monto: 118000,
+            originalAmount: 118000, lateAmount: null, aliasCbu: [], fromLabel: "junio 2026", carryOverRequested: false },
         ],
       },
     });
-    expect(screen.getByRole("button", { name: "Pasar a este período" })).toBeDisabled();
+
+    expect(screen.getByText("Vienen del mes anterior")).toBeInTheDocument();
+    expect(screen.getByText("ASCENSORES POTENZA")).toBeInTheDocument();
+    expect(screen.getByText("de junio 2026")).toBeInTheDocument();
   });
 
-  it("una ya pasada muestra el badge y permite cargar el monto vencido", async () => {
+  it("ya no ofrece traer boletas de meses anteriores", async () => {
+    // El traspaso se decide en el mes de ORIGEN, no tirando desde el destino.
+    renderCard({
+      sheet: {
+        ...sheet,
+        carried: [
+          { invoiceId: "inv9", facturas: null, concepto: "ASCENSORES POTENZA", monto: 118000,
+            originalAmount: 118000, lateAmount: null, aliasCbu: [], fromLabel: "junio 2026", carryOverRequested: false },
+        ],
+      },
+    });
+
+    expect(screen.queryByRole("button", { name: /pasar a este per/i })).not.toBeInTheDocument();
+  });
+
+  it("una boleta del mes se puede marcar para pasar al mes siguiente", async () => {
+    const user = userEvent.setup();
+    const props = renderCard();
+
+    // Sólo la fila que YA tiene boleta ofrece la acción.
+    await user.click(screen.getByRole("button", { name: "Pasar al mes siguiente" }));
+
+    expect(props.onToggleCarryOver).toHaveBeenCalledWith("inv1", true);
+  });
+
+  it("una fila sin boleta no ofrece pasarla", () => {
+    renderCard();
+
+    // EDESUR tiene boleta; SEGURO LA CAJA no.
+    expect(screen.getAllByRole("button", { name: "Pasar al mes siguiente" })).toHaveLength(1);
+  });
+
+  it("una boleta ya marcada ofrece quitar la marca", async () => {
+    const user = userEvent.setup();
+    const marked = {
+      ...sheet,
+      rows: [{ ...sheet.rows[0], carryOverRequested: true }],
+    };
+    const props = renderCard({ sheet: marked });
+
+    await user.click(screen.getByRole("button", { name: /pasa al mes siguiente/i }));
+
+    expect(props.onToggleCarryOver).toHaveBeenCalledWith("inv1", false);
+  });
+
+  it("permite cargar el monto vencido de una que vino del mes anterior", async () => {
+    const user = userEvent.setup();
     const props = renderCard({
       sheet: {
         ...sheet,
         carried: [
-          { invoiceId: "inv-ago", facturas: null, concepto: "EDESUR S.A.", monto: 980000,
-            originalAmount: 980000, lateAmount: null, aliasCbu: [],
-            fromLabel: "agosto 2026", alreadyCarried: true, canCarry: false },
+          { invoiceId: "inv9", facturas: null, concepto: "ASCENSORES POTENZA", monto: 118000,
+            originalAmount: 118000, lateAmount: null, aliasCbu: [], fromLabel: "junio 2026", carryOverRequested: false },
         ],
       },
     });
 
-    expect(screen.getByText(/pasada a este período/i)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Cargar monto vencido" }));
+    await user.type(screen.getByLabelText(/monto vencido de ASCENSORES POTENZA/i), "130000");
+    await user.click(screen.getByRole("button", { name: "Guardar" }));
 
-    await userEvent.click(screen.getByRole("button", { name: /Cargar monto vencido/ }));
-    await userEvent.type(screen.getByLabelText(/Monto vencido de EDESUR/), "1050000");
-    await userEvent.click(screen.getByRole("button", { name: "Guardar" }));
-
-    expect(props.onSetLateAmount).toHaveBeenCalledWith("inv-ago", 1050000);
+    expect(props.onSetLateAmount).toHaveBeenCalledWith("inv9", 130000);
   });
 
   it("con monto vencido cargado muestra el 1° y el 2° pago", () => {
@@ -270,18 +298,56 @@ describe("SheetCard", () => {
       sheet: {
         ...sheet,
         carried: [
-          { invoiceId: "inv-ago", facturas: null, concepto: "EDESUR S.A.", monto: 1050000,
-            originalAmount: 980000, lateAmount: 1050000, aliasCbu: [],
-            fromLabel: "agosto 2026", alreadyCarried: true, canCarry: false },
+          { invoiceId: "inv9", facturas: null, concepto: "ASCENSORES POTENZA", monto: 130000,
+            originalAmount: 118000, lateAmount: 130000, aliasCbu: [], fromLabel: "junio 2026", carryOverRequested: false },
         ],
       },
     });
-    expect(screen.getByText(/1° pago/)).toBeInTheDocument();
-    expect(screen.getByText(/2° pago/)).toBeInTheDocument();
+
+    expect(screen.getByText(/1° pago .* · 2° pago/)).toBeInTheDocument();
   });
 
   it("un edificio sin período activo lo advierte", () => {
     renderCard({ sheet: { ...sheet, periodId: null, periodLabel: null } });
     expect(screen.getByText(/sin período abierto/i)).toBeInTheDocument();
+  });
+
+  it("una arrastrada se puede volver a pasar al mes siguiente (arrastre encadenado)", async () => {
+    // El agujero que destapó la re-revisión: vino de julio, en agosto tampoco se
+    // paga, y tiene que poder ir a septiembre.
+    const user = userEvent.setup();
+    const props = renderCard({
+      sheet: {
+        ...sheet,
+        carried: [
+          { invoiceId: "inv9", facturas: null, concepto: "ASCENSORES POTENZA", monto: 118000,
+            originalAmount: 118000, lateAmount: null, aliasCbu: [], fromLabel: "junio 2026",
+            carryOverRequested: false },
+        ],
+      },
+    });
+
+    const bloque = screen.getByText("Vienen del mes anterior").closest("div")!;
+    await user.click(within(bloque).getByRole("button", { name: "Pasar al mes siguiente" }));
+
+    expect(props.onToggleCarryOver).toHaveBeenCalledWith("inv9", true);
+  });
+
+  it("una arrastrada se puede devolver a su mes de origen", async () => {
+    const user = userEvent.setup();
+    const props = renderCard({
+      sheet: {
+        ...sheet,
+        carried: [
+          { invoiceId: "inv9", facturas: null, concepto: "ASCENSORES POTENZA", monto: 118000,
+            originalAmount: 118000, lateAmount: null, aliasCbu: [], fromLabel: "junio 2026",
+            carryOverRequested: false },
+        ],
+      },
+    });
+
+    await user.click(screen.getByRole("button", { name: "Devolver a junio 2026" }));
+
+    expect(props.onUndoCarryOver).toHaveBeenCalledWith("inv9");
   });
 });

@@ -11,16 +11,17 @@ const sheets: SheetData[] = [
     bankColor: "red",
     periodId: "per1",
     periodLabel: "julio 2026",
+  periodStatus: "ACTIVE",
     rows: [
       { fixedExpenseId: "fx2", obligationId: "ob2", providerId: null, lspServiceId: "l1",
         facturas: "4804882", concepto: "EDESUR", monto: 118000, aliasCbu: ["edesur.pago"],
-        status: "RECEIVED", active: true },
+        status: "RECEIVED", active: true, invoiceId: null, carryOverRequested: false, carriedIn: false },
       { fixedExpenseId: "fx1", obligationId: "ob1", providerId: "p1", lspServiceId: null,
         facturas: null, concepto: "SEGURO LA CAJA", monto: null, aliasCbu: [],
-        status: "PENDING", active: true },
+        status: "PENDING", active: true, invoiceId: null, carryOverRequested: false, carriedIn: false },
       { fixedExpenseId: "fx9", obligationId: "ob9", providerId: "p9", lspServiceId: null,
         facturas: null, concepto: "FUMIGACION", monto: null, aliasCbu: [],
-        status: "SKIPPED", active: true },
+        status: "SKIPPED", active: true, invoiceId: null, carryOverRequested: false, carriedIn: false },
     ],
     carried: [],
   },
@@ -88,7 +89,7 @@ describe("toPdfTables", () => {
   });
 });
 
-describe("bloque de impagas en el PDF", () => {
+describe("bloque de arrastradas en el PDF", () => {
   const conImpaga: SheetData[] = [
     {
       ...sheets[0],
@@ -102,14 +103,13 @@ describe("bloque de impagas en el PDF", () => {
           lateAmount: null,
           aliasCbu: ["edesur.pago"],
           fromLabel: "agosto 2026",
-          alreadyCarried: false,
-          canCarry: true,
+          carryOverRequested: false,
         },
       ],
     },
   ];
 
-  it("las impagas van en `carried`, no mezcladas en el cuerpo del mes", () => {
+  it("las arrastradas van en `carried`, no mezcladas en el cuerpo del mes", () => {
     const table = toPdfTables(conImpaga)[0];
     expect(table.body).toHaveLength(2); // los dos gastos del mes
     expect(table.carried).toHaveLength(1);

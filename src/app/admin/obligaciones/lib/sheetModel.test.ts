@@ -9,7 +9,9 @@ import {
 } from "./sheetModel";
 
 const payload: OverviewPayload = {
-  majorityLabel: "julio 2026",
+  month: 7,
+  year: 2026,
+  monthLabel: "julio 2026",
   providers: [
     { id: "p1", canonicalName: "SEGURO LA CAJA", paymentAlias: "seguro.caja" },
     { id: "p2", canonicalName: "TECNOPAS ASC.", paymentAlias: null },
@@ -24,14 +26,15 @@ const payload: OverviewPayload = {
       bankColor: "red",
       periodId: "per1",
       periodLabel: "julio 2026",
+  periodStatus: "ACTIVE",
       lspServices: [
         { id: "l1", providerName: "EDESUR", clientNumber: "4804882", description: null, providerId: "p9" },
       ],
       fixedExpenses: [
         { id: "fx1", providerId: "p1", lspServiceId: null, description: null, active: true,
-          obligation: { id: "ob1", status: "PENDING", amount: null } },
+          obligation: { id: "ob1", status: "PENDING", amount: null, invoiceId: null, carryOverRequested: false, carriedIn: false } },
         { id: "fx2", providerId: null, lspServiceId: "l1", description: null, active: true,
-          obligation: { id: "ob2", status: "RECEIVED", amount: 118000 } },
+          obligation: { id: "ob2", status: "RECEIVED", amount: 118000, invoiceId: null, carryOverRequested: false, carriedIn: false } },
         { id: "fx3", providerId: "p2", lspServiceId: null, description: null, active: false,
           obligation: null },
       ],
@@ -44,6 +47,7 @@ const payload: OverviewPayload = {
       bankColor: null,
       periodId: null,
       periodLabel: null,
+  periodStatus: "ACTIVE",
       lspServices: [],
       fixedExpenses: [
         { id: "fx4", providerId: "p1", lspServiceId: null, description: null, active: true, obligation: null },
@@ -223,11 +227,8 @@ describe("impagas de meses anteriores", () => {
     aliasCbu: "edesur.pago",
     originalAmount: 980000,
     lateAmount: null,
-    remaining: 980000,
     fromLabel: "agosto 2026",
-    periodSort: 202608,
-    alreadyCarried: false,
-    canCarry: true,
+    carryOverRequested: false,
   };
 
   const conImpaga: OverviewPayload = {
@@ -246,7 +247,7 @@ describe("impagas de meses anteriores", () => {
     expect(sheet.carried[0].facturas).toBe("4804882");
   });
 
-  it("el monto es el saldo pendiente, no el total de la boleta", () => {
+  it("el monto a pagar es el de la boleta mientras no haya 2° vencimiento", () => {
     expect(buildSheets(conImpaga)[0].carried[0].monto).toBe(980000);
   });
 
@@ -254,7 +255,7 @@ describe("impagas de meses anteriores", () => {
     const conVencido: OverviewPayload = {
       ...conImpaga,
       consortiums: [
-        { ...conImpaga.consortiums[0], carried: [{ ...impaga, lateAmount: 1050000, remaining: 1050000 }] },
+        { ...conImpaga.consortiums[0], carried: [{ ...impaga, lateAmount: 1050000 }] },
         conImpaga.consortiums[1],
       ],
     };
@@ -263,28 +264,30 @@ describe("impagas de meses anteriores", () => {
     expect(fila.originalAmount).toBe(980000);
   });
 
-  it("se ordenan por período de origen, lo más viejo primero", () => {
+  it("se ordenan alfabéticamente por concepto", () => {
+    // Todas vienen del mes anterior, así que ordenar por período de origen dejó
+    // de significar algo: lo útil es encontrarlas por nombre.
     const dos: OverviewPayload = {
       ...conImpaga,
       consortiums: [
         {
           ...conImpaga.consortiums[0],
           carried: [
-            { ...impaga, invoiceId: "sep", fromLabel: "septiembre 2026", periodSort: 202609 },
-            { ...impaga, invoiceId: "jul", fromLabel: "julio 2026", periodSort: 202607 },
+            { ...impaga, invoiceId: "z", concepto: "ZETA SRL" },
+            { ...impaga, invoiceId: "a", concepto: "ALFA SRL" },
           ],
         },
         conImpaga.consortiums[1],
       ],
     };
-    expect(buildSheets(dos)[0].carried.map((c) => c.invoiceId)).toEqual(["jul", "sep"]);
+    expect(buildSheets(dos)[0].carried.map((c) => c.invoiceId)).toEqual(["a", "z"]);
   });
 
-  it("un edificio sin impagas trae el bloque vacío", () => {
+  it("un edificio sin arrastradas trae el bloque vacío", () => {
     expect(buildSheets(payload)[0].carried).toEqual([]);
   });
 
-  it("toPrintableSheets conserva un edificio que sólo tiene impagas", () => {
+  it("toPrintableSheets conserva un edificio que sólo tiene arrastradas", () => {
     const soloImpagas: OverviewPayload = {
       ...conImpaga,
       consortiums: [

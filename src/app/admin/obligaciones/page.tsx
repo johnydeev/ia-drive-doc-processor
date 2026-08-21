@@ -1,10 +1,11 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import styles from "./page.module.css";
 import { AsyncButton } from "@/components/AsyncButton";
 import { useObligationsOverview } from "./hooks/useObligationsOverview";
+import { useCarryOverRun } from "./hooks/useCarryOverRun";
 import { SheetCard } from "./components/SheetCard";
 import { AddFixedExpenseModal } from "./components/AddFixedExpenseModal";
 import { filterSheets, toPrintableSheets, type SheetData } from "./lib/sheetModel";
@@ -23,12 +24,23 @@ function groupSheetsByBank(sheets: SheetData[]): Array<{ bankName: string; sheet
 
 export default function ObligacionesPage() {
   const {
-    payload, sheets, majorityLabel, isLoading, error, syncWarning, reload,
+    payload, sheets, month, monthLabel, goToPreviousMonth, goToNextMonth,
+    isLoading, error, syncWarning, reload,
     addFixedExpenses, toggleFixedExpense, setObligationStatus,
-    carryOverInvoice, setLateAmount,
+    toggleCarryOver, undoCarryOver, setLateAmount,
   } = useObligationsOverview();
 
+  // Traslados marcados: se ejecutan por tandas DESPUÉS de cerrar el período.
+  const carryRun = useCarryOverRun(reload);
   const [query, setQuery] = useState("");
+
+  // Al cambiar de mes se pregunta qué quedó marcado sin mover: es lo que sostiene
+  // el "continuar" cuando el cliente cerró la pestaña a mitad de camino.
+  // `loadPendingCarry` sale de un `useCallback` estable, así que no re-dispara.
+  const { loadPending: loadPendingCarry } = carryRun;
+  useEffect(() => {
+    if (month) void loadPendingCarry(month);
+  }, [month, loadPendingCarry]);
   const [addingFor, setAddingFor] = useState<string | null>(null);
 
   const visible = useMemo(() => filterSheets(sheets, query), [sheets, query]);
@@ -51,10 +63,60 @@ export default function ObligacionesPage() {
 
   return (
     <div className={styles.page}>
+      {(carryRun.pendingCount > 0 || carryRun.isRunning) && month && (
+        <div className={styles.carryRunBar}>
+          {carryRun.isRunning ? (
+            <>
+              <span>
+                Pasando boletas al mes siguiente: {carryRun.summary.processed} de {carryRun.summary.total}
+                {carryRun.summary.failed > 0 && ` · ${carryRun.summary.failed} con error`}
+              </span>
+              <progress max={100} value={carryRun.summary.percent} />
+            </>
+          ) : (
+            <>
+              <span>
+                Quedaron <strong>{carryRun.pendingCount}</strong> boleta(s) marcadas sin pasar al mes siguiente.
+              </span>
+              <AsyncButton
+                type="button"
+                className={styles.addInvoiceBtn}
+                pendingLabel="Pasando…"
+                onClick={() => carryRun.run(month)}
+              >
+                Continuar
+              </AsyncButton>
+            </>
+          )}
+        </div>
+      )}
+
       <header className={styles.toolbar}>
         <div>
           <h1 className={styles.pageTitle}>Obligaciones del período</h1>
-          {majorityLabel && <p className={styles.pageSubtitle}>{majorityLabel}</p>}
+          {/* La vista es por MES, no por "período activo": se navega libremente
+              hacia atrás para decidir qué pasa al mes siguiente. */}
+          <div className={styles.monthNav}>
+            <button
+              type="button"
+              className={styles.monthNavBtn}
+              onClick={goToPreviousMonth}
+              disabled={!monthLabel}
+              aria-label="Mes anterior"
+            >
+              ‹
+            </button>
+            <p className={styles.pageSubtitle}>{monthLabel ?? "—"}</p>
+            <button
+              type="button"
+              className={styles.monthNavBtn}
+              onClick={goToNextMonth}
+              disabled={!monthLabel}
+              aria-label="Mes siguiente"
+            >
+              ›
+            </button>
+          </div>
         </div>
 
         <input
@@ -76,7 +138,7 @@ export default function ObligacionesPage() {
             className={styles.primaryBtn}
             disabled={printableCount === 0}
             pendingLabel="Generando…"
-            onClick={() => downloadSheetsPdf(sheets, majorityLabel)}
+            onClick={() => downloadSheetsPdf(sheets, monthLabel)}
           >
             Descargar PDF ({printableCount})
           </AsyncButton>
@@ -121,7 +183,8 @@ export default function ObligacionesPage() {
                    botón dure lo que dura la mutación + la recarga. */
                 onToggle={toggleFixedExpense}
                 onSetStatus={setObligationStatus}
-                onCarryOver={carryOverInvoice}
+                onToggleCarryOver={toggleCarryOver}
+                onUndoCarryOver={undoCarryOver}
                 onSetLateAmount={setLateAmount}
               />
             ))}

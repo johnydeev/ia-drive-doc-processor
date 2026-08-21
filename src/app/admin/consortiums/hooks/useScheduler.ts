@@ -42,19 +42,9 @@ export function useScheduler({ accessChecked, setToolbarInfo, setToolbarError, o
     } finally { setBusyAction(null); }
   };
 
-  const handleRunNow = async () => {
-    setBusyAction("run"); setToolbarError(null); setToolbarInfo(null);
-    try {
-      const res = await guardedFetch("/api/admin/scheduler/run", {
-        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({}),
-      });
-      const data = await res.json();
-      if (!res.ok || !data.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
-      setToolbarInfo("Ejecución manual completada.");
-    } catch (err) {
-      setToolbarError(err instanceof Error ? err.message : "Error");
-    } finally { setBusyAction(null); }
-  };
+  // No hay `handleRunNow`: desde 2026-08-18 "Ejecutar ahora" abre la corrida
+  // selectiva (elegir hasta 10 boletas y encolarlas con diagnóstico) en vez de
+  // disparar el ciclo completo. El panel ADMIN conserva su propio disparador.
 
   const handleSyncDirectory = async () => {
     setBusyAction("sync"); setToolbarError(null); setToolbarInfo(null);
@@ -148,7 +138,7 @@ export function useScheduler({ accessChecked, setToolbarInfo, setToolbarError, o
 
   return {
     schedulerEnabled, busyAction,
-    handleToggleScheduler, handleRunNow, handleSyncDirectory,
+    handleToggleScheduler, handleSyncDirectory,
     handleSyncPayments, handleSetupSheetProtection, handleUnprotectSheet,
     syncReport, closeSyncReport: () => setSyncReport(null), applyRenames,
   };

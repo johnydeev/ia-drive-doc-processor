@@ -34,7 +34,13 @@ export async function applyCarryOverDbMove(
     // El origen se escribe UNA sola vez: un arrastre encadenado
     // (agosto → septiembre → octubre) sigue diciendo "agosto", que es la verdad
     // que le importa al inquilino.
-    const data: { periodId: string; carriedFromPeriodId?: string } = { periodId: newPeriodId };
+    // Se limpia la marca: el traspaso pedido ya se ejecutó y no debe volver a
+    // dispararse en el próximo cierre.
+    const data: {
+      periodId: string;
+      carriedFromPeriodId?: string;
+      carryOverRequestedAt: null;
+    } = { periodId: newPeriodId, carryOverRequestedAt: null };
     if (!current?.carriedFromPeriodId && current?.periodId) {
       data.carriedFromPeriodId = current.periodId;
     }
@@ -60,4 +66,40 @@ export function recalcRemainingForLateAmount(input: {
   const current = input.remaining ?? base;
   const remaining = Math.max(0, Number((current + (input.next - base)).toFixed(2)));
   return { remaining, isPaid: remaining === 0 };
+}
+
+/**
+ * Transacción de DB del DESHACER: devuelve la boleta a su período de origen.
+ *
+ * Es la inversa exacta de `applyCarryOverDbMove`:
+ * - la boleta vuelve a su `carriedFromPeriodId` y ese campo se limpia, así deja
+ *   de figurar como "vino del mes anterior";
+ * - la obligación de origen sale de `CARRIED_OVER` y vuelve a `RECEIVED`, porque
+ *   la boleta volvió a vivir en ese mes.
+ *
+ * Funciona aunque el período de origen esté CERRADO: cerrar un mes no lo congela
+ * para esta operación, igual que empujar al siguiente se puede hacer desde un mes
+ * cerrado (spec 2026-08-20).
+ */
+export async function applyUndoCarryOverDbMove(
+  prisma: PrismaClient,
+  invoice: { id: string; periodId: string | null },
+  originPeriodId: string
+): Promise<void> {
+  await prisma.$transaction(async (tx) => {
+    await tx.expenseObligation.updateMany({
+      where: { invoiceId: invoice.id, status: "CARRIED_OVER" },
+      data: { status: "RECEIVED" },
+    });
+
+    await tx.invoice.update({
+      where: { id: invoice.id },
+      data: {
+        periodId: originPeriodId,
+        carriedFromPeriodId: null,
+        // Si estaba marcada para pasar de nuevo, la marca deja de tener sentido.
+        carryOverRequestedAt: null,
+      },
+    });
+  });
 }

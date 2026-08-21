@@ -187,3 +187,50 @@
   .rowActions { gap: 6px; }
   .modalCard { width: 94%; padding: 16px; }
 }
+
+/* Navegación de meses del encabezado. */
+.monthNav { display: flex; align-items: center; gap: 8px; }
+.monthNav .pageSubtitle { margin: 0; min-width: 130px; }
+.monthNavBtn {
+  border: 1px solid var(--border, rgba(255,255,255,0.15));
+  background: transparent;
+  color: inherit;
+  border-radius: 6px;
+  width: 26px;
+  height: 26px;
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+}
+.monthNavBtn:hover:not(:disabled) { background: rgba(255,255,255,0.08); }
+.monthNavBtn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* Botón de una boleta ya marcada para pasar al mes siguiente. */
+.actionBtnMarked {
+  composes: actionBtn;
+  border-color: rgba(60,130,255,0.6);
+  color: rgb(120,170,255);
+}
+
+@media print {
+  .monthNav button { display: none; }
+}
+
+/* Aviso y avance de los traslados al mes siguiente. */
+.carryRunBar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 10px 14px;
+  margin-bottom: 12px;
+  border-radius: 8px;
+  border: 1px solid rgba(60,130,255,0.35);
+  background: rgba(60,130,255,0.08);
+  font-size: 13px;
+}
+.carryRunBar progress { flex: 1; min-width: 160px; height: 8px; }
+
+@media print {
+  .carryRunBar { display: none; }
+}

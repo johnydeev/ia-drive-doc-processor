@@ -17,7 +17,16 @@ export type OverviewFixedExpense = {
   lspServiceId: string | null;
   description: string | null;
   active: boolean;
-  obligation: { id: string; status: ObligationStatus; amount: number | null } | null;
+  obligation: {
+    id: string;
+    status: ObligationStatus;
+    amount: number | null;
+    invoiceId: string | null;
+    /** Marcada para pasar al mes siguiente; se mueve al ejecutar las tandas. */
+    carryOverRequested: boolean;
+    /** Esta boleta vino empujada de un mes anterior. */
+    carriedIn: boolean;
+  } | null;
 };
 
 export type OverviewLspService = {
@@ -28,7 +37,10 @@ export type OverviewLspService = {
   providerId: string | null;
 };
 
-/** Una boleta impaga de un período anterior (o ya pasada a este). */
+/**
+ * Una boleta que VIVE en este período pero nació en otro: la empujó el owner
+ * desde el mes anterior. Es el único cruce de meses que existe.
+ */
 export type OverviewCarried = {
   invoiceId: string;
   concepto: string;
@@ -36,12 +48,9 @@ export type OverviewCarried = {
   aliasCbu: string | null;
   originalAmount: number | null;
   lateAmount: number | null;
-  remaining: number;
   fromLabel: string | null;
-  /** `year * 100 + month` del período de origen, para ordenar. */
-  periodSort: number;
-  alreadyCarried: boolean;
-  canCarry: boolean;
+  /** Marcada para volver a pasar al mes siguiente (arrastre encadenado). */
+  carryOverRequested: boolean;
 };
 
 export type OverviewConsortium = {
@@ -52,13 +61,18 @@ export type OverviewConsortium = {
   bankColor: string | null;
   periodId: string | null;
   periodLabel: string | null;
+  /** ACTIVE / CLOSED, o null si el edificio no tiene período de este mes. */
+  periodStatus: "ACTIVE" | "CLOSED" | null;
   lspServices: OverviewLspService[];
   fixedExpenses: OverviewFixedExpense[];
   carried?: OverviewCarried[];
 };
 
 export type OverviewPayload = {
-  majorityLabel: string | null;
+  /** Mes que se está viendo. */
+  month: number | null;
+  year: number | null;
+  monthLabel: string | null;
   providers: Array<{ id: string; canonicalName: string; paymentAlias: string | null }>;
   consortiums: OverviewConsortium[];
 };
@@ -78,14 +92,21 @@ export type SheetRow = {
   aliasCbu: string[];
   status: SheetStatus;
   active: boolean;
+  /** Boleta vinculada, si llegó: es lo que se puede pasar al mes siguiente. */
+  invoiceId: string | null;
+  /** Ya marcada para pasar al mes siguiente. */
+  carryOverRequested: boolean;
+  /** Esta boleta vino empujada del mes anterior. */
+  carriedIn: boolean;
 };
 
 /**
- * Fila del bloque "Impagas de meses anteriores".
+ * Fila del bloque "Vienen del mes anterior".
  *
- * No es una `SheetRow`: no sale de un gasto fijo del mes sino de una boleta con
- * saldo que quedó de un período anterior. Va en un bloque propio para que la
- * tabla de arriba siga significando "los gastos fijos de este edificio".
+ * No es una `SheetRow`: no sale de un gasto fijo del mes sino de una boleta que
+ * el owner empujó desde el mes pasado. Va en un bloque propio —y en una sección
+ * aparte del PDF— para distinguir a simple vista qué es del mes y qué viene
+ * atrasado.
  */
 export type CarriedRow = {
   invoiceId: string;
@@ -97,12 +118,10 @@ export type CarriedRow = {
   originalAmount: number | null;
   lateAmount: number | null;
   aliasCbu: string[];
-  /** "agosto 2026" */
+  /** De qué mes vino: "julio 2026" */
   fromLabel: string | null;
-  /** Ya se pasó a este período (su boleta vive acá). */
-  alreadyCarried: boolean;
-  /** Se puede pasar: su período es el inmediatamente anterior al activo. */
-  canCarry: boolean;
+  /** Marcada para volver a pasar al mes siguiente. */
+  carryOverRequested: boolean;
 };
 
 export type SheetData = {
@@ -113,6 +132,7 @@ export type SheetData = {
   bankColor: string | null;
   periodId: string | null;
   periodLabel: string | null;
+  periodStatus: "ACTIVE" | "CLOSED" | null;
   rows: SheetRow[];
   /** Bloque aparte, debajo de la tabla de gastos fijos. */
   carried: CarriedRow[];
@@ -156,6 +176,9 @@ export function buildSheets(payload: OverviewPayload): SheetData[] {
         aliasCbu: parsePaymentAliases(lsp ? lspProvider?.paymentAlias : provider?.paymentAlias),
         status: c.periodId ? fx.obligation?.status ?? "PENDING" : "NO_PERIOD",
         active: fx.active,
+        invoiceId: fx.obligation?.invoiceId ?? null,
+        carryOverRequested: fx.obligation?.carryOverRequested ?? false,
+        carriedIn: fx.obligation?.carriedIn ?? false,
       };
     });
 
@@ -175,21 +198,21 @@ export function buildSheets(payload: OverviewPayload): SheetData[] {
       return a.concepto.localeCompare(b.concepto, "es");
     });
 
-    // Impagas de meses anteriores, lo más viejo primero.
+    // Lo que vino del mes anterior, alfabético.
     const carried: CarriedRow[] = [...(c.carried ?? [])]
-      .sort((a, b) => a.periodSort - b.periodSort)
       .map((inv) => ({
         invoiceId: inv.invoiceId,
         facturas: inv.facturas,
         concepto: inv.concepto,
-        monto: inv.remaining,
+        // El monto a pagar es el vencido si se cargó; si no, el original.
+        monto: inv.lateAmount ?? inv.originalAmount ?? 0,
         originalAmount: inv.originalAmount,
         lateAmount: inv.lateAmount,
         aliasCbu: parsePaymentAliases(inv.aliasCbu),
         fromLabel: inv.fromLabel,
-        alreadyCarried: inv.alreadyCarried,
-        canCarry: inv.canCarry,
-      }));
+        carryOverRequested: inv.carryOverRequested,
+      }))
+      .sort((a, b) => a.concepto.localeCompare(b.concepto, "es"));
 
     return {
       consortiumId: c.consortiumId,
@@ -199,6 +222,7 @@ export function buildSheets(payload: OverviewPayload): SheetData[] {
       bankColor: c.bankColor,
       periodId: c.periodId,
       periodLabel: c.periodLabel,
+      periodStatus: c.periodStatus,
       rows,
       carried,
     };

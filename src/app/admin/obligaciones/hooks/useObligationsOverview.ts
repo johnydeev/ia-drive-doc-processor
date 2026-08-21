@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useAuthGuard } from "@/lib/useAuthGuard";
 import { buildSheets, type ObligationStatus, type OverviewPayload, type SheetData } from "../lib/sheetModel";
+import { nextMonth, previousMonth, type YearMonth } from "@/lib/periodMonth";
 import type { TargetOption } from "../lib/availableTargets";
 
 /**
@@ -20,20 +21,29 @@ export function useObligationsOverview() {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [syncWarning, setSyncWarning] = useState<string | null>(null);
+  /** Mes que se está viendo. `null` = el que decida el servidor (el mayoritario). */
+  const [month, setMonth] = useState<YearMonth | null>(null);
 
   const loadOverview = useCallback(async () => {
     try {
-      const res = await guardedFetch("/api/client/obligations/overview", { cache: "no-store" });
+      const query = month ? `?month=${month.month}&year=${month.year}` : "";
+      const res = await guardedFetch(`/api/client/obligations/overview${query}`, { cache: "no-store" });
       const data = await res.json();
       if (!res.ok || !data.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
-      setPayload(data as OverviewPayload);
-      setSheets(buildSheets(data as OverviewPayload));
+      const payload = data as OverviewPayload;
+      setPayload(payload);
+      setSheets(buildSheets(payload));
+      // La primera carga no pide mes: se adopta el que resolvió el servidor para
+      // que la navegación tenga desde dónde partir.
+      if (payload.month != null && payload.year != null) {
+        setMonth({ month: payload.month, year: payload.year });
+      }
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "No se pudo cargar la vista");
       setSheets([]);
     }
-  }, [guardedFetch]);
+  }, [guardedFetch, month]);
 
   const sync = useCallback(async () => {
     try {
@@ -105,18 +115,39 @@ export function useObligationsOverview() {
   // evidencia que una rendición de cuentas o una auditoría necesita. Un gasto
   // que deja de corresponder se DESACTIVA.
 
-  /** Pasa una boleta impaga al período siguiente (Drive + Sheets + DB). */
-  const carryOverInvoice = useCallback(
-    async (invoiceId: string) => {
+  /**
+   * Marca (o desmarca) una boleta para pasar al mes siguiente. **No la mueve**:
+   * el traslado ocurre después de cerrar el período, por tandas.
+   */
+  const toggleCarryOver = useCallback(
+    async (invoiceId: string, requested: boolean) => {
       try {
         const res = await guardedFetch(`/api/client/invoices/${invoiceId}/carry-over`, {
+          method: requested ? "POST" : "DELETE",
+        });
+        const data = await res.json();
+        if (!res.ok || !data.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
+        setError(null);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "No se pudo marcar la boleta");
+      }
+      await loadOverview();
+    },
+    [guardedFetch, loadOverview]
+  );
+
+  /** Devuelve al mes de origen una boleta que ya se trasladó. */
+  const undoCarryOver = useCallback(
+    async (invoiceId: string) => {
+      try {
+        const res = await guardedFetch(`/api/client/invoices/${invoiceId}/carry-over/undo`, {
           method: "POST",
         });
         const data = await res.json();
         if (!res.ok || !data.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
         setError(null);
       } catch (err) {
-        setError(err instanceof Error ? err.message : "No se pudo pasar la boleta");
+        setError(err instanceof Error ? err.message : "No se pudo devolver la boleta");
       }
       await loadOverview();
     },
@@ -163,10 +194,21 @@ export function useObligationsOverview() {
     [guardedFetch, loadOverview]
   );
 
+  const goToPreviousMonth = useCallback(() => {
+    setMonth((current) => (current ? previousMonth(current) : current));
+  }, []);
+
+  const goToNextMonth = useCallback(() => {
+    setMonth((current) => (current ? nextMonth(current) : current));
+  }, []);
+
   return {
     payload,
     sheets,
-    majorityLabel: payload?.majorityLabel ?? null,
+    month,
+    monthLabel: payload?.monthLabel ?? null,
+    goToPreviousMonth,
+    goToNextMonth,
     isLoading,
     error,
     syncWarning,
@@ -174,7 +216,8 @@ export function useObligationsOverview() {
     addFixedExpenses,
     toggleFixedExpense,
     setObligationStatus,
-    carryOverInvoice,
+    toggleCarryOver,
+    undoCarryOver,
     setLateAmount,
   };
 }

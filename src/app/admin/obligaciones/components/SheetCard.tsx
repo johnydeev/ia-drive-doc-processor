@@ -12,7 +12,10 @@ type Props = {
   // mostrar el spinner y cortar el doble click.
   onToggle: (consortiumId: string, fixedExpenseId: string, active: boolean) => void | Promise<void>;
   onSetStatus: (obligationId: string, status: "PENDING" | "SKIPPED") => void | Promise<void>;
-  onCarryOver: (invoiceId: string) => void | Promise<void>;
+  /** Marca o desmarca la boleta para pasar al mes siguiente. NO la mueve. */
+  onToggleCarryOver: (invoiceId: string, requested: boolean) => void | Promise<void>;
+  /** Devuelve al mes de origen una boleta que YA se trasladó. */
+  onUndoCarryOver: (invoiceId: string) => void | Promise<void>;
   onSetLateAmount: (invoiceId: string, lateAmount: number) => void | Promise<void>;
 };
 
@@ -31,7 +34,9 @@ const money = new Intl.NumberFormat("es-AR", { style: "currency", currency: "ARS
  * físico arrastraría las obligaciones por `onDelete: Cascade`, así que no se
  * expone en la UI.
  */
-export function SheetCard({ sheet, onAdd, onToggle, onSetStatus, onCarryOver, onSetLateAmount }: Props) {
+export function SheetCard({
+  sheet, onAdd, onToggle, onSetStatus, onToggleCarryOver, onUndoCarryOver, onSetLateAmount,
+}: Props) {
   const [lateFor, setLateFor] = useState<string | null>(null);
   const [lateValue, setLateValue] = useState("");
 
@@ -120,6 +125,19 @@ export function SheetCard({ sheet, onAdd, onToggle, onSetStatus, onCarryOver, on
                           Saltear periodo
                         </AsyncButton>
                       )}
+                      {/* Sólo si llegó la boleta: es lo que se puede pasar. El
+                          traslado real ocurre al ejecutar las tandas, después de
+                          cerrar el período. */}
+                      {row.invoiceId && (
+                        <AsyncButton
+                          type="button"
+                          className={row.carryOverRequested ? styles.actionBtnMarked : styles.actionBtn}
+                          pendingLabel={row.carryOverRequested ? "Quitando…" : "Marcando…"}
+                          onClick={() => onToggleCarryOver(row.invoiceId!, !row.carryOverRequested)}
+                        >
+                          {row.carryOverRequested ? "Pasa al mes siguiente ✓" : "Pasar al mes siguiente"}
+                        </AsyncButton>
+                      )}
                       <AsyncButton type="button" className={styles.actionBtn} pendingLabel="Desactivando…"
                         onClick={() => onToggle(sheet.consortiumId, row.fixedExpenseId, false)}>
                         Desactivar
@@ -134,11 +152,12 @@ export function SheetCard({ sheet, onAdd, onToggle, onSetStatus, onCarryOver, on
         </table>
       )}
 
-      {/* Impagas de meses anteriores: bloque propio, para que la tabla de arriba
-          siga significando "los gastos fijos de este edificio". */}
+      {/* Vienen del mes anterior: bloque propio, para que la tabla de arriba siga
+          significando "los gastos fijos de este edificio" y para distinguir de un
+          vistazo qué es del mes y qué viene atrasado. */}
       {sheet.carried.length > 0 && (
         <div className={styles.carriedBlock}>
-          <h3 className={styles.carriedTitle}>Impagas de meses anteriores</h3>
+          <h3 className={styles.carriedTitle}>Vienen del mes anterior</h3>
           <table className={styles.sheetTable}>
             <thead>
               <tr>
@@ -169,65 +188,63 @@ export function SheetCard({ sheet, onAdd, onToggle, onSetStatus, onCarryOver, on
                   <td />
                   <td />
                   <td className={styles.rowActions}>
-                    {row.alreadyCarried ? (
+                    {/* Puede volver a pasarse: si vino de julio y en agosto tampoco
+                        se paga, tiene que poder ir a septiembre. El origen que se
+                        muestra sigue siendo el ORIGINAL. */}
+                    <AsyncButton
+                      type="button"
+                      className={row.carryOverRequested ? styles.actionBtnMarked : styles.actionBtn}
+                      pendingLabel={row.carryOverRequested ? "Quitando…" : "Marcando…"}
+                      onClick={() => onToggleCarryOver(row.invoiceId, !row.carryOverRequested)}
+                    >
+                      {row.carryOverRequested ? "Pasa al mes siguiente ✓" : "Pasar al mes siguiente"}
+                    </AsyncButton>
+
+                    <AsyncButton
+                      type="button"
+                      className={styles.actionBtn}
+                      pendingLabel="Devolviendo…"
+                      onClick={() => onUndoCarryOver(row.invoiceId)}
+                    >
+                      Devolver a {row.fromLabel ?? "su mes"}
+                    </AsyncButton>
+
+                    {lateFor === row.invoiceId ? (
                       <>
-                        <span className={styles.carriedBadge}>pasada a este período</span>
-                        {lateFor === row.invoiceId ? (
-                          <>
-                            <input
-                              className={styles.lateInput}
-                              type="number"
-                              min="0"
-                              step="0.01"
-                              placeholder="Monto vencido"
-                              aria-label={`Monto vencido de ${row.concepto}`}
-                              value={lateValue}
-                              onChange={(e) => setLateValue(e.target.value)}
-                            />
-                            <AsyncButton
-                              type="button"
-                              className={styles.actionBtn}
-                              pendingLabel="Guardando…"
-                              disabled={!(Number(lateValue) > 0)}
-                              onClick={async () => {
-                                await onSetLateAmount(row.invoiceId, Number(lateValue));
-                                setLateFor(null);
-                                setLateValue("");
-                              }}
-                            >
-                              Guardar
-                            </AsyncButton>
-                          </>
-                        ) : (
-                          <button
-                            type="button"
-                            className={styles.actionBtn}
-                            onClick={() => {
-                              setLateFor(row.invoiceId);
-                              setLateValue(row.lateAmount != null ? String(row.lateAmount) : "");
-                            }}
-                          >
-                            Cargar monto vencido
-                          </button>
-                        )}
+                        <input
+                          className={styles.lateInput}
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          placeholder="Monto vencido"
+                          aria-label={`Monto vencido de ${row.concepto}`}
+                          value={lateValue}
+                          onChange={(e) => setLateValue(e.target.value)}
+                        />
+                        <AsyncButton
+                          type="button"
+                          className={styles.actionBtn}
+                          pendingLabel="Guardando…"
+                          disabled={!(Number(lateValue) > 0)}
+                          onClick={async () => {
+                            await onSetLateAmount(row.invoiceId, Number(lateValue));
+                            setLateFor(null);
+                            setLateValue("");
+                          }}
+                        >
+                          Guardar
+                        </AsyncButton>
                       </>
-                    ) : row.canCarry ? (
-                      <AsyncButton
-                        type="button"
-                        className={styles.actionBtn}
-                        pendingLabel="Pasando…"
-                        onClick={() => onCarryOver(row.invoiceId)}
-                      >
-                        Pasar a este período
-                      </AsyncButton>
                     ) : (
                       <button
                         type="button"
                         className={styles.actionBtn}
-                        disabled
-                        title="Sólo se puede pasar una boleta del mes inmediatamente anterior. Cerrá el período que falta."
+                        onClick={() => {
+                          setLateFor(row.invoiceId);
+                          setLateValue(row.lateAmount != null ? String(row.lateAmount) : "");
+                        }}
                       >
-                        Pasar a este período
+                        Cargar monto vencido
                       </button>
                     )}
                   </td>

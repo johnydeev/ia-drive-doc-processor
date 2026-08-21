@@ -533,6 +533,36 @@ seam `onDiagnostics` en `pipeline/runner.ts` · `api/client/manual-run/` · `hoo
 ### Período por defecto (mes mayoritario)
 `ConsortiumRepository.resolveMajorityMonth(clientId)`: retorna el mes más frecuente entre los períodos ACTIVE existentes del cliente, o el mes actual si no hay ninguno. Usado en: `createManual()`, import Excel, sync-directory.
 ---
+## "Edificio de Prueba": smokes en producción
+
+**No hay ambiente de staging** — cada commit a `master` es un deploy real (ver CI/CD arriba). Para
+poder verificar features contra datos reales sin tocar consorcios de verdad, existe un consorcio
+ficticio **"Edificio de Prueba"** en la cartera de MorinigoAdm.
+
+**No borrarlo.** Es infraestructura de verificación, no un alta cargada por error.
+
+### Cómo está armado (y por qué)
+
+- **Se carga en el archivo ALTA** (`_Consorcios`), no sólo desde la UI. Si viviera únicamente en la
+  base, cada sincronización de directorio lo reportaría como **sobrante** — no lo borraría (el sync
+  no borra desde 2026-08-17) pero ensuciaría el reporte para siempre.
+- **CUIT placeholder** (tipo `11-11111111-9`). Desde 2026-08-18 el CUIT es único por cliente, así que
+  tiene que ser uno que no exista. Ojo: los placeholders **no pasan checksum ni prefijo válido**, así
+  que `extractCuitsFromText` nunca los extrae de un papel → este edificio **no matchea por CUIT**. Para
+  probar el pipeline entero con un PDF real hay que hacerlo matchear por nombre o `matchNames`.
+- **Banco propio** (ej. "PRUEBAS") asignado desde el panel. La vista de obligaciones agrupa por banco,
+  así que queda separado de los reales de un vistazo en vez de mezclado entre ellos.
+
+### Qué contamina, y cómo limpiarlo
+
+- **Sale en el PDF del banco.** `toPrintableSheets` excluye edificios sin filas imprimibles, pero un
+  smoke de obligaciones justamente le carga gastos fijos con boletas → va a imprimirse. Revisar antes
+  de imprimir algo real.
+- **Sus boletas escriben en la hoja Datos**, mezcladas con las reales. Borrar la boleta desde el panel
+  saca la fila del Sheet y devuelve el PDF a Drive, así que se limpia.
+- **Entra en el cierre general.** Con 46 edificios reales contra 1, no mueve el mes mayoritario.
+- **Drive** le crea su carpeta en `Rendiciones/[Edificio de Prueba]` la primera vez.
+
 ## Convenciones de código
 - **PowerShell:** No usar `&&`. Siempre comandos por separado.
 - **Migraciones:** `npx prisma migrate deploy` → `npx prisma generate`. Nunca modificar tablas en Supabase Studio directamente.

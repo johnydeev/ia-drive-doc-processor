@@ -170,6 +170,13 @@ model Invoice {
   /// Importe del 2° vencimiento (pago fuera de término). Se carga a mano sobre una
   /// boleta arrastrada; el pipeline nunca lo escribe (extrae sólo el 1er vencimiento).
   lateAmount          Decimal?     @db.Decimal(14, 2)
+  /// Marcada por el owner para pasar al mes siguiente. El traslado real (Drive +
+  /// Sheets + DB) ocurre al CERRAR el período, no al marcar. `null` = no marcada;
+  /// se limpia al ejecutarse el traslado o al desmarcar.
+  ///
+  /// Es un timestamp y no un booleano para saber CUÁNDO se marcó: es lo que permite
+  /// auditar qué entró en una corrida de cierre.
+  carryOverRequestedAt DateTime?
   createdAt           DateTime     @default(now())
   updatedAt           DateTime     @updatedAt
   client              Client       @relation(fields: [clientId], references: [id], onDelete: Cascade)
