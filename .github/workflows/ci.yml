@@ -175,6 +175,23 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw "$Name failed with exit code $LASTEXITCODE" }
           }
 
+          # Limpieza ANTES del pull: es donde falta el espacio. El 2026-08-20 el
+          # deploy murió con "no space left on device" extrayendo una capa, con 31
+          # imágenes ocupando 65 GB de las cuales 28 no las usaba nadie.
+          #
+          # `-a` es la clave: sin él sólo se borran las imágenes COLGADAS (sin tag),
+          # y las de cada deploy quedan tageadas con su SHA, así que nunca se
+          # limpiaban. El filtro de antigüedad deja los últimos 7 días para poder
+          # volver atrás a una imagen anterior si un deploy sale mal.
+          #
+          # Las imágenes EN USO están protegidas: Docker no borra una que tenga un
+          # contenedor asociado, ni corriendo ni parado. Acá los contenedores todavía
+          # corren la versión anterior, así que esa imagen no se toca.
+          Invoke-Step "docker cleanup (antes del pull)" {
+            docker image prune -a -f --filter "until=168h"
+            docker builder prune -f --filter "until=168h"
+          }
+
           Invoke-Step "docker pull" {
             docker pull "ghcr.io/johnydeev/ia-drive-doc-processor:${env:IMAGE_TAG}"
           }
@@ -187,8 +204,11 @@ jobs:
           Invoke-Step "docker compose up" {
             docker compose -p ia-drive-doc-processor up -d --force-recreate
           }
+          # Limpieza posterior: ahora que los contenedores corren la imagen nueva, la
+          # anterior quedó libre. Mismo filtro de 7 días para conservar el margen de
+          # rollback.
           Invoke-Step "docker image prune" {
-            docker image prune -f
+            docker image prune -a -f --filter "until=168h"
           }
 
       - name: Wait for healthy (Linux)

@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+### Fixed
+- **El deploy ya no se queda sin disco (2026-08-20)**. Falló con `no space left on device`: había 31
+  imágenes ocupando 65 GB y 28 no las usaba nadie. El workflow ya tenía un `docker image prune -f`,
+  pero sin `-a` sólo borra imágenes colgadas, y las de cada deploy quedan tageadas con el SHA — el
+  paso corría sin limpiar nada. Ahora limpia con `-a` y filtro de 7 días, y lo hace **antes** del
+  pull, que es donde falta el espacio.
+
 ### Changed
 - **La vista de obligaciones es por mes y no arrastra nada sola (2026-08-20)**. Mostraba todas las
   boletas impagas de períodos cerrados, que con los pagos fuera de la app eran 1124 de 1125: una

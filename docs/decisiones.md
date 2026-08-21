@@ -4,6 +4,43 @@ Registro de decisiones tomadas ante problemas reales encontrados en producción.
 
 ---
 
+## 2026-08-20 — El deploy se quedó sin disco: `docker image prune` sin `-a` no limpiaba nada
+
+### Problema
+
+El deploy falló con `no space left on device` extrayendo una capa de la imagen. No era el código: el
+runner self-hosted (la PC del owner) tenía **31 imágenes ocupando 65,21 GB, de las cuales 62,61 GB
+(96%) no las usaba ningún contenedor**.
+
+La causa es sutil: el workflow **ya tenía** un paso de limpieza, `docker image prune -f`. Pero sin
+`-a` ese comando sólo borra imágenes **colgadas** (sin tag), y cada deploy deja la suya tageada con el
+SHA del commit (`ia-drive-doc-processor:a3f5d0e…`). Nunca eran colgadas, así que nunca se borraban:
+el paso corría, no fallaba, y no limpiaba nada.
+
+### Decisión
+
+Dos cambios en el paso `Build and restart`:
+
+1. **Limpieza ANTES del pull**, que es donde falta el espacio. El paso que ya existía corría al final,
+   o sea después del pull que se muere.
+2. **`-a` con filtro de antigüedad** (`--filter "until=168h"`) en las dos: borra las imágenes sin uso
+   de más de 7 días. La ventana deja margen para volver atrás a una imagen anterior si un deploy sale
+   mal.
+
+Se agrega también `docker builder prune` (2,78 GB de caché, 100% recuperable).
+
+**Por qué es seguro:** Docker no borra una imagen que tenga un contenedor asociado, corriendo o
+parado. Cuando corre la limpieza previa, los contenedores todavía usan la versión anterior, así que
+esa imagen está protegida. Y `Local Volumes: 0` — la base es Supabase, remota: no hay datos locales
+que perder.
+
+### Impacto
+
+`.github/workflows/ci.yml`. Sin esto el disco se llena cada dos o tres meses y el deploy muere en el
+peor momento: con el commit ya en `master` y los contenedores corriendo código viejo.
+
+---
+
 ## 2026-08-18 — El CUIT es la identidad: no se repite, y el sync deja de elegir en silencio
 
 ### Problema
