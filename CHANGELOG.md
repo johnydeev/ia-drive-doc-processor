@@ -3,6 +3,12 @@
 ## [Unreleased]
 
 ### Fixed
+- **La vista de obligaciones ya no queda cargando en bucle (2026-08-20)**. Al desplegarla quedaba
+  pestañeando con "Sincronizando y cargando…" sin mostrar nada: `setMonth` devolvía un objeto nuevo en
+  cada vuelta, así que el efecto de carga se re-disparaba solo — 1519 sincronizaciones medidas. Ahora
+  conserva la referencia cuando el mes no cambió, y sincronizar corre una vez al montar en vez de en
+  cada flecha. Se agregaron tests del ciclo de carga, que no existían: son los que faltaban para
+  atajarlo antes del deploy.
 - **El deploy ya no se queda sin disco (2026-08-20)**. Falló con `no space left on device`: había 31
   imágenes ocupando 65 GB y 28 no las usaba nadie. El workflow ya tenía un `docker image prune -f`,
   pero sin `-a` sólo borra imágenes colgadas, y las de cada deploy quedan tageadas con el SHA — el

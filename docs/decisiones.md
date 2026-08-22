@@ -4,6 +4,47 @@ Registro de decisiones tomadas ante problemas reales encontrados en producción.
 
 ---
 
+## 2026-08-20 — Bucle infinito de carga: `setMonth` con un objeto nuevo en cada vuelta
+
+### Problema
+
+La vista de obligaciones quedó pestañeando con "Sincronizando y cargando…" y no mostraba nada. Se vio
+en producción apenas se desplegó.
+
+`loadOverview` depende de `month` y, adentro, hacía `setMonth({ month, year })` — **un objeto nuevo
+cada vez**, aunque los valores fueran idénticos. React compara por referencia: el estado "cambiaba",
+cambiaba la identidad de `loadOverview`, cambiaba la de `reload`, se re-disparaba el efecto y volvía a
+cargar. En bucle. Y como `reload` sincroniza antes de cargar, **cada vuelta también posteaba a
+`/obligations/sync`**.
+
+Medido después con el test: **1519 sincronizaciones** antes de que el test cortara.
+
+### Decisión
+
+Dos cambios:
+
+1. **`setMonth` conserva la referencia** si el mes no cambió. Sin cambio de estado no hay re-render, y
+   el ciclo se corta solo.
+2. **Se separa montar de navegar**: un `ref` hace que la sincronización corra UNA vez al montar, y
+   cambiar de mes sólo recarga. La sincronización de obligaciones es de toda la cartera y no depende
+   del mes, así que repetirla en cada flecha era trabajo al pedo contra la base.
+
+### Por qué llegó a producción
+
+**No había test del ciclo de carga.** Los tests del hook cubrían las mutaciones (agregar, togglear)
+pero ninguno verificaba cuántas veces carga al montar — justamente lo que rompe un efecto mal
+encadenado.
+
+Se agregaron tres, y se verificó que fallan con el bug reintroducido: los del bucle detectan las 1519
+llamadas, y **dos tests preexistentes también se colgaban** a los 5 s. O sea que el bucle rompía más
+que la pantalla inicial.
+
+### Impacto
+
+`src/app/admin/obligaciones/hooks/useObligationsOverview.ts` + 3 tests nuevos. 771 tests, verdes.
+
+---
+
 ## 2026-08-20 — El deploy se quedó sin disco: `docker image prune` sin `-a` no limpiaba nada
 
 ### Problema

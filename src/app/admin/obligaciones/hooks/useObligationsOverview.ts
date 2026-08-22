@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useAuthGuard } from "@/lib/useAuthGuard";
 import { buildSheets, type ObligationStatus, type OverviewPayload, type SheetData } from "../lib/sheetModel";
 import { nextMonth, previousMonth, type YearMonth } from "@/lib/periodMonth";
@@ -35,8 +35,18 @@ export function useObligationsOverview() {
       setSheets(buildSheets(payload));
       // La primera carga no pide mes: se adopta el que resolvió el servidor para
       // que la navegación tenga desde dónde partir.
+      //
+      // CRÍTICO: se conserva la MISMA referencia si el mes no cambió. `loadOverview`
+      // depende de `month`, así que devolver un objeto nuevo con los mismos valores
+      // cambiaba su identidad → se re-disparaba el efecto → cargaba de nuevo, en
+      // bucle infinito (y re-sincronizando en cada vuelta). Es el pestañeo que se
+      // vio en producción el 2026-08-20.
       if (payload.month != null && payload.year != null) {
-        setMonth({ month: payload.month, year: payload.year });
+        setMonth((current) =>
+          current && current.month === payload.month && current.year === payload.year
+            ? current
+            : { month: payload.month!, year: payload.year! }
+        );
       }
       setError(null);
     } catch (err) {
@@ -63,7 +73,27 @@ export function useObligationsOverview() {
     setIsLoading(false);
   }, [sync, loadOverview]);
 
-  useEffect(() => { void reload(); }, [reload]);
+  /**
+   * Arranque: sincroniza UNA vez y carga. Después, cambiar de mes sólo recarga —
+   * no re-sincroniza, porque la sincronización de obligaciones es de toda la
+   * cartera y no depende del mes que se esté mirando.
+   *
+   * El `ref` es lo que separa "montar" de "cambiar de mes": sin él, `reload`
+   * cambia de identidad con cada mes y la vista volvería a sincronizar cada vez
+   * que apretás una flecha.
+   */
+  const didInit = useRef(false);
+  useEffect(() => {
+    if (didInit.current) return;
+    didInit.current = true;
+    void reload();
+  }, [reload]);
+
+  useEffect(() => {
+    if (!didInit.current || !month) return;
+    setIsLoading(true);
+    void loadOverview().finally(() => setIsLoading(false));
+  }, [month, loadOverview]);
 
   const addFixedExpenses = useCallback(
     async (consortiumId: string, targets: TargetOption[]) => {

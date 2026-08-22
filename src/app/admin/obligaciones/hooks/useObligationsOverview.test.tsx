@@ -10,18 +10,22 @@ vi.mock("@/lib/useAuthGuard", () => ({ useAuthGuard: () => ({ guardedFetch }) })
 
 const payload = {
   ok: true,
-  majorityLabel: "julio 2026",
+  month: 7,
+  year: 2026,
+  monthLabel: "julio 2026",
   providers: [{ id: "p1", canonicalName: "SEGURO", paymentAlias: null }],
   consortiums: [
     {
       consortiumId: "c1",
       consortiumName: "FRANKLIN 25",
       bankId: "b1", bankName: "Santander", bankColor: "red",
-      periodId: "per1", periodLabel: "julio 2026",
+      periodId: "per1", periodLabel: "julio 2026", periodStatus: "ACTIVE",
+      carried: [],
       lspServices: [],
       fixedExpenses: [
         { id: "fx1", providerId: "p1", lspServiceId: null, description: null, active: true,
-          obligation: { id: "ob1", status: "PENDING", amount: null } },
+          obligation: { id: "ob1", status: "PENDING", amount: null, invoiceId: null,
+            carryOverRequested: false, carriedIn: false } },
       ],
     },
   ],
@@ -138,5 +142,48 @@ describe("useObligationsOverview", () => {
     const { result } = renderHook(() => useObligationsOverview());
     await waitFor(() => expect(result.current.isLoading).toBe(false));
     expect("deleteFixedExpense" in result.current).toBe(false);
+  });
+});
+
+describe("useObligationsOverview — ciclo de carga", () => {
+  it("no entra en bucle: sincroniza una vez y carga una cantidad acotada de veces", async () => {
+    // El bug de producción (2026-08-20): `loadOverview` dependía de `month` y
+    // adentro hacía `setMonth` con un objeto NUEVO en cada vuelta. Eso cambiaba su
+    // identidad, re-disparaba el efecto y cargaba en loop — re-sincronizando cada
+    // vez. En pantalla se veía un pestañeo eterno con "Sincronizando y cargando…".
+    const { result } = renderHook(() => useObligationsOverview());
+
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+    await new Promise((resolve) => setTimeout(resolve, 60));
+
+    const syncs = guardedFetch.mock.calls.filter(([url]) => String(url).includes("/obligations/sync"));
+    const loads = guardedFetch.mock.calls.filter(([url]) => String(url).includes("/obligations/overview"));
+
+    expect(syncs).toHaveLength(1);
+    expect(loads.length).toBeLessThanOrEqual(2);
+  });
+
+  it("adopta el mes que resolvió el servidor", async () => {
+    const { result } = renderHook(() => useObligationsOverview());
+
+    await waitFor(() => expect(result.current.monthLabel).toBe("julio 2026"));
+    expect(result.current.month).toEqual({ month: 7, year: 2026 });
+  });
+
+  it("cambiar de mes recarga pero NO vuelve a sincronizar", async () => {
+    // La sincronización es de toda la cartera y no depende del mes: repetirla en
+    // cada flecha sería trabajo al pedo contra la base.
+    const { result } = renderHook(() => useObligationsOverview());
+    await waitFor(() => expect(result.current.month).not.toBeNull());
+
+    const loadsAntes = guardedFetch.mock.calls.filter(([url]) => String(url).includes("/overview")).length;
+    act(() => result.current.goToPreviousMonth());
+
+    await waitFor(() => {
+      const loads = guardedFetch.mock.calls.filter(([url]) => String(url).includes("/overview")).length;
+      expect(loads).toBeGreaterThan(loadsAntes);
+    });
+    const syncs = guardedFetch.mock.calls.filter(([url]) => String(url).includes("/obligations/sync"));
+    expect(syncs).toHaveLength(1);
   });
 });
