@@ -1,6 +1,174 @@
 # Progreso del proyecto — drive-doc-processor
 
-Actualizado al 20/08/2026 (sesión 58 — obligaciones por período: cada mes es una hoja cerrada).
+Actualizado al 25/08/2026 (sesión 60 — se revirtió el cambio de orden de la cadena: queda pendiente de key paga. El resto de la entrega de Gemini sigue en pie).
+
+## ✅ Smokes pendientes en producción (al 2026-08-20)
+
+Todo lo de las sesiones 57 y 58 está commiteado y desplegado, pero **verificado sólo por tests**. Esto
+es lo que falta confirmar contra datos reales, en orden de dependencia.
+
+**Estado de las carpetas de Drive al momento de escribir esto:** Pendientes **0**, Sin Asignar **22**,
+Revisión **73**. Para reprocesar algo hay que **moverlo primero a Pendientes** — el modal de corrida
+selectiva sólo lista lo que está ahí.
+
+### 0. Preparación
+
+- [ ] Crear el consorcio **"Edificio de Prueba"** (ver su sección en `CLAUDE.md`: va en el ALTA, CUIT
+      placeholder, banco propio). Hoy **no existe**.
+
+### 1. Extracción — mover los PDFs a Pendientes y usar la corrida selectiva
+
+- [ ] **`FB0004-00033366` y `FB0004-00034082`** (en Revisión) → prueban la **rama de Vision para PDFs
+      escaneados**. Es lo único que no se pudo verificar local: el OCR necesita poppler, que sólo está
+      en la imagen Docker. Esperado: entran con monto en vez de caer en SIN MONTO.
+- [ ] **`Fact. 51837`** (ARAOZ 192, en Sin Asignar) → prueba el **CUIT del código de barras AFIP**.
+      Esperado: entra sola, asignada a `BPACE E HIJOS S.R.L.`, sin gastar tokens de Vision.
+- [ ] **`FC-0003-00001430-C`** (Factura C de `RENZI MARIANA DEL PILAR`, ya cargada) → esperado: entra.
+- [ ] **`Reparacion Agosto 2026 Belgrano 1431`** → `CHERE JUAN JOSE` ya está cargado; esperado: entra.
+- [ ] **Boletas de servicios de agosto** que quedaron en Sin Asignar cuando `LspService` estaba vacía.
+- [ ] En cada corrida, revisar el **reporte en `Pendientes/_diagnosticos`**: el `.md` para el resumen y
+      el JSON si algo rebota.
+
+### 2. Guard del vencimiento del CAE
+
+- [ ] Al reprocesar cualquier boleta con "Fecha de Vto. de CAE", confirmar que el vencimiento queda
+      **vacío** y no toma esa fecha.
+- [ ] **Corregir a mano la boleta `00002-00208625`** (EVA PERON 1761): sigue con `vto=2026-07-07`, que
+      es el vencimiento del CAE. El guard evita los próximos, no corrige el pasado.
+
+### 3. Obligaciones por período (lo más nuevo)
+
+- [ ] **La vista carga** (se arregló un bucle infinito el 2026-08-20; confirmar que ya no pestañea).
+- [ ] **Navegar meses** con las flechas: ver que aparecen los edificios con período de ese mes.
+- [ ] **Marcar** una boleta con "Pasar al mes siguiente" y ver que queda en "Pasa al mes siguiente ✓".
+- [ ] **Desmarcar** y ver que vuelve al estado normal.
+- [ ] **Cerrar el período** y confirmar que arranca la barra de tandas y llega al final.
+- [ ] Confirmar que la boleta aparece en el mes siguiente, bajo **"Vienen del mes anterior"**.
+- [ ] **Devolverla** a su mes de origen con el botón y ver que vuelve.
+- [ ] **Cerrar la pestaña a mitad de las tandas** y confirmar que al volver aparece el
+      **"Quedaron N sin pasar — continuar"** y que retoma.
+- [ ] **Descargar el PDF** y ver la sección **"VIENEN DEL MES ANTERIOR"** separada del cuerpo del mes.
+
+### 4. Directorio
+
+- [ ] Sincronizar con una fila repetida a propósito y confirmar que el modal la **informa y no la
+      aplica**.
+- [ ] Intentar crear un edificio con un CUIT que ya existe: esperado **409 con mensaje claro**, no el
+      error crudo de Postgres.
+
+### Pendiente que NO es smoke
+
+- [ ] Definir cuál es el CUIT correcto de **Metrogas**: la base tiene `30-65786367-6`.
+
+## 🥇 Gemini: modelos, 503 y medición (2026-08-24, revisado 2026-08-25)
+
+**Estado: implementado y verificado. Sin migración. Sin commitear.**
+
+> **Revisión del 2026-08-25 (sesión 60):** la entrega asumía una cuenta paga de Gemini que **no se
+> contrató**. El owner decidió no cargar crédito por ahora, así que se **revirtió la pieza 1**
+> (Gemini a primero): la cadena sigue **Cerebras → Gemini → OpenAI → Claude**. Con key free
+> la cuota de Gemini es diaria **por modelo** (~20 requests), y ponerlo primero la quema en las
+> primeras boletas del día, dejando al resto pagando el barrido fallido antes de llegar a Cerebras.
+> El resto de las piezas se conserva: **mejoran o son neutrales en free tier**.
+
+Spec: `docs/superpowers/specs/2026-08-24-gemini-tier-pago-cadena-y-modelos-design.md`
+Plan: `docs/superpowers/plans/2026-08-24-gemini-tier-pago-cadena-y-modelos.md`
+
+Origen: el owner va a contratar una cuenta paga de Gemini y quería un entorno de pruebas para
+saber si la cuota alcanza. **La medición previa mostró que la cuota no era el problema**, y
+cambió el alcance de la entrega.
+
+### La medición que cambió el plan
+
+Sobre `TokenUsage` de producción (2026-03-27 → 2026-08-21). Las filas con `provider='aggregate'`
+son el total por corrida; la suma cierra exacta contra el desglose por proveedor.
+
+| Métrica | Valor |
+|---|---|
+| Corridas de IA | 1.363 en 77 días con actividad |
+| Resueltas por Gemini | 1.049 (77%) — **yendo segundo en la cadena** |
+| Resueltas por Cerebras | 315 (23%) |
+| Boletas/día promedio · p95 · pico | 17,7 · 53,8 · **72** |
+| **Pico de requests por minuto** | **4** (promedio 1,30; 2 minutos de 1.065 pasaron de 3) |
+| Tokens por boleta en Gemini | 2.827 input / 260 output |
+
+Costo proyectado si el 100% fuera por Gemini, con precio verificado en la doc de Google el
+2026-08-24 (`flash-lite` US$ 0,10/0,40 por 1M; `flash` US$ 0,30/2,50):
+
+| Escenario | flash-lite | flash |
+|---|---|---|
+| Mes pico observado (375 boletas) | **US$ 0,15** | US$ 0,56 |
+| 10× el volumen actual (3.750/mes) | US$ 1,45 | US$ 5,60 |
+
+**Ni la cuota ni el costo son el problema.** El RPM bajo no es casualidad: el worker procesa un
+job a la vez. El problema real era que todo el diseño del barrido de modelos existía para
+esquivar el tope diario **por modelo** del free tier (~20 requests).
+
+### Hecho
+
+- **Orden de la cadena explícito** (`PROVIDER_ORDER` en `aiExtraction.ts`): antes salía del
+  orden físico de cinco bloques `if` y para saber quién iba primero había que leer 45 líneas.
+  Ahora es un array. **El orden en sí no cambió**: sigue **Cerebras → Gemini → OpenAI →
+  Claude**. Mover Gemini a primero es editar una línea, cuando exista la key paga.
+- **Poda de modelos muertos**: el barrido pasa de 5 a 3. `gemini-2.0-flash` y
+  `gemini-2.0-flash-lite` los dio de baja Google y devolvían 404 — gastaban dos intentos
+  garantizados al vacío cada vez que los tres primeros daban 503. **No reduce la cuota gratis**:
+  un modelo que devuelve 404 nunca fue un balde de cuota.
+- **`isTransientServerError`** (`lib/aiErrors.ts`): clasifica 503 / `UNAVAILABLE` / "overloaded"
+  / "high demand", separado de la cuota (429). No confunde el 404 de modelo dado de baja, que
+  dice "no longer available" y no contiene "unavailable".
+- **Un 503 reintenta el MISMO modelo** una vez, tras 2000 ms, antes de saltar. Saltar de una
+  resuelve la boleta igual, pero la resuelve un modelo distinto del que le tocaba, con otra
+  calidad y otro precio. El `sleep` es inyectable, así que el test no espera de verdad.
+- **BUG: un 503 en todos los modelos mandaba la boleta a Revisión.** `throwSweepFailure` sólo
+  lanzaba `RateLimitError` si **todos** los errores eran 429; con 503 lanzaba `Error` genérico y
+  una boleta sana terminaba en revisión manual por una caída de capacidad de Google que dura
+  minutos. Ahora los dos transitorios la devuelven a **Pendientes**.
+- **BUG: el modelo pegajoso podía fijar el worker en el modelo caro.**
+  `GeminiExtractorService.workingModelName` es `static`, se seteaba en cada éxito y no expira:
+  si `2.5-flash-lite` daba 503 y resolvía `2.5-flash`, **todas** las boletas siguientes
+  arrancaban por `2.5-flash` hasta el próximo reinicio — 3× el input y 6× el output, en
+  silencio. Ahora el pegado sólo aplica si el salto fue por **cuota** (429), que es la razón
+  por la que el pegado existe.
+- **El fallback visual registra sus tokens.** `extractPartiesFromImage` actualizaba el modelo
+  pegajoso pero nunca llamaba a `captureUsage`: era el único camino que gastaba tokens sin
+  dejar rastro en `TokenUsage`. Sin esto no se puede medir el consumo real de la cuenta paga.
+- **`GeminiExtractorService` estrena tests** (no tenía ni uno). Se abrió el seam mínimo:
+  `getModel` pasa de `private` a `protected`, el constructor acepta `sleep`, y hay
+  `resetWorkingModel()` / `workingModel` estáticos para el estado compartido. **19 tests.**
+
+**Tests 771 → 799** (+8 en `aiErrors.test.ts`, +19 en `geminiExtractor.service.test.ts`, +1 en
+`aiExtraction.test.ts`).
+
+### Lo que NO entra (decisiones explícitas)
+
+`providerOrder` configurable por cliente (con **un solo cliente real** es config a mantener
+para un caso que no existe), flag `geminiTier: free|paid` (no cambiaría ninguna decisión que
+el array de 3 modelos no cubra), y tocar `callWithRetry` — que existe, tiene 6 tests y **ningún
+consumidor en producción**, pero su contrato termina en `RateLimitError` y el 503 necesita
+degradar de modelo, no rendirse.
+
+### ⏳ Pendiente del owner
+
+1. **Instalar poppler** para Windows y ponerlo en el PATH. Hoy `pdftoppm` no está, y la imagen
+   de producción trae sólo `dist/` (sin `src/`, sin `scripts/`, sin `tsx`), así que el
+   testbench tampoco corre adentro del contenedor. **Sin esto no se puede probar ninguna boleta
+   escaneada ni de membrete en imagen** — justo los caminos que motivan el cambio. Verificación:
+   `pdftoppm -v` responde y el testbench imprime `[ocr-service] pdftoppm generó N página(s)`.
+2. **Armar el lote fijo de regresión**: 15-25 boletas en una carpeta local con su
+   `<boleta>.expected.json` escrito a mano. Composición sugerida en la sección 5.3 del spec
+   (texto directo, servicios, sindicales, escaneadas, membrete en imagen, y 1-2 que no son
+   boleta). Queda como red de regresión para cualquier cambio futuro de modelo o de prompt.
+3. **Correr el testbench dos veces** sobre el mismo lote, con la key free y con la paga:
+   `npx tsx scripts/llm-testbench.ts "<carpeta>" "MorinigoAdm"`. Salen dos `reporte.md` con
+   `hits/total`. La conclusión que interesa es cuál de dos cosas pasa: la cuenta paga mejora la
+   extracción, o sólo saca los 429 y la calidad es la misma.
+4. **Recién después**, pegar la key paga en `/admin/clients/[id]` — no requiere deploy ni
+   reiniciar contenedores, y revertir es pegar la vieja.
+
+> **Ojo con el veredicto del testbench en boletas de servicio:** `runLogicalPipeline` no simula
+> el fast-path de `LspService` por número de cliente, ni el código de barras AFIP, ni el
+> fallback visual. Mide calidad de extracción y matching, no el pipeline entero.
 
 ## 🗓️ Obligaciones por período: cada mes es una hoja cerrada (2026-08-20)
 

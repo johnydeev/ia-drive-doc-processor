@@ -2,13 +2,13 @@
  * Comparador de extractores IA sobre PDFs reales (gate de calidad).
  *
  * Para cada PDF: extrae el texto con el extractor del pipeline y corre CADA
- * proveedor configurado (Cerebras, Groq, Gemini, OpenAI) sobre el MISMO texto,
+ * proveedor configurado (Cerebras, Gemini, OpenAI) sobre el MISMO texto,
  * mostrando los campos clave lado a lado. No escribe en DB ni Sheets.
  *
  * Uso:
  *   npx tsx scripts/compare-extractors.ts <ruta.pdf> [<ruta2.pdf> ...]
  *
- * Requiere al menos una key en el entorno: CEREBRAS_API_KEY / GROQ_API_KEY /
+ * Requiere al menos una key en el entorno: CEREBRAS_API_KEY /
  * GEMINI_API_KEY / OPENAI_API_KEY (con sus *_MODEL opcionales).
  */
 import { readFileSync } from "fs";
@@ -27,12 +27,6 @@ async function buildExtractors(): Promise<AiExtractor[]> {
     list.push(new OpenAICompatibleExtractorService({
       provider: "cerebras", apiKey: process.env.CEREBRAS_API_KEY,
       baseURL: "https://api.cerebras.ai/v1", model: process.env.CEREBRAS_MODEL || "gpt-oss-120b",
-    }));
-  }
-  if (process.env.GROQ_API_KEY) {
-    list.push(new OpenAICompatibleExtractorService({
-      provider: "groq", apiKey: process.env.GROQ_API_KEY,
-      baseURL: "https://api.groq.com/openai/v1", model: process.env.GROQ_MODEL || "llama-3.3-70b-versatile",
     }));
   }
   if (process.env.GEMINI_API_KEY) {
@@ -55,7 +49,7 @@ if (pdfPaths.length === 0) {
 async function main() {
   const extractors = await buildExtractors();
   if (extractors.length === 0) {
-    console.error("No hay extractores configurados. Definí al menos una de: CEREBRAS_API_KEY, GROQ_API_KEY, GEMINI_API_KEY, OPENAI_API_KEY.");
+    console.error("No hay extractores configurados. Definí al menos una de: CEREBRAS_API_KEY, GEMINI_API_KEY, OPENAI_API_KEY.");
     process.exit(1);
   }
   console.log(`Proveedores: ${extractors.map((e) => e.provider).join(", ")}`);

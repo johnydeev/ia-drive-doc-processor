@@ -7,31 +7,34 @@ import {
 } from "@/lib/extraction";
 import { AiUsageMetrics } from "@/types/aiUsage.types";
 import { AiExtractor } from "@/services/aiExtraction";
-import { isRateLimitError, RateLimitError } from "@/lib/aiErrors";
+import { isRateLimitError, isTransientServerError, RateLimitError } from "@/lib/aiErrors";
 import { ExtractedDocumentData } from "@/types/extractedDocument.types";
 
 /**
- * Lista de modelos candidatos (barrido por baldes de cuota).
+ * Modelos candidatos del barrido.
  *
- * CONTEXTO (2026-06-11, confirmado en logs de prod): el free tier de Gemini tiene
- * cuota DIARIA POR MODELO ("GenerateRequestsPerDayPerProjectPerModel-FreeTier",
- * p. ej. limit=20 para 2.5-flash-lite). Un 429 de un modelo NO consume cuota y NO
- * implica que los demás estén agotados: cada modelo es un balde independiente.
- * Por eso el barrido de modelos SUMA los baldes diarios (~N×20 boletas/día) y es
- * la estrategia correcta en free tier.
+ * (2026-06-11, sigue vigente): el free tier tiene cuota DIARIA POR MODELO
+ * ("GenerateRequestsPerDayPerProjectPerModel-FreeTier", p. ej. limit=20 para
+ * 2.5-flash-lite). Como cada modelo es un balde independiente, barrer SUMA
+ * baldes y es la estrategia correcta en free tier. El barrido también cubre el
+ * **503 de alta demanda** de Google, que no depende del tier.
  *
- * Lo que se conserva del fix anti-429: si TODOS los modelos están sin cuota, se
- * lanza RateLimitError → el pipeline devuelve la boleta a Pendientes (no se
- * pierde, se reintenta en un ciclo posterior). Con tier pago esto deja de ser
- * relevante (la cuota diaria es enorme) y el primer modelo responde siempre.
+ * Se podaron `gemini-2.0-flash` y `gemini-2.0-flash-lite` (2026-08-24): Google
+ * los dio de baja y devuelven 404. NO eran baldes de cuota — eran dos intentos
+ * garantizados al vacío en cada barrido. Podarlos no reduce la cuota gratis
+ * disponible: los tres que quedan son los tres que alguna vez respondieron.
+ *
+ * Si TODOS los modelos fallan con error transitorio (429 o 503) se lanza
+ * `RateLimitError` → el pipeline devuelve la boleta a Pendientes.
  */
 const DEFAULT_MODEL_CANDIDATES = [
   "gemini-2.5-flash-lite",
   "gemini-2.5-flash",
   "gemini-flash-latest",
-  "gemini-2.0-flash",
-  "gemini-2.0-flash-lite",
 ];
+
+/** Espera antes de reintentar el MISMO modelo tras un 503. */
+const TRANSIENT_RETRY_BACKOFF_MS = 2000;
 
 function normalizeError(error: unknown): string {
   if (error instanceof Error) {
@@ -48,15 +51,23 @@ function normalizeError(error: unknown): string {
   return firstLine.length > 220 ? `${firstLine.slice(0, 220)}...` : firstLine;
 }
 
+export interface GeminiExtractorOptions {
+  apiKey?: string;
+  model?: string;
+  /** Inyectable para tests: evita esperas reales en el reintento del 503. */
+  sleep?: (ms: number) => Promise<void>;
+}
+
 export class GeminiExtractorService implements AiExtractor {
   readonly provider = "gemini" as const;
   /** Último modelo que funcionó (compartido entre instancias): arranca el barrido ahí. */
   private static workingModelName: string | null = null;
   private readonly genAI: GoogleGenerativeAI;
   private readonly preferredModel?: string;
+  private readonly sleep: (ms: number) => Promise<void>;
   private lastUsage: AiUsageMetrics | null = null;
 
-  constructor(options?: { apiKey?: string; model?: string }) {
+  constructor(options?: GeminiExtractorOptions) {
     const apiKey = options?.apiKey?.trim() || env.GEMINI_API_KEY?.trim();
     if (!apiKey) {
       throw new Error("GEMINI_API_KEY is not configured");
@@ -64,6 +75,17 @@ export class GeminiExtractorService implements AiExtractor {
 
     this.genAI = new GoogleGenerativeAI(apiKey);
     this.preferredModel = options?.model?.trim() || env.GEMINI_MODEL?.trim() || undefined;
+    this.sleep = options?.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
+  }
+
+  /** Solo para tests: el modelo pegajoso es estático y sobrevive entre casos. */
+  static resetWorkingModel(): void {
+    GeminiExtractorService.workingModelName = null;
+  }
+
+  /** Solo para tests y diagnóstico. */
+  static get workingModel(): string | null {
+    return GeminiExtractorService.workingModelName;
   }
 
   /**
@@ -84,14 +106,64 @@ export class GeminiExtractorService implements AiExtractor {
    * fue cuota agotada (la boleta vuelve a Pendientes), o el error agregado.
    */
   private throwSweepFailure(context: string, errors: string[]): never {
-    if (errors.length > 0 && errors.every((e) => isRateLimitError(e))) {
-      throw new RateLimitError(`${context}: sin cuota en los ${errors.length} modelo(s) del barrido`);
+    const allTransient =
+      errors.length > 0 &&
+      errors.every((e) => isRateLimitError(e) || isTransientServerError(e));
+
+    if (allTransient) {
+      throw new RateLimitError(
+        `${context}: los ${errors.length} modelo(s) del barrido fallaron por cuota o saturación (429/503)`
+      );
     }
     throw new Error(`${context} failed for all candidate models. ${errors.join(" | ")}`);
   }
 
-  private getModel(modelName: string): GenerativeModel {
+  /**
+   * Fija el modelo pegajoso SOLO si el barrido no tuvo que saltar por un error
+   * no-de-cuota.
+   *
+   * `workingModelName` es `static`: lo comparten todas las instancias del
+   * proceso y no expira. Fijarlo tras un salto por 503 dejaba al worker clavado
+   * en el modelo al que había saltado hasta el próximo reinicio — y si ese es
+   * `2.5-flash`, son 3× el precio del input y 6× el del output de flash-lite,
+   * sin que nada lo avise.
+   *
+   * Ante 429 el pegado SÍ corresponde: la cuota del modelo agotado no se
+   * recupera para la boleta siguiente, así que volver a pegarle es gastar un
+   * intento seguro al vacío. Esa es la razón por la que el pegado existe.
+   */
+  private static rememberWorkingModel(modelName: string, previousErrors: string[]): void {
+    if (previousErrors.length > 0 && !previousErrors.every((e) => isRateLimitError(e))) return;
+    GeminiExtractorService.workingModelName = modelName;
+  }
+
+  protected getModel(modelName: string): GenerativeModel {
     return this.genAI.getGenerativeModel({ model: modelName });
+  }
+
+  /**
+   * Llama a un modelo reintentándolo UNA vez si el error es transitorio (503).
+   *
+   * Saltar de modelo ante un 503 no está mal —la boleta se resuelve igual— pero
+   * la resuelve un modelo distinto del que le tocaba, con otra calidad y otro
+   * precio. Un reintento corto sobre el mismo modelo evita esa degradación
+   * silenciosa. Un solo reintento: dos sumarían 4 s por modelo, y el peor caso
+   * medido en producción ya fue de 187 s.
+   *
+   * Los errores no transitorios (429, 404, parseo) se propagan sin reintentar:
+   * la cuota no vuelve en 2 segundos y un modelo dado de baja no revive.
+   */
+  private async generateWithTransientRetry(
+    modelName: string,
+    request: Parameters<GenerativeModel["generateContent"]>[0]
+  ): Promise<GenerateContentResult> {
+    try {
+      return await this.getModel(modelName).generateContent(request);
+    } catch (error) {
+      if (!isTransientServerError(error)) throw error;
+      await this.sleep(TRANSIENT_RETRY_BACKOFF_MS);
+      return await this.getModel(modelName).generateContent(request);
+    }
   }
 
   private captureUsage(modelName: string, result: GenerateContentResult): void {
@@ -129,8 +201,7 @@ export class GeminiExtractorService implements AiExtractor {
 
     for (const modelName of this.buildModelCandidates()) {
       try {
-        const model = this.getModel(modelName);
-        const result = await model.generateContent({
+        const result = await this.generateWithTransientRetry(modelName, {
           contents: [{ role: "user", parts: [{ text: prompt }] }],
           generationConfig: { temperature: 0, responseMimeType: "application/json" },
         });
@@ -138,7 +209,7 @@ export class GeminiExtractorService implements AiExtractor {
         const parsed = parseExtractionOutput(outputText);
         const refined = refineExtractionWithRawText(parsed, text);
         this.captureUsage(modelName, result);
-        GeminiExtractorService.workingModelName = modelName;
+        GeminiExtractorService.rememberWorkingModel(modelName, errors);
         return refined;
       } catch (error) {
         errors.push(`${modelName}: ${normalizeError(error)}`);
@@ -159,6 +230,10 @@ export class GeminiExtractorService implements AiExtractor {
    * imágenes). En boletas 100% imagen también recupera el consorcio; si el consorcio
    * ya se conoce (`knownConsortiumName`) se pasa como contexto para no confundirlo con
    * el emisor. Barre modelos; si todos fallan devuelve null sin lanzar.
+   *
+   * Registra el consumo en `lastUsage` (2026-08-24): era el único camino que
+   * gastaba tokens sin dejar rastro en `TokenUsage`, así que el consumo real de
+   * la cuenta quedaba subestimado.
    */
   async extractPartiesFromImage(
     pngBuffer: Buffer,
@@ -199,10 +274,11 @@ export class GeminiExtractorService implements AiExtractor {
       ],
     }];
 
+    const errors: string[] = [];
+
     for (const modelName of this.buildModelCandidates()) {
       try {
-        const model = this.getModel(modelName);
-        const result = await model.generateContent({
+        const result = await this.generateWithTransientRetry(modelName, {
           contents,
           generationConfig: { temperature: 0, responseMimeType: "application/json" },
         });
@@ -212,15 +288,16 @@ export class GeminiExtractorService implements AiExtractor {
           providerName?: string | null; providerTaxId?: string | null;
           consortiumName?: string | null; consortiumTaxId?: string | null;
         };
-        GeminiExtractorService.workingModelName = modelName;
+        this.captureUsage(modelName, result);
+        GeminiExtractorService.rememberWorkingModel(modelName, errors);
         return {
           providerName: parsed.providerName ?? null,
           providerTaxId: parsed.providerTaxId ?? null,
           consortiumName: parsed.consortiumName ?? null,
           consortiumTaxId: parsed.consortiumTaxId ?? null,
         };
-      } catch {
-        continue;
+      } catch (error) {
+        errors.push(`${modelName}: ${normalizeError(error)}`);
       }
     }
     return { providerName: null, providerTaxId: null, consortiumName: null, consortiumTaxId: null };
@@ -250,8 +327,7 @@ export class GeminiExtractorService implements AiExtractor {
 
     for (const modelName of this.buildModelCandidates()) {
       try {
-        const model = this.getModel(modelName);
-        const result = await model.generateContent({
+        const result = await this.generateWithTransientRetry(modelName, {
           contents,
           generationConfig: { temperature: 0, responseMimeType: "application/json" },
         });
@@ -259,7 +335,7 @@ export class GeminiExtractorService implements AiExtractor {
         const parsed = parseExtractionOutput(outputText);
         const refined = refineExtractionWithRawText(parsed, "");
         this.captureUsage(modelName, result);
-        GeminiExtractorService.workingModelName = modelName;
+        GeminiExtractorService.rememberWorkingModel(modelName, errors);
         return refined;
       } catch (error) {
         errors.push(`${modelName}: ${normalizeError(error)}`);

@@ -9,7 +9,7 @@
  * Uso:
  *   npx tsx scripts/llm-testbench.ts ["./pruebas de LLMs"] [clientId|nombre]
  *
- * Requiere al menos una key en el entorno (CEREBRAS/GROQ/GEMINI/OPENAI) y
+ * Requiere al menos una key en el entorno (CEREBRAS/GEMINI/OPENAI) y
  * DATABASE_URL para cargar el directorio del cliente.
  */
 import { readFileSync, readdirSync, writeFileSync, mkdirSync, existsSync } from "fs";
@@ -38,12 +38,6 @@ async function buildExtractors(): Promise<AiExtractor[]> {
     list.push(new OpenAICompatibleExtractorService({
       provider: "cerebras", apiKey: process.env.CEREBRAS_API_KEY,
       baseURL: "https://api.cerebras.ai/v1", model: process.env.CEREBRAS_MODEL || "gpt-oss-120b",
-    }));
-  }
-  if (process.env.GROQ_API_KEY) {
-    list.push(new OpenAICompatibleExtractorService({
-      provider: "groq", apiKey: process.env.GROQ_API_KEY,
-      baseURL: "https://api.groq.com/openai/v1", model: process.env.GROQ_MODEL || "llama-3.3-70b-versatile",
     }));
   }
   if (process.env.GEMINI_API_KEY) {
@@ -89,7 +83,7 @@ async function main() {
   }
   const extractors = await buildExtractors();
   if (extractors.length === 0) {
-    console.error("No hay extractores configurados (definí CEREBRAS_API_KEY / GROQ_API_KEY / GEMINI_API_KEY / OPENAI_API_KEY).");
+    console.error("No hay extractores configurados (definí CEREBRAS_API_KEY / GEMINI_API_KEY / OPENAI_API_KEY).");
     process.exit(1);
   }
   const directory = await loadDirectory(clientArg);

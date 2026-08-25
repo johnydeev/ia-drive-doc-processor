@@ -5,7 +5,7 @@ import { ExtractedDocumentData } from "@/types/extractedDocument.types";
 /**
  * Contrato común de un extractor de datos estructurados por IA.
  *
- * Todos los servicios (Cerebras / Groq / Gemini / OpenAI / Claude) exponen esta
+ * Todos los servicios (Cerebras / Gemini / OpenAI / Claude) exponen esta
  * misma forma; declararla explícitamente permite tratarlos de forma
  * intercambiable (Strategy) y encadenarlos como fallback (Chain of
  * Responsibility) sin duplicar la lógica de reintento en cada caller.
@@ -23,14 +23,12 @@ export interface AiProviderCredentials {
 }
 
 /**
- * Configuración para construir la cadena. El orden de fallback es fijo:
- * Cerebras → Groq → Gemini → OpenAI → Claude (ver `createAiExtractionChain`).
- * Solo se incluyen los proveedores que tienen `apiKey` presente; en producción
- * Groq está fuera de la cadena (sin API key) desde 2026-06-25.
+ * Configuración para construir la cadena. El orden de fallback lo define
+ * `PROVIDER_ORDER`: Cerebras → Gemini → OpenAI → Claude. Solo se incluyen los
+ * proveedores que tienen `apiKey` presente.
  */
 export interface AiExtractionChainConfig {
   cerebras?: AiProviderCredentials;
-  groq?: AiProviderCredentials;
   gemini?: AiProviderCredentials;
   openai?: AiProviderCredentials;
   anthropic?: AiProviderCredentials;
@@ -104,58 +102,86 @@ export class AiExtractionChain {
 }
 
 /**
- * Construye la cadena importando dinámicamente solo los servicios cuyos
- * proveedores tienen API key configurada (mantiene la carga perezosa de SDKs
- * que ya tenía el pipeline). Orden de fallback: Cerebras → Groq → Gemini → OpenAI → Claude.
+ * Una entrada del orden de fallback: qué proveedor es, de dónde saca sus
+ * credenciales y cómo se construye su extractor.
+ *
+ * El orden de este array ES el orden de fallback. Antes salía del orden físico
+ * de cinco bloques `if`, así que para saber quién iba primero había que leer la
+ * función entera.
+ */
+interface ProviderSlot {
+  provider: AiProvider;
+  credentials: (config: AiExtractionChainConfig) => AiProviderCredentials | undefined;
+  build: (credentials: AiProviderCredentials) => Promise<AiExtractor>;
+}
+
+/**
+ * Orden de fallback: **Cerebras → Gemini → OpenAI → Claude**.
+ *
+ * Gemini va SEGUNDO a propósito mientras la key sea del free tier: su cuota es
+ * diaria POR MODELO (~20 requests), así que ponerlo primero quema el balde en
+ * las primeras boletas del día y deja al resto pagando el barrido fallido antes
+ * de llegar a Cerebras.
+ *
+ * El spec `2026-08-24-gemini-tier-pago-cadena-y-modelos-design.md` propone
+ * moverlo a primero, pero eso vale SOLO con la cuenta paga (pieza 1). Mientras
+ * tanto el orden queda como estaba. Cambiarlo es mover este bloque al principio
+ * del array y dar vuelta el test de `providerOrder`.
+ */
+const PROVIDER_ORDER: ProviderSlot[] = [
+  {
+    provider: "cerebras",
+    credentials: (c) => c.cerebras,
+    build: async (creds) => {
+      const { OpenAICompatibleExtractorService } = await import("@/services/openAICompatibleExtractor.service");
+      return new OpenAICompatibleExtractorService({
+        provider: "cerebras",
+        apiKey: creds.apiKey!,
+        baseURL: "https://api.cerebras.ai/v1",
+        model: creds.model?.trim() || "gpt-oss-120b",
+      });
+    },
+  },
+  {
+    provider: "gemini",
+    credentials: (c) => c.gemini,
+    build: async (creds) => {
+      const { GeminiExtractorService } = await import("@/services/geminiExtractor.service");
+      return new GeminiExtractorService({ apiKey: creds.apiKey, model: creds.model });
+    },
+  },
+  {
+    provider: "openai",
+    credentials: (c) => c.openai,
+    build: async (creds) => {
+      const { AiExtractorService } = await import("@/services/aiExtractor.service");
+      return new AiExtractorService({ apiKey: creds.apiKey, model: creds.model });
+    },
+  },
+  {
+    provider: "anthropic",
+    credentials: (c) => c.anthropic,
+    build: async (creds) => {
+      const { ClaudeExtractorService } = await import("@/services/claudeExtractor.service");
+      return new ClaudeExtractorService({ apiKey: creds.apiKey, model: creds.model });
+    },
+  },
+];
+
+/**
+ * Construye la cadena recorriendo `PROVIDER_ORDER` e importando dinámicamente
+ * solo los servicios cuyos proveedores tienen API key (mantiene la carga
+ * perezosa de SDKs que ya tenía el pipeline).
  */
 export async function createAiExtractionChain(
   config: AiExtractionChainConfig
 ): Promise<AiExtractionChain> {
   const extractors: AiExtractor[] = [];
 
-  if (config.cerebras?.apiKey) {
-    const { OpenAICompatibleExtractorService } = await import("@/services/openAICompatibleExtractor.service");
-    extractors.push(
-      new OpenAICompatibleExtractorService({
-        provider: "cerebras",
-        apiKey: config.cerebras.apiKey,
-        baseURL: "https://api.cerebras.ai/v1",
-        model: config.cerebras.model?.trim() || "gpt-oss-120b",
-      })
-    );
-  }
-
-  if (config.groq?.apiKey) {
-    const { OpenAICompatibleExtractorService } = await import("@/services/openAICompatibleExtractor.service");
-    extractors.push(
-      new OpenAICompatibleExtractorService({
-        provider: "groq",
-        apiKey: config.groq.apiKey,
-        baseURL: "https://api.groq.com/openai/v1",
-        model: config.groq.model?.trim() || "llama-3.3-70b-versatile",
-      })
-    );
-  }
-
-  if (config.gemini?.apiKey) {
-    const { GeminiExtractorService } = await import("@/services/geminiExtractor.service");
-    extractors.push(
-      new GeminiExtractorService({ apiKey: config.gemini.apiKey, model: config.gemini.model })
-    );
-  }
-
-  if (config.openai?.apiKey) {
-    const { AiExtractorService } = await import("@/services/aiExtractor.service");
-    extractors.push(
-      new AiExtractorService({ apiKey: config.openai.apiKey, model: config.openai.model })
-    );
-  }
-
-  if (config.anthropic?.apiKey) {
-    const { ClaudeExtractorService } = await import("@/services/claudeExtractor.service");
-    extractors.push(
-      new ClaudeExtractorService({ apiKey: config.anthropic.apiKey, model: config.anthropic.model })
-    );
+  for (const slot of PROVIDER_ORDER) {
+    const creds = slot.credentials(config);
+    if (!creds?.apiKey) continue;
+    extractors.push(await slot.build(creds));
   }
 
   return new AiExtractionChain(extractors);

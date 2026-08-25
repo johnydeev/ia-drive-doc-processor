@@ -46,8 +46,6 @@ export interface ProcessJobConfig {
   aiConfig?: {
     cerebrasApiKey?: string;
     cerebrasModel?: string;
-    groqApiKey?: string;
-    groqModel?: string;
     geminiApiKey?: string;
     geminiModel?: string;
     openaiApiKey?: string;
@@ -203,10 +201,8 @@ async function createProcessingContext(
   const openaiModel = config.aiConfig?.openaiModel?.trim() || env.OPENAI_MODEL;
   const anthropicModel = config.aiConfig?.anthropicModel?.trim() || env.ANTHROPIC_MODEL;
   const geminiModule = geminiApiKey ? await import("@/services/geminiExtractor.service") : null;
-  // Groq se sacó de la cadena de producción (2026-06-25): Cerebras alcanza como
-  // principal y Groq se evaluará aparte en el banco de pruebas. La cadena queda
-  // Cerebras → Gemini → OpenAI → Claude. `createAiExtractionChain` sigue
-  // soportando `groq` (reactivar = agregar la línea), y el banco lo usa por separado.
+  // Cadena: Cerebras → Gemini → OpenAI → Claude. Groq se eliminó del proyecto
+  // el 2026-08-25 (estaba fuera de producción desde 2026-06-25).
   const aiChain = await createAiExtractionChain({
     cerebras: { apiKey: cerebrasApiKey, model: cerebrasModel },
     gemini: { apiKey: geminiApiKey, model: geminiModel },
@@ -797,10 +793,11 @@ async function aiExtractStep(ctx: PipelineContext): Promise<StepResult> {
       fileAiUsage = aiResult.usage;
       accumulateTokenUsage(summary.tokenUsage, fileAiUsage);
     } else if (aiFailures > 0 && aiRateLimited === aiFailures) {
-      // Todos los proveedores de IA sin cuota (429): NO degradar a OCR_ONLY
-      // (terminaría en Revisión). Se propaga como RateLimitError para dejar
-      // la boleta en Pendientes y reintentarla en un ciclo posterior.
-      throw new RateLimitError(`IA sin cuota — ${aiFailures} proveedor(es) en 429`);
+      // Todos los proveedores de IA caídos por algo transitorio — cuota agotada
+      // (429) o servicio saturado (503, sumado el 2026-08-24): NO degradar a
+      // OCR_ONLY (terminaría en Revisión). Se propaga como RateLimitError para
+      // dejar la boleta en Pendientes y reintentarla en un ciclo posterior.
+      throw new RateLimitError(`IA no disponible — ${aiFailures} proveedor(es) en 429/503`);
     } else {
       pipelineLog.aiOcrFallback(cid);
       extracted = buildOcrOnlyPayload();

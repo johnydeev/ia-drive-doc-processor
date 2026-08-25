@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { isRateLimitError, RateLimitError, callWithRetry } from "@/lib/aiErrors";
+import { isRateLimitError, isTransientServerError, RateLimitError, callWithRetry } from "@/lib/aiErrors";
 
 describe("isRateLimitError", () => {
   it("detecta el HTTP 429 de Gemini", () => {
@@ -30,7 +30,7 @@ describe("isRateLimitError", () => {
     expect(isRateLimitError("HTTP 429: too many requests")).toBe(true);
   });
 
-  it("detecta el APIError del SDK de OpenAI por status 429 (Cerebras/Groq)", () => {
+  it("detecta el APIError del SDK de OpenAI por status 429 (Cerebras)", () => {
     // El SDK no garantiza '429' en el message; el status numérico es la señal fiable.
     expect(isRateLimitError({ status: 429, message: "Rate limit reached for model" })).toBe(true);
   });
@@ -120,5 +120,46 @@ describe("callWithRetry", () => {
     const fn = vi.fn().mockRejectedValue(new Error("429"));
     await expect(callWithRetry(fn, { retries: 0, sleep: noSleep })).rejects.toBeInstanceOf(RateLimitError);
     expect(fn).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("isTransientServerError", () => {
+  it("detecta el 503 de alta demanda de Gemini", () => {
+    const err = new Error(
+      "[GoogleGenerativeAI Error]: Error fetching from https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent: [503 Service Unavailable] This model is currently experiencing high demand."
+    );
+    expect(isTransientServerError(err)).toBe(true);
+  });
+
+  it("detecta el status 503 numerico del SDK de OpenAI", () => {
+    expect(isTransientServerError({ status: 503 })).toBe(true);
+  });
+
+  it("detecta el UNAVAILABLE de gRPC", () => {
+    expect(isTransientServerError(new Error("UNAVAILABLE: backend closed"))).toBe(true);
+  });
+
+  it("detecta 'overloaded'", () => {
+    expect(isTransientServerError(new Error("The model is overloaded. Try again later."))).toBe(true);
+  });
+
+  it("NO confunde el 404 de modelo dado de baja", () => {
+    const err = new Error(
+      "[GoogleGenerativeAI Error]: [404 Not Found] This model models/gemini-2.0-flash is no longer available."
+    );
+    expect(isTransientServerError(err)).toBe(false);
+  });
+
+  it("NO confunde un 429 de cuota", () => {
+    expect(isTransientServerError(new Error("429 You exceeded your current quota"))).toBe(false);
+  });
+
+  it("NO matchea un 5030 que contenga 503", () => {
+    expect(isTransientServerError(new Error("codigo interno 5030"))).toBe(false);
+  });
+
+  it("tolera null y undefined", () => {
+    expect(isTransientServerError(null)).toBe(false);
+    expect(isTransientServerError(undefined)).toBe(false);
   });
 });

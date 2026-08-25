@@ -29,7 +29,7 @@ describe("OpenAICompatibleExtractorService", () => {
     const content = JSON.stringify({ provider: "ACME S.A.", consortium: "TEST 123", amount: 1000 });
     const { fn, calls } = fakeComplete(content, { prompt_tokens: 100, completion_tokens: 20, total_tokens: 120 });
     const svc = new OpenAICompatibleExtractorService({
-      provider: "groq", apiKey: "x", baseURL: "https://api.groq.com/openai/v1", model: "llama-3.3-70b-versatile", complete: fn,
+      provider: "cerebras", apiKey: "x", baseURL: "https://api.cerebras.ai/v1", model: "gpt-oss-120b", complete: fn,
     });
 
     const data = await svc.extractStructuredData("texto de prueba sin marcadores");
@@ -39,11 +39,11 @@ describe("OpenAICompatibleExtractorService", () => {
     expect(data.amount).toBe(1000);
 
     const usage = svc.getLastUsage();
-    expect(usage).toEqual({ provider: "groq", model: "llama-3.3-70b-versatile", inputTokens: 100, outputTokens: 20, totalTokens: 120 });
+    expect(usage).toEqual({ provider: "cerebras", model: "gpt-oss-120b", inputTokens: 100, outputTokens: 20, totalTokens: 120 });
 
     // Se pidió JSON mode y el modelo correcto.
     expect(calls[0]).toMatchObject({
-      model: "llama-3.3-70b-versatile",
+      model: "gpt-oss-120b",
       temperature: 0,
       response_format: { type: "json_object" },
     });
@@ -62,7 +62,7 @@ describe("OpenAICompatibleExtractorService", () => {
   it("lanza si el texto de entrada está vacío", async () => {
     const { fn } = fakeComplete("{}");
     const svc = new OpenAICompatibleExtractorService({
-      provider: "groq", apiKey: "x", baseURL: "https://api.groq.com/openai/v1", model: "m", complete: fn,
+      provider: "cerebras", apiKey: "x", baseURL: "https://api.cerebras.ai/v1", model: "m", complete: fn,
     });
     await expect(svc.extractStructuredData("   ")).rejects.toThrow(/No text/);
   });

@@ -10,7 +10,7 @@ import { ExtractedDocumentData } from "@/types/extractedDocument.types";
 
 /**
  * Extractor genérico para proveedores con API compatible con la Chat Completions
- * de OpenAI (Cerebras, Groq, y a futuro Mistral/OpenRouter/DeepInfra). Reutiliza
+ * de OpenAI (Cerebras, y a futuro Mistral/OpenRouter/DeepInfra). Reutiliza
  * el SDK `openai` cambiando `baseURL`, y el mismo prompt/parseo/refinamiento que
  * los demás extractores, de modo que la cadena los trata de forma intercambiable.
  *

@@ -4,6 +4,131 @@ Registro de decisiones tomadas ante problemas reales encontrados en producción.
 
 ---
 
+## 2026-08-25 — Groq se elimina del proyecto
+
+### Problema
+
+Groq salió de la cadena de producción el 2026-06-25 (pedido del owner), pero se lo dejó "soportado
+por si acaso": sin `GROQ_API_KEY` no se instanciaba, así que no rompía nada. El costo de esa
+decisión fue disperso — seguía apareciendo en el tipo `AiProvider`, en `AiExtractionChainConfig`,
+en `PROVIDER_ORDER`, en dos env vars, en el `aiConfig` del pipeline, en `.env.example` y en los dos
+scripts de comparación. Cada lectura de la cadena obligaba a preguntarse si Groq estaba activo.
+
+### Decisión
+
+Se elimina de todos lados. El owner no lo quiere en el proyecto.
+
+Se conservan las entradas históricas de este archivo y del `CHANGELOG` (2026-06-24 / 25): documentan
+por qué se incorporó y por qué se sacó de producción, y esa historia sigue siendo cierta.
+
+**Lo que NO se toca:** `OpenAICompatibleExtractorService` queda intacto y sigue siendo genérico para
+cualquier API compatible con Chat Completions — es lo que usa Cerebras. Reactivar Groq alguna vez
+sería agregar un `ProviderSlot` de 8 líneas, no reescribir un extractor.
+
+**Filas históricas de `TokenUsage` con `provider = 'groq'`:** la columna es `String`, no un enum de
+Postgres, así que sacar `"groq"` del tipo `AiProvider` no invalida ningún dato guardado.
+
+### Impacto
+
+`src/types/aiUsage.types.ts`, `src/config/env.ts`, `src/services/aiExtraction.ts`,
+`src/services/aiExtraction.test.ts`, `src/services/openAICompatibleExtractor.service.ts` (+ su test),
+`src/lib/aiErrors.ts` (+ su test), `src/jobs/processPendingDocuments.job.ts`,
+`scripts/llm-testbench.ts`, `scripts/compare-extractors.ts`, `.env.example`.
+
+---
+
+## 2026-08-24 — Gemini pasa a proveedor principal: qué se decidió y qué se descartó
+
+### Problema
+
+El owner iba a contratar una cuenta paga de Gemini y pidió un entorno de pruebas para saber si la
+cuota alcanzaba. Antes de armarlo se midió `TokenUsage` de producción, y la medición dio vuelta el
+alcance: **la cuota nunca fue el problema**.
+
+1.363 corridas en 77 días. Pico de **72 boletas/día** y de **4 requests por minuto** (el worker
+procesa un job a la vez, así que no hay concurrencia que empuje el RPM). 2.827 tokens de input y 260
+de output por boleta. A precio de tier pago, el mes pico entero sale **US$ 0,15** en `flash-lite`;
+diez veces el volumen actual, US$ 1,45.
+
+El problema real era otro: todo el diseño del barrido de modelos existía para esquivar el tope
+diario **por modelo** del free tier (~20 requests), y esa estrategia deja de tener sentido — pero no
+se puede borrar, porque el 503 de alta demanda de Google no desaparece en tier pago.
+
+### Decisiones
+
+**1. El orden de la cadena se hace explícito — pero NO se cambia.** Salía del orden físico de cinco
+bloques `if` en `createAiExtractionChain`, y ahora es un array (`PROVIDER_ORDER`). Mover un proveedor
+pasa a ser editar una línea en vez de reordenar bloques de 8 líneas cada uno.
+
+El plan original movía **Gemini a primero** (resolvía el 77% de las boletas yendo segundo, y Cerebras
+venía devolviendo 402 sin cuota — 5 veces sólo el 2026-08-18). **Revertido el 2026-08-25**: esa
+decisión asumía una cuenta paga que el owner decidió no contratar. Con key free la cuota de Gemini es
+diaria **por modelo** (~20 requests): ponerlo primero la agota en las primeras boletas del día y a
+partir de ahí **toda** boleta paga el barrido fallido completo antes de llegar a Cerebras — más lento
+que hoy, sin ninguna ganancia. La cadena queda **Cerebras → Gemini → OpenAI → Claude**.
+
+El cambio de orden queda diseñado y listo: es mover un bloque del array y dar vuelta un test.
+Condición para aplicarlo: key de Gemini en tier pago.
+
+**2. El barrido de modelos se acorta, no se elimina.** Se podaron `gemini-2.0-flash` y
+`gemini-2.0-flash-lite`, que Google dio de baja y devuelven 404: eran dos intentos garantizados al
+vacío cada vez que los tres primeros daban 503. La poda **no cuesta cuota gratis** — un modelo que
+devuelve 404 nunca fue un balde de cuota — así que se conserva aunque la cadena siga en free tier. Los tres vivos quedan porque **el 503 no desaparece
+en tier pago** — el 2026-08-18 fue justamente el barrido lo que salvó una boleta cuando
+`2.5-flash-lite` dio 503.
+
+**3. Ante un 503 se reintenta el MISMO modelo antes de degradar** (una vez, 2000 ms). Saltar de una
+resuelve la boleta igual, pero la resuelve un modelo distinto del que le tocaba, con otra calidad y
+otro precio. La espera es inyectable, así que el test no espera de verdad. Un solo reintento: dos
+sumarían 4 s por modelo y el peor caso medido ya fue de 187 s.
+
+**4. Un 503 en todos los modelos devuelve la boleta a Pendientes, no a Revisión.** Es un bugfix.
+`throwSweepFailure` sólo lanzaba `RateLimitError` si **todos** los errores eran 429; con todo en 503
+lanzaba `Error` genérico y el pipeline mandaba a Revisión una boleta perfectamente sana por una
+caída de capacidad de Google que dura minutos. Revisión es para lo que necesita ojo humano.
+
+**5. El modelo pegajoso ahora depende del tipo de error, no del tiempo.**
+`GeminiExtractorService.workingModelName` es `static`, se seteó siempre que hubiera éxito y no
+expiraba: si `2.5-flash-lite` daba 503 y resolvía `2.5-flash`, **todas** las boletas siguientes
+arrancaban por `2.5-flash` hasta el próximo reinicio — 3× el input y 6× el output, sin que nada lo
+avisara. En free tier el pegado era deseable (no volver a pegarle a un balde agotado); en tier pago
+es deriva de costo silenciosa. Ahora sólo se fija si el salto anterior fue por **cuota** (429), que
+es la razón por la que el pegado existe.
+
+*Descartado:* que el modelo pegado expire a los N minutos. Mete el reloj en el estado — y con eso un
+test que depende del reloj — para cubrir un caso que 429 y 503 ya cubren entre los dos.
+
+**6. El fallback visual registra sus tokens.** `extractPartiesFromImage` actualizaba el modelo
+pegajoso pero nunca llamaba a `captureUsage`: era el único camino que gastaba tokens sin dejar rastro
+en `TokenUsage`. Con él afuera, la medición de la cuenta paga habría quedado subestimada (el
+2026-08-18, 2 de 8 jobs lo usaron).
+
+### Alternativas descartadas
+
+- **`providerOrder` configurable por cliente**, editable desde el panel. Permitiría reordenar la
+  cadena sin deploy. Con **un solo cliente real** es configuración que hay que validar, versionar y
+  mantener para un caso que hoy no existe.
+- **Flag `geminiTier: free | paid`** que apagara el barrido de baldes. No cambiaría ninguna decisión
+  de código que el array de 3 modelos no cubra ya, y es una segunda dimensión de config que hay que
+  acordarse de mover cuando cambia el plan.
+- **Reusar `callWithRetry`** para el reintento del 503. Existe en `lib/aiErrors.ts`, tiene 6 tests y
+  **ningún consumidor en producción**, así que era tentador. Pero su contrato termina lanzando
+  `RateLimitError`, que en el pipeline significa "devolver la boleta a Pendientes", y el 503 necesita
+  **degradar de modelo**, no rendirse. Reusarlo obligaba a cambiarle la semántica y romper sus tests.
+
+### Impacto
+
+`src/lib/aiErrors.ts` (+`isTransientServerError`), `src/services/aiExtraction.ts` (`PROVIDER_ORDER`),
+`src/services/geminiExtractor.service.ts` (poda, retry, sticky, usage, seams de test),
+`src/jobs/processPendingDocuments.job.ts` (mensaje del log). Sin migración, sin UI, sin config nueva.
+
+**`GeminiExtractorService` estrena tests**: no tenía ninguno porque construía el SDK en el
+constructor y creaba los modelos con un método privado. Se abrió el seam mínimo — `getModel` de
+`private` a `protected`, `sleep` inyectable, y `resetWorkingModel()`/`workingModel` estáticos para
+el estado compartido entre casos. **Tests 771 → 799.**
+
+---
+
 ## 2026-08-20 — Bucle infinito de carga: `setMonth` con un objeto nuevo en cada vuelta
 
 ### Problema

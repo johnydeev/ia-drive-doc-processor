@@ -2,6 +2,50 @@
 
 ## [Unreleased]
 
+### Removed
+- **Groq eliminado del proyecto (2026-08-25)**. Estaba fuera de la cadena de producción desde
+  2026-06-25 (sin API key no se instanciaba), pero seguía ocupando lugar en el tipo `AiProvider`,
+  en `AiExtractionChainConfig`, en `PROVIDER_ORDER`, en las env `GROQ_API_KEY`/`GROQ_MODEL`, en el
+  `aiConfig` del pipeline y en los dos scripts de comparación. A pedido del owner se saca de todos
+  lados. Reactivarlo, si alguna vez hiciera falta, es volver a agregar un `ProviderSlot`:
+  `OpenAICompatibleExtractorService` sigue siendo genérico para cualquier API compatible con
+  Chat Completions.
+
+### Changed
+- **El orden de la cadena de IA pasa a ser explícito (2026-08-24)**. Dejó de salir del orden físico
+  de cinco bloques `if` y ahora se declara en un array (`PROVIDER_ORDER`). **El orden en sí no
+  cambió**: sigue **Cerebras → Gemini → OpenAI → Claude**. Mover Gemini a primero está
+  diseñado (pieza 1 del spec) pero requiere key de tier pago — con free tier, la cuota diaria por
+  modelo se quema en las primeras boletas del día. Queda pendiente.
+- **El barrido de modelos de Gemini pasa de 5 a 3 (2026-08-24)**. `gemini-2.0-flash` y
+  `gemini-2.0-flash-lite` los dio de baja Google y devolvían 404: eran dos intentos garantizados al
+  vacío cada vez que los tres primeros daban 503.
+- **Un 503 reintenta el mismo modelo antes de degradar (2026-08-24)**. Una vez, tras 2000 ms. Saltar
+  de una resuelve la boleta igual, pero la resuelve un modelo distinto del que le tocaba, con otra
+  calidad y otro precio.
+
+### Fixed
+- **Un 503 de Gemini ya no manda boletas sanas a Revisión (2026-08-24)**. El barrido sólo devolvía
+  la boleta a Pendientes si **todos** los modelos habían fallado por cuota (429); con todo en 503
+  lanzaba un error genérico y una boleta correcta terminaba en revisión manual por una caída de
+  capacidad de Google que dura minutos. Ahora los dos errores transitorios la devuelven a Pendientes.
+- **El worker ya no queda clavado en el modelo caro (2026-08-24)**. `workingModelName` es estático,
+  se seteó siempre que hubiera éxito y no expiraba: si `2.5-flash-lite` daba 503 y resolvía
+  `2.5-flash`, todas las boletas siguientes arrancaban por `2.5-flash` hasta el próximo reinicio —
+  3× el precio del input y 6× el del output, en silencio. Ahora el pegado sólo aplica cuando el
+  salto fue por cuota (429).
+- **El fallback visual registra sus tokens (2026-08-24)**. `extractPartiesFromImage` era el único
+  camino que gastaba tokens sin dejar rastro en `TokenUsage`, así que el consumo real de la cuenta
+  quedaba subestimado.
+
+### Added
+- **`isTransientServerError` (2026-08-24)**: clasifica 503 / `UNAVAILABLE` / "overloaded" /
+  "high demand", separado de la cuota agotada (429). No confunde el 404 de un modelo dado de baja.
+- **Tests de `GeminiExtractorService` (2026-08-24)**: no tenía ninguno. 19 tests sobre el barrido de
+  modelos, el reintento del 503, el desenlace del barrido completo, el modelo pegajoso y los tokens
+  del fallback visual. Suite **771 → 799**.
+
+
 ### Fixed
 - **La vista de obligaciones ya no queda cargando en bucle (2026-08-20)**. Al desplegarla quedaba
   pestañeando con "Sincronizando y cargando…" sin mostrar nada: `setMonth` devolvía un objeto nuevo en

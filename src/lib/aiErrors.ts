@@ -24,8 +24,8 @@ export function isRateLimitError(error: unknown): boolean {
   if (error instanceof RateLimitError) return true;
   if (error === null || error === undefined) return false;
 
-  // El SDK de OpenAI (OpenAI/Cerebras/Groq) lanza APIError con `status` numérico
-  // y/o `code`. Cerebras/Groq pueden no incluir "429" en el mensaje, así que el
+  // El SDK de OpenAI (OpenAI/Cerebras) lanza APIError con `status` numérico
+  // y/o `code`. Cerebras puede no incluir "429" en el mensaje, así que el
   // status es la señal fiable.
   if (typeof error === "object") {
     const e = error as { status?: unknown; code?: unknown };
@@ -45,6 +45,37 @@ export function isRateLimitError(error: unknown): boolean {
     // MENSAJE (string) al pipeline, así que el matcher debe reconocerlos.
     text.includes("sin cuota") ||
     text.includes("cuota agotada")
+  );
+}
+
+/**
+ * Devuelve true si el error es una caída transitoria DEL LADO DEL PROVEEDOR
+ * (HTTP 503 / servicio saturado), distinta de la cuota agotada (429) que ya
+ * clasifica `isRateLimitError`.
+ *
+ * La distinción importa: ante 429 no tiene sentido reintentar el mismo modelo
+ * (la cuota no vuelve en 2 segundos), ante 503 sí (es capacidad momentánea).
+ *
+ * Se usa `\b503\b` por el mismo motivo que el 429: no confundir un "5030".
+ * El 404 de un modelo dado de baja dice "no longer available", que NO contiene
+ * la subcadena "unavailable" — por eso no da falso positivo.
+ */
+export function isTransientServerError(error: unknown): boolean {
+  if (error === null || error === undefined) return false;
+
+  if (typeof error === "object") {
+    const e = error as { status?: unknown };
+    if (e.status === 503) return true;
+  }
+
+  const text = (error instanceof Error ? error.message : String(error)).toLowerCase();
+
+  return (
+    /\b503\b/.test(text) ||
+    text.includes("service unavailable") ||
+    text.includes("unavailable") ||
+    text.includes("overloaded") ||
+    text.includes("high demand")
   );
 }
 
