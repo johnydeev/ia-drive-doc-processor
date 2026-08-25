@@ -303,6 +303,7 @@ El sistema detecta automáticamente el tipo de documento con `identifyLSPProvide
 Analiza los primeros 4000 caracteres y retorna:
 - `"EDESUR"` / `"EDENOR"` / `"AYSA"` / `"METROGAS"` / `"NATURGY"` / `"CAMUZZI"` / `"LITORAL_GAS"` / `"ABSA"` / `"PERSONAL"` → prompt específico
 - `"SUTERH"` / `"FATERYH"` / `"SERACARH"` / `"ARCA"` → prompt específico del grupo "CUIT del papel = consorcio" (proveedor por NOMBRE, sin CUIT propio; ver helper `usesConsortiumCuit`)
+- `"ABL"` → Impuesto Inmobiliario / ABL de **AGIP** (CABA). Se detecta ANTES del gate `isUtilityBill` (el papel no dice "servicio" ni trae distribuidora), por `Ley 23.514` o por el par `ALUMBRADO` + `BARRIDO`. **No** entra en `usesConsortiumCuit`: sí usa el fast-path de `LspService`
 - `"GENERIC_LSP"` → prompt genérico LSP (fallback)
 - `null` → no es LSP → usa `buildInvoicePrompt` (facturas normales)
 ### Prompts por empresa implementados
@@ -323,6 +324,7 @@ Analiza los primeros 4000 caracteres y retorna:
 | Litoral Gas | `buildGasPrompt()` |
 | Personal | `buildPersonalPrompt()` |
 | Sindicales (SUTERH/FATERYH/SERACARH) | `buildSindicalPrompt()` |
+| ABL / Inmobiliario (AGIP) | `buildAblPrompt()` |
 | ARCA F931 (SUSS) | `buildArcaPrompt()` |
 | Genérico LSP | `buildGenericUtilityBillPrompt()` |
 | Facturas normales | `buildInvoicePrompt()` |

@@ -112,6 +112,73 @@ describe("identifyLSPProvider — boletas sindicales (SUTERH/FATERYH/SERACARH)",
   });
 });
 
+/**
+ * Texto real de una boleta de ABL (AGIP), tal como lo devuelve pdf-parse.
+ * Reproducido literal: 737 caracteres, sin CUIT, sin nombre ni dirección del
+ * inmueble. La PARTIDA es el único identificador.
+ */
+const ABL_TEXT = [
+  "INMOBILIARIO Y ABL",
+  "PARTIDA",
+  "CÓDIGO PARA PAGO ELECTRÓNICO",
+  "3755690",
+  "007-003755690-1",
+  "CUOTA 06 - JUNIO - AÑO 2026",
+  "05/06/2026 $ 1,101,687.79",
+  "30/06/2026 $ 1,249,084.96",
+  "Impuesto Inmobiliario / Alumbrado, Barrido, Limpieza,",
+  "Mantenimiento y Conservación de Sumideros.",
+  "Ley 23.514/1987",
+  "2° VTO.",
+  "1° VTO.",
+].join("\n");
+
+describe("identifyLSPProvider — ABL / Impuesto Inmobiliario (AGIP)", () => {
+  it("detecta ABL en una boleta real", () => {
+    expect(identifyLSPProvider(ABL_TEXT)).toBe("ABL");
+  });
+
+  it("detecta ABL por la Ley 23.514 aunque falte el par Alumbrado/Barrido", () => {
+    expect(identifyLSPProvider("GOBIERNO DE LA CIUDAD\nLey 23.514/1987\nPARTIDA 123")).toBe("ABL");
+  });
+
+  it("detecta ABL por el par Alumbrado + Barrido", () => {
+    expect(identifyLSPProvider("Alumbrado, Barrido y Limpieza\nPARTIDA 999")).toBe("ABL");
+  });
+
+  it("NO usa el CUIT del papel: el ABL queda fuera del grupo consorcio-CUIT", () => {
+    // El ABL sí usa LspService (la partida hace de número de cliente), a
+    // diferencia de los sindicales, que se excluyen del fast-path.
+    expect(usesConsortiumCuit("ABL")).toBe(false);
+  });
+
+  it("regresión: una factura común no se confunde con ABL", () => {
+    expect(identifyLSPProvider("FACTURA B\nSERVICIOS DE LIMPIEZA SRL\nCUIT 30-11111111-2")).toBeNull();
+  });
+});
+
+describe("buildExtractionPrompt — ABL", () => {
+  const prompt = buildExtractionPrompt(ABL_TEXT);
+
+  it("instruye tomar la PARTIDA como clientNumber", () => {
+    expect(prompt).toContain("PARTIDA");
+    expect(prompt).toContain("clientNumber");
+  });
+
+  it("instruye el 1° vencimiento y descarta el 2°", () => {
+    expect(prompt).toContain("1° VENCIMIENTO");
+    expect(prompt).toContain("recargo");
+  });
+
+  it("prohibe asignar un providerTaxId", () => {
+    expect(prompt).toContain("providerTaxId: null SIEMPRE");
+  });
+
+  it("construye el boletaNumber como partida-MM/YYYY", () => {
+    expect(prompt).toContain("3755690-06/2026");
+  });
+});
+
 describe("identifyLSPProvider — ARCA (F931 / SUSS)", () => {
   it("detecta ARCA por formulario 931 + S.U.S.S.", () => {
     expect(identifyLSPProvider(ARCA_TEXT)).toBe("ARCA");

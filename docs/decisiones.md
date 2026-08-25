@@ -4,6 +4,90 @@ Registro de decisiones tomadas ante problemas reales encontrados en producción.
 
 ---
 
+## 2026-08-25 — ABL: cómo se atribuye una boleta que no dice de quién es
+
+### Problema
+
+El owner necesitaba registrar el **ABL** (Alumbrado, Barrido y Limpieza + Impuesto Inmobiliario,
+AGIP — Ciudad de Buenos Aires) y no sabía con qué CUIT cargarlo, porque el impuesto no tiene uno.
+
+Se leyó un PDF real (`pdftoppm` no está instalado en el host, así que se usó
+`scripts/dump-pdf-text.ts`). Son **737 caracteres**, texto directo, y confirman algo peor que la
+falta de CUIT:
+
+```
+INMOBILIARIO Y ABL
+PARTIDA          CÓDIGO PARA PAGO ELECTRÓNICO
+3755690          007-003755690-1
+CUOTA 06 - JUNIO - AÑO 2026
+1° VTO.  05/06/2026  $ 1,101,687.79
+2° VTO.  30/06/2026  $ 1,249,084.96
+Ley 23.514/1987
+```
+
+- **Sin CUIT**, ni de AGIP ni del consorcio contribuyente.
+- **Sin nombre ni dirección del inmueble.** No hay con qué matchear el edificio por nombre.
+- **Sin número de comprobante.**
+- **Dos vencimientos** con importes distintos.
+
+La PARTIDA es el único identificador. No es "parecido" a un número de cliente: es la única vía.
+
+### Decisiones
+
+**1. ABL se modela como `LspService`, no como proveedor por nombre.** La partida ocupa el lugar del
+`clientNumber`. Es el mismo mecanismo que Edesur, y por eso ABL **NO** entra en `usesConsortiumCuit`
+— ese helper excluye del fast-path a los sindicales/ARCA, y acá el fast-path es justamente lo que
+resuelve el edificio.
+
+**2. Detección antes del gate `isUtilityBill`.** El texto del ABL no contiene ninguno de sus
+marcadores ("servicio", "empresa distribuidora", nombres de distribuidoras), así que hoy caía en el
+prompt de facturas normales y terminaba en Sin Asignar garantizado. Se detecta como los sindicales,
+antes del gate, por `Ley 23.514` (la ley del ABL, impresa en toda boleta) o el par
+`ALUMBRADO` + `BARRIDO`.
+
+**3. Se registra el 1° vencimiento** (decisión del owner). El importe del 2° incluye recargo.
+
+**4. `boletaNumber` = `<partida>-<MM/YYYY>`.** El código de pago electrónico (`007-003755690-1`) es
+estable por partida y **no cambia entre cuotas**: usarlo dejaría la deduplicación apoyada sólo en
+vencimiento + monto. Partida + cuota es único por boleta y sale de dos campos impresos.
+
+**5. El fast-path LSP resuelve el proveedor por nombre canónico si no hay CUIT.** El sync de
+directorio crea los `LspService` con `providerName` pero **sin** `providerId`, y el auto-link
+existente sólo dispara cuando el CUIT resolvió un proveedor — nunca para ABL. Sin este tercer
+nivel la boleta se guardaba sin `Provider`, y las obligaciones de gasto fijo, que comparan
+`providerId`, nunca se marcaban como recibidas: el gasto fijo del edificio quedaba PENDING para
+siempre aunque la boleta hubiera llegado.
+
+No es el match por nombre que se deshabilitó el 2026-07-02 (caso ASCENSORES POTENZA): aquel
+comparaba contra el nombre que leyó la IA del papel. Este compara contra el nombre fijo de
+`LSP_ROUTER_TO_CANONICAL`, y sólo después de que la partida ya resolvió el edificio.
+
+### Cómo se carga en el ALTA
+
+| Hoja | Columna | Valor |
+|---|---|---|
+| `_Proveedores` | A · RAZÓN SOCIAL | `AGIP` — debe coincidir con `LSP_ROUTER_TO_CANONICAL["ABL"]` |
+| `_Proveedores` | B · CUIT | *(vacío)* — `cuit` es nullable y los NULL no chocan entre sí en Postgres |
+| `_Proveedores` | E · TIPO | `SERVICIO` |
+| `_LspServices` | B · PROVEEDOR | `AGIP` |
+| `_LspServices` | C · NRO CLIENTE | la partida **sin guiones ni dígito verificador** (`3755690`) |
+
+### Alternativas descartadas
+
+- **Cargar AGIP con un CUIT placeholder.** `@@unique([clientId, cuit])` lo aceptaría, pero ocuparía
+  un número real y bloquearía a su dueño legítimo. Además no serviría: el papel no imprime CUIT,
+  así que nunca habría con qué matchear.
+- **Meter ABL en `usesConsortiumCuit`.** Habilitaría el match por nombre, pero excluiría la boleta
+  del fast-path de `LspService` — y sin partida no hay forma de saber de qué edificio es.
+
+### Impacto
+
+`src/lib/extraction.ts` (tipo `LSPProvider`, `LSP_FALLBACK_NAMES`, router, `buildAblPrompt`),
+`src/lib/extraction.test.ts` (8 tests nuevos), `src/jobs/processPendingDocuments.job.ts`
+(`LSP_ROUTER_TO_CANONICAL` + resolución de proveedor por nombre canónico). Sin migración.
+
+---
+
 ## 2026-08-25 — Groq se elimina del proyecto
 
 ### Problema

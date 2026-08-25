@@ -2,6 +2,23 @@
 
 ## [Unreleased]
 
+### Added
+- **Soporte de ABL / Impuesto Inmobiliario de AGIP (2026-08-25)**. Es la boleta más pobre en datos
+  del pipeline: no trae CUIT (ni del emisor ni del contribuyente), ni nombre del consorcio, ni
+  dirección del inmueble, ni número de comprobante. El **único** identificador es la PARTIDA, que
+  va a `clientNumber` y se resuelve contra `LspService`, igual que el número de cliente de Edesur.
+  Se detecta antes del gate `isUtilityBill` (el texto no tiene ninguno de sus marcadores) por
+  `Ley 23.514` o el par `ALUMBRADO` + `BARRIDO`. Prompt propio `buildAblPrompt`: se registra el
+  **1° vencimiento** (importe sin recargo) y el `boletaNumber` se construye como
+  `<partida>-<MM/YYYY>` — el código de pago electrónico no cambia entre cuotas y no sirve para
+  deduplicar. Decisiones del owner.
+- **El fast-path LSP resuelve el proveedor por nombre canónico cuando no hay CUIT (2026-08-25)**.
+  El sync de directorio crea los `LspService` con `providerName` pero sin `providerId`, así que sin
+  esto una boleta de ABL se guardaba sin `Provider` y las obligaciones de gasto fijo — que comparan
+  `providerId` — nunca se marcaban como recibidas. No es el "match por nombre" deshabilitado el
+  2026-07-02: no compara contra el nombre que leyó la IA sino contra el nombre fijo de
+  `LSP_ROUTER_TO_CANONICAL`, y el edificio ya quedó resuelto por la partida.
+
 ### Removed
 - **Groq eliminado del proyecto (2026-08-25)**. Estaba fuera de la cadena de producción desde
   2026-06-25 (sin API key no se instanciaba), pero seguía ocupando lugar en el tipo `AiProvider`,

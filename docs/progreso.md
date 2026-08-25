@@ -1,6 +1,6 @@
 # Progreso del proyecto — drive-doc-processor
 
-Actualizado al 25/08/2026 (sesión 60 — se revirtió el cambio de orden de la cadena: queda pendiente de key paga. El resto de la entrega de Gemini sigue en pie).
+Actualizado al 25/08/2026 (sesión 60 — soporte de ABL/AGIP; Groq eliminado del proyecto; se revirtió el cambio de orden de la cadena: queda pendiente de key paga).
 
 ## ✅ Smokes pendientes en producción (al 2026-08-20)
 
@@ -59,6 +59,40 @@ selectiva sólo lista lo que está ahí.
 ### Pendiente que NO es smoke
 
 - [ ] Definir cuál es el CUIT correcto de **Metrogas**: la base tiene `30-65786367-6`.
+
+## 🏛️ ABL / Impuesto Inmobiliario de AGIP (2026-08-25)
+
+**Estado: implementado y verificado (typecheck + lint 0 errores + 807 tests + build + build:jobs OK).
+Sin migración. Falta cargar el directorio.**
+
+El ABL no tenía soporte: su texto no pasa el gate `isUtilityBill`, así que caía en el prompt de
+facturas normales y terminaba en Sin Asignar siempre.
+
+Lo particular del papel (verificado sobre un PDF real, 737 caracteres): **no trae CUIT, ni nombre,
+ni dirección del inmueble, ni número de comprobante**. La PARTIDA es el único identificador — se
+resuelve contra `LspService` igual que el número de cliente de Edesur.
+
+### Hecho
+- `"ABL"` en `LSPProvider` + detección en el router antes del gate (`Ley 23.514` o `ALUMBRADO` +
+  `BARRIDO`).
+- `buildAblPrompt`: PARTIDA → `clientNumber`, `providerTaxId` siempre null, `consortium` null,
+  **1° vencimiento**, `boletaNumber` = `<partida>-<MM/YYYY>`.
+- El fast-path LSP resuelve el proveedor por nombre canónico cuando no hay CUIT — sin esto la
+  boleta se guardaba sin `Provider` y las obligaciones de gasto fijo nunca se marcaban recibidas.
+- 8 tests nuevos sobre el texto real de la boleta. Suite **799 → 807**.
+
+### Pendiente — lo tiene que hacer el owner
+1. En `_Proveedores`: `AGIP` en RAZÓN SOCIAL, **CUIT vacío**, TIPO `SERVICIO`.
+2. En `_LspServices`: una fila por edificio — PROVEEDOR `AGIP`, NRO CLIENTE = la partida **sin
+   guiones ni dígito verificador** (`3755690`, no `007-003755690-1`).
+3. Sincronizar directorio y reencolar las boletas de ABL que estén en Sin Asignar.
+
+> Sin el paso 2 las boletas siguen rebotando: la partida es lo único que identifica al edificio y no
+> hay fallback por nombre.
+
+Detalle y alternativas descartadas: `docs/decisiones.md` (2026-08-25).
+
+---
 
 ## 🥇 Gemini: modelos, 503 y medición (2026-08-24, revisado 2026-08-25)
 

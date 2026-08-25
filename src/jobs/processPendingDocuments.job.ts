@@ -137,6 +137,9 @@ const LSP_ROUTER_TO_CANONICAL: Record<string, string> = {
   "SUTERH":      "SUTERH",
   "FATERYH":     "FATERYH",
   "SERACARH":    "SERACARH",
+  // ABL: sí usa LspService (la PARTIDA hace de número de cliente), pero el papel
+  // no trae CUIT, así que el proveedor se resuelve por este nombre canónico.
+  "ABL":         "AGIP",
 };
 
 function buildDriveFileUrl(fileId: string, webViewLink?: string | null): string {
@@ -332,10 +335,36 @@ async function resolveAssignment(
             .catch(() => { /* non-fatal */ });
         }
 
-        // Resolver proveedor: preferir CUIT lookup, luego FK del LspService
-        const resolvedProvider = lspProviderId
+        // Resolver proveedor: CUIT lookup → FK del LspService → nombre canónico.
+        //
+        // El tercer nivel existe por el ABL: su papel no trae CUIT, y el sync de
+        // directorio crea los `LspService` con `providerName` pero sin `providerId`,
+        // así que sin este lookup la boleta se guardaría sin `Provider` — y las
+        // obligaciones de gasto fijo, que comparan `providerId`, nunca se marcarían
+        // como recibidas.
+        //
+        // NO es el "match por nombre" que se deshabilitó el 2026-07-02: no se compara
+        // contra el nombre que leyó la IA, sino contra el nombre canónico fijo de
+        // `LSP_ROUTER_TO_CANONICAL`, y el edificio ya quedó resuelto por la partida.
+        let resolvedProvider = lspProviderId
           ? { id: lspProviderId, canonicalName: lspProviderCanonical, cuit: lspProviderTaxId, paymentAlias: lspProviderAlias }
           : lspService.providerRef;
+
+        if (!resolvedProvider && lspProviderCanonicalName) {
+          const byName = (await providerRepository.findAllForMatching(clientId))
+            .find((prov) => prov.canonicalName === lspProviderCanonicalName);
+          if (byName) {
+            resolvedProvider = {
+              id: byName.id,
+              canonicalName: byName.canonicalName,
+              cuit: byName.cuit,
+              paymentAlias: byName.paymentAlias ?? null,
+            };
+            await lspServiceRepository
+              .setProviderId(lspService.id, byName.id)
+              .catch(() => { /* non-fatal */ });
+          }
+        }
 
         const activePeriod = await consortiumRepository.findActivePeriod(lspService.consortiumId);
 

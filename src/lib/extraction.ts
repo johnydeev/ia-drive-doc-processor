@@ -95,6 +95,7 @@ export type LSPProvider =
   | "FATERYH"
   | "SERACARH"
   | "ARCA"
+  | "ABL"
   | "GENERIC_LSP";
 
 /** Nombres de fallback para proveedores LSP cuando no se encuentran en la DB */
@@ -111,6 +112,7 @@ export const LSP_FALLBACK_NAMES: Partial<Record<LSPProvider, string>> = {
   SUTERH: "SUTERH",
   FATERYH: "FATERYH",
   SERACARH: "SERACARH",
+  ABL: "AGIP",
 };
 
 /**
@@ -167,6 +169,24 @@ export function identifyLSPProvider(text: string): LSPProvider | null {
   // "Organismo Recaudador" del VEP. Robusto al rebrand AFIP→ARCA.
   if (/\b931\b/.test(upper) && (upper.includes("S.U.S.S") || upper.includes("ORGANISMO RECAUDADOR"))) {
     return "ARCA";
+  }
+
+  // ── ABL / Impuesto Inmobiliario (AGIP — Ciudad de Buenos Aires) ──────────
+  // No pasa el gate `isUtilityBill` (no dice "servicio", ni trae distribuidora)
+  // pero necesita prompt propio, así que se detecta antes, como los sindicales.
+  //
+  // El papel NO trae CUIT — ni de AGIP ni del consorcio — ni nombre ni dirección
+  // del inmueble. El ÚNICO identificador es la PARTIDA, que se resuelve contra
+  // `LspService` igual que el número de cliente de un servicio.
+  //
+  // "Ley 23.514" es el marcador más estable (es la ley del ABL y va impresa en
+  // toda boleta); el par ALUMBRADO + BARRIDO cubre variantes de formato.
+  if (
+    upper.includes("LEY 23.514") ||
+    upper.includes("LEY 23514") ||
+    (upper.includes("ALUMBRADO") && upper.includes("BARRIDO"))
+  ) {
+    return "ABL";
   }
 
   // Primero verificar si es una LSP
@@ -329,6 +349,8 @@ export function buildExtractionPrompt(text: string): string {
     case "FATERYH":
     case "SERACARH":
       return buildSindicalPrompt(relevantText, lspProvider);
+    case "ABL":
+      return buildAblPrompt(relevantText);
     case "ARCA":
       // La DJ del F931 es larga y el "Importe total a pagar" del VEP cae más allá
       // de las 80 líneas de `relevantText` → pasar el texto completo (2 páginas,
@@ -337,6 +359,71 @@ export function buildExtractionPrompt(text: string): string {
     default:
       return buildGenericUtilityBillPrompt(relevantText);
   }
+}
+
+// ═════════════════════════════════════════════════════════════════════════
+// ABL / Impuesto Inmobiliario (AGIP — Ciudad de Buenos Aires)
+// ═════════════════════════════════════════════════════════════════════════
+
+/**
+ * Prompt del ABL. Es la boleta más pobre en datos de todo el pipeline: no trae
+ * CUIT (ni del emisor ni del contribuyente), ni nombre del consorcio, ni
+ * dirección del inmueble, ni número de comprobante.
+ *
+ * El único identificador es la **PARTIDA**, que va a `clientNumber` y se resuelve
+ * contra `LspService` — igual que el número de cliente de Edesur. Si la partida
+ * no está cargada, la boleta va a Sin Asignar sin fallback posible: no hay
+ * nombre ni dirección con qué matchear el edificio.
+ *
+ * Decisiones del owner (2026-08-25):
+ * - Se registra el **1° vencimiento** (importe sin recargo).
+ * - `boletaNumber` se construye como `<partida>-<MM/YYYY>`: el código de pago
+ *   electrónico no cambia entre cuotas, así que no sirve para deduplicar.
+ */
+function buildAblPrompt(relevantText: string): string {
+  return [
+    "Extrae datos de una boleta de ABL / Impuesto Inmobiliario de AGIP (Ciudad de Buenos Aires).",
+    JSON_RESPONSE_INSTRUCTION,
+
+    "=== REGLAS ESPECÍFICAS ABL ===",
+
+    "- provider: siempre 'AGIP'. No usar ninguna otra razón social.",
+
+    "- providerTaxId: null SIEMPRE. Esta boleta no imprime el CUIT del emisor.",
+    "  Si aparece algún CUIT en el texto, NO asignarlo al proveedor.",
+
+    "- clientNumber: el número que figura bajo el rótulo 'PARTIDA'. Es el campo",
+    "  MÁS IMPORTANTE de esta boleta: es lo único que identifica al edificio.",
+    "  Copiar SOLO los dígitos de la partida, sin guiones y sin dígito verificador.",
+    "  Ej: si dice 'PARTIDA 3755690' y más abajo '007-003755690-1', devolver '3755690'.",
+    "  El valor largo con guiones es el CÓDIGO PARA PAGO ELECTRÓNICO, no la partida.",
+
+    "- consortium: null. Esta boleta NO trae nombre ni dirección del inmueble.",
+    "  No inventarlo ni deducirlo del número de partida.",
+
+    "- dueDate: la fecha del 1° VENCIMIENTO, en formato YYYY-MM-DD.",
+    "  La boleta trae DOS vencimientos con montos distintos; siempre el PRIMERO",
+    "  (el más temprano, con el importe menor). Ignorar el 2° vencimiento.",
+
+    "- amount: el importe que corresponde al 1° VENCIMIENTO (el menor de los dos).",
+    "  El importe del 2° vencimiento incluye recargo y NO se registra.",
+
+    "- boletaNumber: construir como '<partida>-<MM/YYYY>' usando la partida y el",
+    "  período de la cuota. Ej: 'CUOTA 06 - JUNIO - AÑO 2026' con partida 3755690",
+    "  → '3755690-06/2026'. NO usar el código de pago electrónico: es el mismo",
+    "  en todas las cuotas del año y no sirve para distinguir una boleta de otra.",
+
+    "- detail: 'Impuesto Inmobiliario y ABL' más el período de la cuota.",
+
+    "- observation: el período de la cuota en formato MM/YYYY. Ej: '06/2026'.",
+
+    "- paymentMethod: null salvo que el texto diga explícitamente que se debita.",
+
+    "- allTaxIds: array vacío. Esta boleta no trae CUITs.",
+
+    "Texto de la boleta de ABL:",
+    relevantText,
+  ].join("\n\n");
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
