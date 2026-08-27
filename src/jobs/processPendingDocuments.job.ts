@@ -408,10 +408,49 @@ async function resolveAssignment(
 
   const allConsortiums = await consortiumRepository.findAllForMatching(clientId);
 
-  // Matching en 4 niveles (CUIT → exacto → fuzzy → alias), ver lib/assignmentMatching.
-  const consortiumMatch = matchConsortium(allConsortiums, rawConsortium, allTaxIds);
+  // **Facturas comunes: matching de consorcio SOLO por CUIT** (2026-08-26).
+  // Para LSP (servicios, sindicales, GENERIC_LSP) se conservan los niveles por
+  // nombre: ahí la dirección impresa es la única pista y `matchNames` existe para
+  // reconciliar variantes. Ver lib/assignmentMatching.
+  const isPlainInvoice = !lspProvider;
+  const consortiumMatch = matchConsortium(allConsortiums, rawConsortium, allTaxIds, isPlainInvoice);
 
   if (!consortiumMatch) {
+    if (isPlainInvoice) {
+      // ¿Había algún CUIT en el papel que pudiera ser el del consorcio?
+      //
+      // Se descartan dos cosas: el CUIT que la IA marcó como del emisor, y
+      // cualquier CUIT que esté dado de alta como **proveedor**. Lo segundo es lo
+      // que resuelve el caso de la boleta con UN SOLO CUIT: si ese único CUIT es
+      // de un proveedor conocido, el que falta es el del consorcio — y decirlo al
+      // revés ("CUIT de consorcio no registrado") mandaría a dar de alta un
+      // edificio con el CUIT del proveedor.
+      const emitterCuit = cuitDigits(extracted.providerTaxId);
+      const knownProviderCuits = new Set(
+        (await providerRepository.findAllForMatching(clientId))
+          .map((prov) => cuitDigits(prov.cuit))
+          .filter((c) => c.length >= 10)
+      );
+      const consortiumCuitCandidates = allTaxIds.filter(
+        (c) => c !== emitterCuit && !knownProviderCuits.has(c)
+      );
+
+      if (consortiumCuitCandidates.length === 0) {
+        // El papel no trae el CUIT del receptor (el proveedor no lo cargó).
+        return {
+          ...base,
+          unassignedReason: "No hay CUIT de consorcio en la boleta",
+          reasonCategory: "consortium_cuit_missing",
+        };
+      }
+      // Hay CUIT de consorcio impreso, pero no está dado de alta.
+      return {
+        ...base,
+        unassignedReason: `CUIT de consorcio no registrado en DB: ${consortiumCuitCandidates.join(", ")}`,
+        reasonCategory: "consortium_cuit_not_registered",
+      };
+    }
+
     if (rawConsortium) {
       const canonicalName = normalizeConsortiumName(rawConsortium);
       pipelineLog.consortiumNotFound(
@@ -486,6 +525,27 @@ async function resolveAssignment(
     for (const c of allTaxIds) if (c.length === 11 && c !== consortiumCuitNorm) providerCuitCandidates.add(c);
     if (normOcrCuit.length === 11 && normOcrCuit !== consortiumCuitNorm) providerCuitCandidates.add(normOcrCuit);
     const hasProviderCuit = providerCuitCandidates.size > 0;
+
+    // Facturas comunes: categorías centradas en el CUIT (2026-08-26). El consorcio
+    // ya matcheó por CUIT si llegó hasta acá, así que el único dato faltante es el
+    // del emisor — y lo que importa es si el papel no lo trae o si no está de alta.
+    if (isPlainInvoice) {
+      if (!hasProviderCuit) {
+        return {
+          ...base,
+          unassigned: true,
+          unassignedReason: `No hay CUIT de proveedor en la boleta. OCR provider="${rawName}"`,
+          reasonCategory: "provider_cuit_missing",
+        };
+      }
+      return {
+        ...base,
+        unassigned: true,
+        unassignedReason: `CUIT de proveedor no registrado en DB: ${[...providerCuitCandidates].join(", ")}`,
+        reasonCategory: "provider_cuit_not_registered",
+      };
+    }
+
     return {
       ...base,
       unassigned: true,
@@ -1042,7 +1102,13 @@ async function assignmentStep(ctx: PipelineContext): Promise<StepResult> {
   // el CUIT que devuelve Gemini debe matchear EXACTO contra la DB, sino Sin Asignar.
   let cuitMissing =
     assignment.reasonCategory === "provider_not_found" ||
-    assignment.reasonCategory === "consortium_not_found";
+    assignment.reasonCategory === "consortium_not_found" ||
+    // Categorías nuevas de facturas comunes: "el papel no trae el CUIT" es
+    // exactamente el caso que el código de barras y la visión pueden rescatar.
+    // Las `*_not_registered` NO entran: ahí el CUIT se leyó bien y lo que falta es
+    // el alta en el directorio, que ningún reintento va a resolver.
+    assignment.reasonCategory === "provider_cuit_missing" ||
+    assignment.reasonCategory === "consortium_cuit_missing";
 
   // ── Fallback determinístico (0 tokens): CUIT del emisor en el código de barras
   // AFIP (RG 1702). Va ANTES del visual porque no cuesta nada y no puede
@@ -1178,6 +1244,13 @@ const UNASSIGNED_TAG_BY_CATEGORY: Record<string, string> = {
   consortium_not_found: "SIN CONSORCIO",
   consortium_not_registered: "CONSORCIO SIN REGISTRAR",
   lsp_clientnumber_not_registered: "LSP SIN REGISTRAR",
+  // Facturas comunes (2026-08-26): el matching es 100% por CUIT, así que la
+  // etiqueta dice exactamente cuál de los dos CUITs falta y por qué — si el papel
+  // no lo trae (problema del proveedor que emitió) o si falta darlo de alta.
+  consortium_cuit_missing: "CUIT DE CONSORCIO INEXISTENTE EN BOLETA",
+  consortium_cuit_not_registered: "CUIT DE CONSORCIO NO REGISTRADO EN DB",
+  provider_cuit_missing: "CUIT DE PROVEEDOR INEXISTENTE EN BOLETA",
+  provider_cuit_not_registered: "CUIT DE PROVEEDOR NO REGISTRADO EN DB",
 };
 
 /** 10. Gate "sin asignar": no matcheó consorcio/proveedor → Sin Asignar. */

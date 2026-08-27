@@ -283,8 +283,15 @@ describe("processDriveFile — caracterización de los 7 caminos de salida", () 
 
     await processDriveFile(makeFile(), asContext(ctx), summary);
 
-    // Consorcio leído del papel pero no en DB → CONSORCIO SIN REGISTRAR.
-    expect(ctx.driveService.renameFile).toHaveBeenCalledWith("file-1", expect.stringContaining("CONSORCIO SIN REGISTRAR"));
+    // Factura común: el matching es sólo por CUIT (2026-08-26). La IA leyó un
+    // nombre de consorcio, pero el nombre ya no asigna.
+    //
+    // El único CUIT válido del texto es el de TIGRE ASCENSORES, que está dado de
+    // alta como proveedor → no es candidato a consorcio. El del consorcio del
+    // fixture (30-11111111-1) no pasa checksum, así que `extractCuitsFromText` no
+    // lo levanta. Conclusión correcta: el papel no trae CUIT de consorcio.
+    expect(ctx.driveService.renameFile).toHaveBeenCalledWith("file-1", expect.stringContaining("CUIT DE CONSORCIO INEXISTENTE EN BOLETA"));
+    expect(metricsCore().reason).toBe("consortium_cuit_missing");
     expect(ctx.driveService.moveFileToUnassigned).toHaveBeenCalledWith("file-1", "pending", "unassigned");
     expect(ctx.sheetsService.insertRow).not.toHaveBeenCalled();
     expect(ctx.invoiceRepository.saveProcessedInvoice).not.toHaveBeenCalled();
@@ -292,20 +299,20 @@ describe("processDriveFile — caracterización de los 7 caminos de salida", () 
     expect(metricsCore().result).toBe("unassigned");
   });
 
-  it("unassigned (proveedor con CUIT no registrado): renombra PROVEEDOR SIN REGISTRAR", async () => {
+  it("unassigned (proveedor con CUIT no registrado): renombra CUIT DE PROVEEDOR NO REGISTRADO EN DB", async () => {
     const ctx = makeContext();
     ctx.providerRepository.findAllForMatching.mockResolvedValue([]); // consorcio matchea, proveedor no está en DB
     const summary = createBaseSummary(1);
 
     await processDriveFile(makeFile(), asContext(ctx), summary);
 
-    expect(ctx.driveService.renameFile).toHaveBeenCalledWith("file-1", expect.stringContaining("PROVEEDOR SIN REGISTRAR"));
+    expect(ctx.driveService.renameFile).toHaveBeenCalledWith("file-1", expect.stringContaining("CUIT DE PROVEEDOR NO REGISTRADO EN DB"));
     expect(ctx.driveService.moveFileToUnassigned).toHaveBeenCalledWith("file-1", "pending", "unassigned");
     expect(metricsCore().result).toBe("unassigned");
-    expect(metricsCore().reason).toBe("provider_not_registered");
+    expect(metricsCore().reason).toBe("provider_cuit_not_registered");
   });
 
-  it("unassigned (sin CUIT de proveedor): renombra SIN PROVEEDOR", async () => {
+  it("unassigned (sin CUIT de proveedor): renombra CUIT DE PROVEEDOR INEXISTENTE EN BOLETA", async () => {
     const ctx = makeContext();
     ctx.providerRepository.findAllForMatching.mockResolvedValue([]);
     // El texto tampoco trae CUIT de proveedor (cuitSanitizeStep re-agrega los del
@@ -319,8 +326,63 @@ describe("processDriveFile — caracterización de los 7 caminos de salida", () 
 
     await processDriveFile(makeFile(), asContext(ctx), summary);
 
-    expect(ctx.driveService.renameFile).toHaveBeenCalledWith("file-1", expect.stringContaining("SIN PROVEEDOR"));
-    expect(metricsCore().reason).toBe("provider_not_found");
+    expect(ctx.driveService.renameFile).toHaveBeenCalledWith("file-1", expect.stringContaining("CUIT DE PROVEEDOR INEXISTENTE EN BOLETA"));
+    expect(metricsCore().reason).toBe("provider_cuit_missing");
+  });
+
+  it("unassigned (sin ningún CUIT en el papel): renombra CUIT DE CONSORCIO INEXISTENTE EN BOLETA", async () => {
+    const ctx = makeContext();
+    // Ni el texto ni la extracción traen CUITs: el proveedor emitió la boleta sin
+    // el CUIT del receptor. No hay con qué identificar al edificio.
+    ctx.pdfExtractor.extractTextFromPdf.mockResolvedValue("documento importe total a pagar sin ningun identificador fiscal");
+    ctx.aiChain.run.mockImplementation(async (_t, cb) => {
+      cb?.("gemini", true);
+      return {
+        data: emptyExtraction({ consortium: "CONSORCIO DE PROPIETARIOS EVA PERON", provider: "X", amount: 5000, providerTaxId: null, allTaxIds: [] }),
+        usage: null,
+        provider: "gemini",
+      };
+    });
+    const summary = createBaseSummary(1);
+
+    await processDriveFile(makeFile(), asContext(ctx), summary);
+
+    expect(ctx.driveService.renameFile).toHaveBeenCalledWith("file-1", expect.stringContaining("CUIT DE CONSORCIO INEXISTENTE EN BOLETA"));
+    expect(metricsCore().reason).toBe("consortium_cuit_missing");
+    expect(ctx.sheetsService.insertRow).not.toHaveBeenCalled();
+    expect(ctx.invoiceRepository.saveProcessedInvoice).not.toHaveBeenCalled();
+  });
+
+  it("un solo CUIT en el papel y es de un proveedor conocido → falta el del consorcio", async () => {
+    // Caso frecuente: el proveedor emitió sin cargar el CUIT del receptor, así que
+    // el único CUIT del papel es el suyo. Reportarlo como "CUIT de consorcio no
+    // registrado" mandaría a dar de alta un edificio con el CUIT del proveedor.
+    const ctx = makeContext();
+    ctx.providerRepository.findAllForMatching.mockResolvedValue([
+      { id: "p1", canonicalName: "PROVEEDOR CONOCIDO", cuit: "30-70701800-6", matchNames: null, paymentAlias: null },
+    ]);
+    ctx.consortiumRepository.findAllForMatching.mockResolvedValue([]);
+    ctx.pdfExtractor.extractTextFromPdf.mockResolvedValue("factura importe total a pagar 30-70701800-6");
+    ctx.aiChain.run.mockImplementation(async (_t, cb) => {
+      cb?.("gemini", true);
+      return {
+        data: emptyExtraction({
+          consortium: "CONSORCIO DE PROPIETARIOS EVA PERON",
+          provider: "PROVEEDOR CONOCIDO",
+          amount: 5000,
+          providerTaxId: null,          // la IA no lo marcó como del emisor
+          allTaxIds: ["30707018006"],
+        }),
+        usage: null,
+        provider: "gemini",
+      };
+    });
+    const summary = createBaseSummary(1);
+
+    await processDriveFile(makeFile(), asContext(ctx), summary);
+
+    expect(metricsCore().reason).toBe("consortium_cuit_missing");
+    expect(ctx.driveService.renameFile).toHaveBeenCalledWith("file-1", expect.stringContaining("CUIT DE CONSORCIO INEXISTENTE EN BOLETA"));
   });
 
   it("no_amount: renombra SIN MONTO y mueve a Revisión", async () => {

@@ -5,6 +5,7 @@ import {
   formatCuit,
   cuitsEqual,
   extractCuitsFromText,
+  isPlaceholderCuit,
 } from "@/lib/cuit";
 
 // CUITs reales (checksum mod-11 válido): 20-94037036-2 y 30-70958299-9.
@@ -68,6 +69,40 @@ describe("cuitsEqual", () => {
     expect(cuitsEqual("20-94037036-2", "30709582999")).toBe(false);
     expect(cuitsEqual("", "")).toBe(false);
     expect(cuitsEqual(null, "20940370362")).toBe(false);
+  });
+});
+
+describe("isPlaceholderCuit", () => {
+  it("detecta el CUIT genérico que algunos proveedores ponen como receptor", () => {
+    // Caso real (2026-08-26): ASCENSORES CHERE facturó al CONSORCIO DE PROPIETARIOS
+    // FRANKLIN 25 con "CUIT: 23000000000" en el bloque del receptor.
+    expect(isPlaceholderCuit("23000000000")).toBe(true);
+    expect(isPlaceholderCuit("23-00000000-0")).toBe(true);
+  });
+
+  it("detecta el placeholder del Edificio de Prueba", () => {
+    expect(isPlaceholderCuit("11-11111111-9")).toBe(true);
+  });
+
+  it("no marca CUITs reales", () => {
+    expect(isPlaceholderCuit("23-07773623-9")).toBe(false);
+    expect(isPlaceholderCuit("30-71571168-7")).toBe(false);
+  });
+
+  it("no marca valores que no son CUIT", () => {
+    expect(isPlaceholderCuit(null)).toBe(false);
+    expect(isPlaceholderCuit("123")).toBe(false);
+  });
+});
+
+describe("extractCuitsFromText — relleno", () => {
+  it("NO extrae el genérico aunque pase el checksum", () => {
+    // 23000000000 pasa mod-11 (2×5 + 3×4 = 22). Sin este filtro, la boleta se
+    // reportaba como "CUIT de consorcio no registrado" e invitaba a dar de alta un
+    // edificio con un CUIT de relleno — al que después matchearían todas las
+    // boletas de todos los proveedores que usan el mismo relleno.
+    const text = "CUIT: 23077736239 ... CUIT: 23000000000 CONSORCIO DE PROPIETARIOS FRANKLIN 25";
+    expect(extractCuitsFromText(text)).toEqual(["23077736239"]);
   });
 });
 

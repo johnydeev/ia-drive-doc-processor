@@ -271,15 +271,27 @@ Siempre usar `resolveGoogleConfig(client)` para construir el `GoogleSheetsServic
 9. **Insert Sheets** → fila con monto formateado en es-AR ($ 118.000,00) + período (MM/YYYY). **Solo si NO es duplicado** (los duplicados no se escriben en Sheets desde 2026-06-04).
 10. **Organizar / Mover archivo** (desde 2026-06-07):
     - **Boleta OK** → se **renombra** y se mueve a **`Rendiciones/[Edificio]/[Período]`** (`driveFoldersJson.statements`). La carpeta del edificio se crea y comparte pública la 1ª vez (link en `Consortium.statementsFolderUrl`). Reemplaza el viejo destino "Escaneados".
-    - **Sin Asignar** → carpeta Sin Asignar (no matcheó).
+    - **Sin Asignar** → carpeta Sin Asignar (no matcheó). El PDF se renombra con la etiqueta del motivo. En facturas comunes las 4 etiquetas son por CUIT (2026-08-26):
+      `CUIT DE CONSORCIO INEXISTENTE EN BOLETA` (el papel no lo trae) · `CUIT DE CONSORCIO NO REGISTRADO EN DB` (lo trae, falta el alta) · `CUIT DE PROVEEDOR INEXISTENTE EN BOLETA` · `CUIT DE PROVEEDOR NO REGISTRADO EN DB`.
+      Las viejas (`SIN CONSORCIO`, `CONSORCIO SIN REGISTRAR`, `SIN PROVEEDOR`, `PROVEEDOR SIN REGISTRAR`) quedan para las boletas LSP. Sólo las `*_INEXISTENTE` disparan los fallbacks de código de barras y visión: si el CUIT se leyó bien y falta el alta, ningún reintento lo arregla.
     - **No es boleta** → **Revisión** (`failed`) renombrado `[NO BOLETA]` (triage capa 1/2). NO Sheets ni DB. Contador `summary.notBoleta`, `m.result="not_boleta"`.
     - **Duplicado** → carpeta **Duplicados** (si `driveFoldersJson.duplicates`; sino Escaneados). NO va a Rendiciones.
     - **Consorcio sin período activo** → **Revisión** (`failed`) + aviso (caso puntual; el peor caso —cliente sin ningún período— lo corta la llave del scheduler).
 11. **Guardar Invoice** + métricas (con lspServiceId y paymentMethod si aplica). **Solo si NO es duplicado** (los duplicados no se persisten en DB — lo impide el unique `uq_invoice_business_key`).
-### Matching de consorcio (3 niveles, en orden)
+### Matching de consorcio
+> **Facturas comunes (no LSP): SOLO por CUIT desde 2026-08-26.** El nombre y la dirección del
+> receptor son texto libre que la IA recorta distinto en cada formato (caso real: "Razón Social:
+> CONSORCIO DE PROPIETARIOS EVA PERON" con el número sólo en la línea "Dirección:", ambiguo entre
+> EVA PERON 1711 y 1761). El caller pasa `cuitOnly = !lspProvider` a `matchConsortium`.
+>
+> **Consecuencia operativa: un edificio sin CUIT en `_Consorcios` no matchea ninguna factura común.**
+
+0. **CUIT** → `allTaxIds` contra `consortium.cuit` o un CUIT alternativo en `matchNames`. Único nivel activo en facturas comunes.
+
+Niveles 1-3, **sólo para boletas LSP** (servicios, sindicales, GENERIC_LSP), donde la dirección impresa suele ser la única pista:
 1. **Exacto** → `normalizeConsortiumName(rawOcr) === canonicalName`
 2. **Fuzzy** → todos los tokens de `canonicalName` aparecen en `rawOcr`
-3. **Alias** → el rawOcr coincide con algún alias registrado en `consortium.aliases`
+3. **Alias** → el rawOcr coincide con algún alias registrado en `matchNames`
 ### Matching de proveedor (SOLO CUIT desde 2026-07-02)
 > **Orden de rescate cuando falta el CUIT del proveedor** (`assignmentStep`):
 > 1. **Código de barras AFIP** (`lib/afipBarcode.ts`, 2026-08-18) — determinístico, 0 tokens. Cubre

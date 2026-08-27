@@ -80,9 +80,34 @@ export function extractCuitsFromText(text: string | null | undefined): string[] 
   const found = new Set<string>();
   for (const match of text.match(CUIT_CANDIDATE_RE) ?? []) {
     const digits = cuitDigits(match);
-    if (hasValidChecksum(digits)) {
+    if (hasValidChecksum(digits) && !isPlaceholderCuit(digits)) {
       found.add(digits);
     }
   }
   return [...found];
+}
+
+/**
+ * ¿Es un CUIT de relleno? Los 8 dígitos centrales (el número de documento) son
+ * todos iguales: `23-00000000-0`, `20-11111111-2`, `11-11111111-9`…
+ *
+ * **No alcanza con el checksum**: `23000000000` lo PASA (2×5 + 3×4 = 22, múltiplo
+ * de 11 → verificador 0). Caso real (2026-08-26): un proveedor facturó al
+ * "CONSORCIO DE PROPIETARIOS FRANKLIN 25" poniendo `CUIT: 23000000000` en el
+ * bloque del receptor, en vez del CUIT real del consorcio.
+ *
+ * Dejarlo pasar tiene dos consecuencias, las dos malas:
+ *  - La boleta se reporta como "CUIT de consorcio no registrado", invitando a dar
+ *    de alta un edificio con un CUIT de relleno.
+ *  - Si alguien lo diera de alta, **todas** las boletas de todos los proveedores
+ *    que usan ese mismo relleno se imputarían a ese único edificio.
+ *
+ * También cubre los placeholders del "Edificio de Prueba" (`11-11111111-9`), que
+ * por diseño no deben matchear contra ningún papel.
+ */
+export function isPlaceholderCuit(value: string | null | undefined): boolean {
+  const digits = cuitDigits(value);
+  if (digits.length !== 11) return false;
+  const body = digits.slice(2, 10);
+  return body.split("").every((d) => d === body[0]);
 }

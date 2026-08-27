@@ -79,16 +79,28 @@ function pickByName(candidates: ProviderMatchRow[], rawName: string | null): Pro
 }
 
 /**
- * Matchea un consorcio en 4 niveles (en orden de confianza):
- *   0. CUIT (allTaxIds) — incluye CUITs alternativos en matchNames
- *   1. Nombre exacto normalizado
- *   2. Fuzzy (tokens del canonicalName presentes en el OCR)
- *   3. Alias (matchNames)
+ * Matchea un consorcio.
+ *
+ * Nivel 0 — **CUIT** (`allTaxIds`), incluidos los CUITs alternativos cargados en
+ * `matchNames`. Es el único nivel con identidad real: el CUIT no se repite.
+ *
+ * Niveles 1-3 — nombre exacto normalizado, fuzzy y alias. **Sólo se intentan
+ * cuando `cuitOnly` es false**, es decir para boletas de servicios (LSP): ahí la
+ * dirección impresa suele ser la única pista y `matchNames` existe justamente
+ * para reconciliar variantes ("BROWN ALMTE AV 708" → "ALMIRANTE BROWN 706").
+ *
+ * Para **facturas comunes** el caller pasa `cuitOnly=true` (2026-08-26, decisión
+ * del owner): la razón social y la dirección del receptor son texto libre que la
+ * IA recorta distinto en cada formato — caso real: "Razón Social: CONSORCIO DE
+ * PROPIETARIOS EVA PERON" con el número sólo en la línea "Dirección:", que
+ * normalizaba a "EVA PERON" y era ambiguo entre EVA PERON 1711 y 1761. Asignar
+ * por ahí es imputarle el gasto al edificio equivocado.
  */
 export function matchConsortium(
   allConsortiums: ConsortiumMatchRow[],
   rawConsortium: string | null,
-  allTaxIds: string[]
+  allTaxIds: string[],
+  cuitOnly = false
 ): MatchResult<ConsortiumMatchRow> | null {
   // Intento 0: match por CUIT (allTaxIds) — incluye CUITs alternativos en matchNames
   if (allTaxIds.length > 0) {
@@ -103,6 +115,9 @@ export function matchConsortium(
       if (found) return { row: found, method: `CUIT (${cuit})` };
     }
   }
+
+  // Facturas comunes: se corta acá. Sin CUIT no hay identidad — ver docstring.
+  if (cuitOnly) return null;
 
   // Intentos por nombre requieren rawConsortium
   if (rawConsortium) {

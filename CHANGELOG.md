@@ -2,6 +2,48 @@
 
 ## [Unreleased]
 
+### Changed
+- **Facturas comunes: el matching de consorcio pasa a ser SOLO por CUIT (2026-08-26)**. Se eliminan
+  los niveles por nombre (exacto / fuzzy / alias) para las boletas que no son LSP. El nombre y la
+  dirección del receptor son texto libre que la IA recorta distinto según el formato: caso real, una
+  factura con `Razón Social: CONSORCIO DE PROPIETARIOS EVA PERON` y el número sólo en la línea
+  `Dirección: PERON EVA AV. 1711` normalizaba a "EVA PERON", ambiguo entre EVA PERON 1711 y 1761 —
+  asignar por ahí es imputar el gasto al edificio equivocado. Las boletas **LSP** (servicios,
+  sindicales, GENERIC_LSP) conservan el match por nombre: ahí la dirección impresa suele ser la
+  única pista y `matchNames` existe para reconciliar variantes.
+  > **Consecuencia operativa:** un edificio sin CUIT en `_Consorcios` deja de matchear cualquier
+  > factura común. Hay que verificar que todos tengan CUIT cargado.
+- **Cuatro etiquetas nuevas de Sin Asignar para facturas comunes (2026-08-26)**, que dicen cuál de
+  los dos CUITs falta y de quién es el problema:
+
+  | Categoría | Etiqueta en el archivo | Qué significa |
+  |---|---|---|
+  | `consortium_cuit_missing` | `CUIT DE CONSORCIO INEXISTENTE EN BOLETA` | El proveedor emitió sin el CUIT del receptor |
+  | `consortium_cuit_not_registered` | `CUIT DE CONSORCIO NO REGISTRADO EN DB` | Está impreso, falta el alta |
+  | `provider_cuit_missing` | `CUIT DE PROVEEDOR INEXISTENTE EN BOLETA` | No se pudo extraer el CUIT del emisor |
+  | `provider_cuit_not_registered` | `CUIT DE PROVEEDOR NO REGISTRADO EN DB` | Está impreso, falta el alta |
+
+  Para decidir de quién es el CUIT que falta cuando el papel trae **uno solo**, los candidatos a
+  consorcio descuentan también los CUITs ya dados de alta como proveedor: si el único CUIT impreso
+  es de un proveedor conocido, el que falta es el del consorcio. Sin eso se reportaba al revés y se
+  invitaba a dar de alta un edificio con el CUIT de un proveedor.
+
+  Las etiquetas viejas (`SIN CONSORCIO`, `CONSORCIO SIN REGISTRAR`, `SIN PROVEEDOR`,
+  `PROVEEDOR SIN REGISTRAR`) siguen usándose para las boletas LSP. Sólo las `*_missing` disparan los
+  fallbacks de código de barras AFIP y de visión: cuando el CUIT se leyó bien y lo que falta es el
+  alta, ningún reintento lo resuelve y gastaría tokens al vacío.
+
+### Fixed
+- **Los CUITs de relleno ya no se toman como CUIT del consorcio (2026-08-26)**. `23000000000`
+  **pasa** el checksum mod-11 (2×5 + 3×4 = 22), así que `extractCuitsFromText` lo levantaba como un
+  CUIT válido. Caso real: ASCENSORES CHERE facturó al CONSORCIO DE PROPIETARIOS FRANKLIN 25 poniendo
+  `CUIT: 23000000000` en el bloque del receptor en vez del CUIT real del edificio. Con las etiquetas
+  nuevas, esa boleta se habría reportado como "CUIT de consorcio no registrado", invitando a dar de
+  alta un edificio con un CUIT de relleno — y si alguien lo hacía, **todas** las boletas de todos los
+  proveedores que usan ese mismo relleno se habrían imputado a ese único edificio. Nuevo
+  `isPlaceholderCuit` en `lib/cuit.ts` (los 8 dígitos centrales todos iguales) que filtra en
+  `extractCuitsFromText`. Cubre también el `11-11111111-9` del Edificio de Prueba.
+
 ### Added
 - **Soporte de ABL / Impuesto Inmobiliario de AGIP (2026-08-25)**. Es la boleta más pobre en datos
   del pipeline: no trae CUIT (ni del emisor ni del contribuyente), ni nombre del consorcio, ni

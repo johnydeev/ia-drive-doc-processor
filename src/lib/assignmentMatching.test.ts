@@ -42,6 +42,32 @@ describe("matchConsortium", () => {
     expect(result?.method).toMatch(/^CUIT/);
   });
 
+  it("cuitOnly: NO matchea por nombre aunque el nombre sea exacto", () => {
+    // Facturas comunes (2026-08-26): el nombre del receptor es texto libre y la IA
+    // lo recorta distinto según el formato. Sin CUIT no hay identidad.
+    const rows = [consortium({ canonicalName: "PUEYRREDON 2418" })];
+    expect(matchConsortium(rows, "CONSORCIO DE PROPIETARIOS AV PUEYRREDON 2418", [], true)).toBeNull();
+  });
+
+  it("cuitOnly: NO matchea por fuzzy ni por alias", () => {
+    const rows = [consortium({ canonicalName: "BROWN 706", matchNames: "BROWN ALMTE AV 708" })];
+    expect(matchConsortium(rows, "ALMIRANTE BROWN 706", [], true)).toBeNull();
+    expect(matchConsortium(rows, "BROWN ALMTE AV 708", [], true)).toBeNull();
+  });
+
+  it("cuitOnly: el match por CUIT sigue funcionando", () => {
+    const rows = [consortium({ id: "c1", canonicalName: "THAMES 647", cuit: "30-11111111-1" })];
+    const result = matchConsortium(rows, "CUALQUIER COSA", ["30111111111"], true);
+    expect(result?.row.id).toBe("c1");
+    expect(result?.method).toMatch(/^CUIT/);
+  });
+
+  it("cuitOnly=false (LSP) conserva el match por nombre", () => {
+    // Los servicios sí dependen del nombre/dirección impresa: ahí no se corta.
+    const rows = [consortium({ canonicalName: "PUEYRREDON 2418" })];
+    expect(matchConsortium(rows, "CONSORCIO DE PROPIETARIOS AV PUEYRREDON 2418", [], false)?.method).toBe("exacto");
+  });
+
   it("matchea por nombre exacto normalizado", () => {
     const rows = [consortium({ canonicalName: "PUEYRREDON 2418" })];
     const result = matchConsortium(rows, "CONSORCIO DE PROPIETARIOS AV PUEYRREDON 2418", []);

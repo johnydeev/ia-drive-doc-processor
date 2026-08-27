@@ -4,6 +4,128 @@ Registro de decisiones tomadas ante problemas reales encontrados en producción.
 
 ---
 
+## 2026-08-26 — Facturas comunes: la identidad es el CUIT, no el nombre
+
+### Problema
+
+El diagnóstico de una corrida selectiva (8 boletas, 4 en Sin Asignar) mostró que el matching de
+consorcio por nombre no es confiable en facturas comunes. El caso decisivo:
+
+```
+Razón Social: CONSORCIO DE PROPIETARIOS EVA PERON
+Dirección: PERON EVA AV. 1711
+```
+
+La IA tomó la razón social y descartó la línea de dirección, así que el consorcio llegó como
+"EVA PERON", sin número. Ese valor es **ambiguo entre EVA PERON 1711 y EVA PERON 1761**, dos
+edificios distintos de la misma cartera. Un fuzzy o un alias sobre ese texto no habría fallado con
+un error visible: habría imputado el gasto al edificio equivocado, en silencio.
+
+La razón de fondo es que la razón social y la dirección del receptor son **texto libre**: cada
+sistema de facturación los parte distinto (`Nombre :`, `Razón Social:`, `Dirección:`, con o sin
+localidad, con el número antes o después de la calle). El CUIT no: es un identificador único,
+validado por checksum, que no se repite.
+
+**Y hay una razón contable que pesa más que la técnica** (planteada por el owner): una boleta sin el
+CUIT del consorcio **no sirve como documentación de rendición de cuentas**. Si el papel no identifica
+fiscalmente a quién se le facturó, no prueba que el gasto sea del edificio, y no se puede presentar a
+los propietarios como respaldo. Rechazarla no es perder una boleta válida: es no dar por buena una
+que no lo es. Bajo ese criterio, la pérdida de cobertura que trae este cambio no es un costo — es el
+comportamiento correcto.
+
+Es el mismo razonamiento que ya se había aplicado al **proveedor** el 2026-07-02 (caso ASCENSORES
+POTENZA). Ahora se extiende al consorcio.
+
+### Decisión
+
+**Facturas comunes (`lspProvider === null`): matching de consorcio SOLO por CUIT.**
+`matchConsortium` recibe `cuitOnly` y corta después del nivel 0. Sumado a que el proveedor ya era
+CUIT-only, **toda factura común se resuelve íntegramente por CUIT**.
+
+**Las boletas LSP conservan el match por nombre.** Servicios, sindicales y `GENERIC_LSP` siguen con
+los niveles exacto / fuzzy / alias: en un Edesur la dirección impresa suele ser la única pista, y
+`matchNames` existe justamente para reconciliar variantes ("BROWN ALMTE AV 708" → "ALMIRANTE BROWN
+706"). Cortarlo ahí rompería un mecanismo que funciona.
+
+**Cuatro etiquetas nuevas**, pedidas por el owner, que separan de quién es el problema:
+
+| Categoría | Etiqueta | Acción que implica |
+|---|---|---|
+| `consortium_cuit_missing` | `CUIT DE CONSORCIO INEXISTENTE EN BOLETA` | Reclamarle al proveedor que emita con el CUIT |
+| `consortium_cuit_not_registered` | `CUIT DE CONSORCIO NO REGISTRADO EN DB` | Cargar el edificio (o su CUIT) en el ALTA |
+| `provider_cuit_missing` | `CUIT DE PROVEEDOR INEXISTENTE EN BOLETA` | Revisar la boleta a mano |
+| `provider_cuit_not_registered` | `CUIT DE PROVEEDOR NO REGISTRADO EN DB` | Cargar el proveedor en el ALTA |
+
+La distinción "inexistente en la boleta" vs "no registrado en DB" se resuelve sobre `allTaxIds`:
+para el consorcio, los candidatos son los CUITs del papel **menos** el del emisor y **menos los que
+ya estén dados de alta como proveedor**; para el proveedor, los del papel **menos** el del consorcio
+ya matcheado. Conjunto vacío → `missing`; no vacío pero sin match → `not_registered`.
+
+**El descuento de los CUITs de proveedores conocidos es lo que resuelve la boleta con UN SOLO CUIT**,
+que es el caso frecuente cuando el emisor no cargó el del receptor. Sin él, ese único CUIT — que es
+del proveedor — se reportaba como "CUIT de consorcio no registrado", mandando a dar de alta un
+edificio con el CUIT de un proveedor. La consulta al directorio de proveedores se hace **sólo en la
+rama de fallo**, así que no cuesta nada en el camino feliz.
+
+**Sólo las `*_missing` disparan los fallbacks** de código de barras AFIP y de visión. Si el CUIT se
+leyó bien y lo que falta es el alta, ningún reintento lo va a resolver: gastar tokens ahí es tirarlos.
+
+**Precedencia:** el consorcio se evalúa primero. Si fallan los dos, se reporta el del consorcio.
+
+### Consecuencia operativa — leer antes de desplegar
+
+**Un edificio sin CUIT en `_Consorcios` deja de matchear cualquier factura común.** En el mismo lote
+de diagnóstico, `Abono Agosto Franklin 25` había matcheado con método `exacto` — por nombre. Con
+esta reforma, esa boleta entra sólo si FRANKLIN 25 tiene su CUIT cargado.
+
+Antes de desplegar hay que verificar que **todos** los edificios tengan CUIT en el ALTA.
+
+### Alternativas descartadas
+
+- **Mejorar el prompt para que lea la línea `Dirección:`.** Ataca un formato, no el problema: el
+  siguiente sistema de facturación parte los campos de otra manera. Además no resuelve la
+  ambigüedad de fondo — un edificio sin número sigue sin ser identificable.
+- **Registrar "EVA PERON" como `matchNames`.** Sería peor: haría que un texto ambiguo asigne con
+  confianza al primero de los dos edificios que aparezca.
+- **Sacar el match por nombre también en LSP.** Rompería el mecanismo documentado de `matchNames`
+  para servicios, donde el papel rara vez trae el CUIT del consorcio.
+
+### Corolario — los CUITs de relleno (mismo día)
+
+Al revisar el papel de `Abono Agosto 2026 Franklin 25` apareció el caso que faltaba: el bloque del
+receptor dice
+
+```
+CUIT: 23000000000     Apellido y Nombre / Razón Social: CONSORCIO DE PROPIETARIOS FRANKLIN 25
+Condición frente al IVA: Sujeto No Categorizado    Domicilio: FRANKLIN 25
+```
+
+El proveedor no puso el CUIT del edificio — puso un relleno. Y `23000000000` **pasa el checksum
+mod-11** (2×5 + 3×4 = 22, múltiplo de 11 → verificador 0), así que `extractCuitsFromText` lo
+levantaba como CUIT válido y entraba en `allTaxIds`.
+
+Consecuencia con las etiquetas nuevas: la boleta habría salido como **"CUIT de consorcio no
+registrado en DB"**, invitando al administrador a dar de alta un edificio con CUIT `23-00000000-0`.
+Y si lo hacía, ese edificio habría absorbido las boletas de **todos** los proveedores que usan el
+mismo relleno.
+
+**Decisión:** `isPlaceholderCuit` en `lib/cuit.ts` — los 8 dígitos centrales (el número de documento)
+todos iguales — y `extractCuitsFromText` los descarta. El checksum solo no alcanza. Cubre también el
+`11-11111111-9` del Edificio de Prueba, que por diseño no debe matchear contra ningún papel.
+
+Con el filtro, esa boleta cae en **`CUIT DE CONSORCIO INEXISTENTE EN BOLETA`**, que es la lectura
+correcta y la que dice qué hacer: exigirle al proveedor que emita con el CUIT del consorcio.
+
+### Impacto
+
+`src/lib/cuit.ts` (`isPlaceholderCuit` + filtro en `extractCuitsFromText`),
+`src/lib/assignmentMatching.ts` (parámetro `cuitOnly`), `src/jobs/processPendingDocuments.job.ts`
+(4 categorías nuevas, etiquetas, gate de fallbacks), más tests en
+`src/lib/assignmentMatching.test.ts` y `src/jobs/processPendingDocuments.job.test.ts`.
+Suite 807 → 812. Sin migración.
+
+---
+
 ## 2026-08-25 — ABL: cómo se atribuye una boleta que no dice de quién es
 
 ### Problema

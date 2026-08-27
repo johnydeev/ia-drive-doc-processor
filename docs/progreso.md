@@ -1,6 +1,6 @@
 # Progreso del proyecto — drive-doc-processor
 
-Actualizado al 25/08/2026 (sesión 60 — soporte de ABL/AGIP; Groq eliminado del proyecto; se revirtió el cambio de orden de la cadena: queda pendiente de key paga).
+Actualizado al 26/08/2026 (sesión 60 — facturas comunes con matching 100% por CUIT y 4 etiquetas nuevas; soporte de ABL/AGIP; Groq eliminado; revertido el cambio de orden de la cadena: pendiente de key paga).
 
 ## ✅ Smokes pendientes en producción (al 2026-08-20)
 
@@ -59,6 +59,53 @@ selectiva sólo lista lo que está ahí.
 ### Pendiente que NO es smoke
 
 - [ ] Definir cuál es el CUIT correcto de **Metrogas**: la base tiene `30-65786367-6`.
+
+## 🔑 Facturas comunes: matching 100% por CUIT (2026-08-26)
+
+**Estado: implementado y verificado (typecheck + lint 0 errores + 812 tests + build + build:jobs OK).
+Sin migración. Sin commitear.**
+
+El diagnóstico de una corrida selectiva mostró que el nombre del receptor no identifica un edificio:
+una factura llegó como "CONSORCIO DE PROPIETARIOS EVA PERON" (el número estaba sólo en la línea
+`Dirección:`, que la IA descartó) — ambiguo entre EVA PERON 1711 y 1761.
+
+### Hecho
+- `matchConsortium` acepta `cuitOnly`. Para facturas comunes (`lspProvider === null`) corta después
+  del nivel CUIT. Las LSP conservan exacto / fuzzy / alias.
+- 4 categorías y etiquetas nuevas: `CUIT DE CONSORCIO INEXISTENTE EN BOLETA` ·
+  `CUIT DE CONSORCIO NO REGISTRADO EN DB` · `CUIT DE PROVEEDOR INEXISTENTE EN BOLETA` ·
+  `CUIT DE PROVEEDOR NO REGISTRADO EN DB`.
+- Sólo las `*_INEXISTENTE` disparan el código de barras AFIP y la visión.
+- **Boleta con un solo CUIT**: los candidatos a consorcio descuentan los CUITs ya dados de alta como
+  proveedor. Si el único CUIT impreso es de un proveedor conocido, el que falta es el del consorcio.
+  Sin esto se etiquetaba al revés e invitaba a dar de alta un edificio con el CUIT de un proveedor.
+- **CUITs de relleno descartados**: `23000000000` pasa el checksum, y un proveedor lo usó como CUIT
+  del receptor (caso FRANKLIN 25). Nuevo `isPlaceholderCuit` en `lib/cuit.ts` — 8 dígitos centrales
+  iguales — que filtra en `extractCuitsFromText`. Sin esto, la boleta invitaba a dar de alta un
+  edificio con CUIT `23-00000000-0` que habría absorbido las boletas de todos los proveedores que
+  usan el mismo relleno.
+- 12 tests nuevos. Suite **807 → 818**.
+
+### ⚠️ Antes de desplegar
+**Verificar que TODOS los edificios tengan CUIT cargado en `_Consorcios`.** Un edificio sin CUIT deja
+de matchear cualquier factura común. En el lote de diagnóstico, `Abono Agosto Franklin 25` había
+entrado por nombre (método `exacto`): con esta reforma necesita el CUIT de FRANKLIN 25.
+
+> Criterio del owner: una boleta sin CUIT del consorcio **no sirve como respaldo de rendición de
+> cuentas** — no identifica fiscalmente a quién se le facturó. Que rebote es correcto, no un costo.
+> La acción que corresponde es exigirle al proveedor que emita con el CUIT del edificio.
+
+> Verificado sobre el papel: `Abono Agosto 2026 Franklin 25` **no** falla por falta de datos en el
+> directorio — FRANKLIN 25 tiene su CUIT cargado. Falla porque el proveedor puso `23000000000` en el
+> bloque del receptor. Es el caso típico, no la excepción.
+
+### Pendiente conocido
+El prompt de facturas comunes toma `Razón Social:` e ignora `Dirección:`. Con el matching por CUIT ya
+no bloquea, pero el campo `consortium` extraído queda incompleto en el diagnóstico.
+
+Detalle y alternativas descartadas: `docs/decisiones.md` (2026-08-26).
+
+---
 
 ## 🏛️ ABL / Impuesto Inmobiliario de AGIP (2026-08-25)
 
