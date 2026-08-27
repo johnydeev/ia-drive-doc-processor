@@ -1100,22 +1100,35 @@ async function assignmentStep(ctx: PipelineContext): Promise<StepResult> {
   // tokens: si ya matchearon ambos por CUIT, no se dispara. Cerebras es texto puro
   // (no ve imágenes) → la visión es siempre vía Gemini multimodal. Tolerancia 0:
   // el CUIT que devuelve Gemini debe matchear EXACTO contra la DB, sino Sin Asignar.
+  // La VISIÓN cuesta tokens, así que sólo se dispara cuando el papel no trae el
+  // CUIT. Si el CUIT se leyó y lo que falta es el alta en el directorio, ningún
+  // reintento lo resuelve.
   let cuitMissing =
     assignment.reasonCategory === "provider_not_found" ||
     assignment.reasonCategory === "consortium_not_found" ||
-    // Categorías nuevas de facturas comunes: "el papel no trae el CUIT" es
-    // exactamente el caso que el código de barras y la visión pueden rescatar.
-    // Las `*_not_registered` NO entran: ahí el CUIT se leyó bien y lo que falta es
-    // el alta en el directorio, que ningún reintento va a resolver.
     assignment.reasonCategory === "provider_cuit_missing" ||
     assignment.reasonCategory === "consortium_cuit_missing";
+
+  // El CÓDIGO DE BARRAS cuesta 0 tokens y se autovalida (checksum + CAE + punto de
+  // venta impresos), así que su puerta es más ancha: también corre cuando el
+  // proveedor NO matcheó con un CUIT que SÍ se extrajo.
+  //
+  // Caso real (2026-08-26, `Fact. 51837`): membrete en imagen, la IA devolvió
+  // `30-70701800-6` — un CUIT que **no está en el papel** — y el código de barras
+  // dice `30-70741550-5`. Con la puerta angosta, un CUIT mal leído bloqueaba el
+  // rescate determinístico y la etiqueta mandaba a dar de alta un proveedor
+  // inexistente.
+  const barcodeEligible =
+    cuitMissing ||
+    assignment.reasonCategory === "provider_not_registered" ||
+    assignment.reasonCategory === "provider_cuit_not_registered";
 
   // ── Fallback determinístico (0 tokens): CUIT del emisor en el código de barras
   // AFIP (RG 1702). Va ANTES del visual porque no cuesta nada y no puede
   // equivocarse de proveedor: si el CUIT que sale del código no está en el
   // directorio, no matchea con nadie y la boleta queda como estaba. Cubre las
   // facturas cuyo membrete es imagen pero imprimen los dígitos del código.
-  if (cuitMissing && ctx.docText) {
+  if (barcodeEligible && ctx.docText) {
     const barcodeCuit = extractEmitterCuitFromBarcode(ctx.docText);
 
     if (barcodeCuit && !extracted.allTaxIds?.some((c) => cuitsEqual(c, barcodeCuit))) {
@@ -1131,6 +1144,9 @@ async function assignmentStep(ctx: PipelineContext): Promise<StepResult> {
         assignment = barcodeAssignment;
         cuitMissing = false;
       } else {
+        // El CUIT del código quedó en `allTaxIds`, así que la etiqueta de Sin Asignar
+        // va a nombrar el CUIT REAL del emisor y no el que leyó mal la IA.
+        assignment = barcodeAssignment;
         pipelineLog.stepStart(cid, "⚠️ El CUIT del código de barras no está en el directorio → sigue el fallback visual");
       }
     }

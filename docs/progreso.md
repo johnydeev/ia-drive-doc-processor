@@ -84,7 +84,11 @@ una factura llegó como "CONSORCIO DE PROPIETARIOS EVA PERON" (el número estaba
   iguales — que filtra en `extractCuitsFromText`. Sin esto, la boleta invitaba a dar de alta un
   edificio con CUIT `23-00000000-0` que habría absorbido las boletas de todos los proveedores que
   usan el mismo relleno.
-- 12 tests nuevos. Suite **807 → 818**.
+- **El código de barras AFIP ya no queda tapado por un CUIT mal leído**: corre también cuando el
+  proveedor no matcheó con un CUIT que sí se extrajo (0 tokens, se autovalida). La visión mantiene
+  la puerta angosta. Caso `Fact. 51837`: la IA devolvió `30-70701800-6`, que no está en el papel; el
+  código dice `30-70741550-5`.
+- 13 tests nuevos. Suite **807 → 819**.
 
 ### ⚠️ Antes de desplegar
 **Verificar que TODOS los edificios tengan CUIT cargado en `_Consorcios`.** Un edificio sin CUIT deja

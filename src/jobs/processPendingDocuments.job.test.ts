@@ -385,6 +385,45 @@ describe("processDriveFile — caracterización de los 7 caminos de salida", () 
     expect(ctx.driveService.renameFile).toHaveBeenCalledWith("file-1", expect.stringContaining("CUIT DE CONSORCIO INEXISTENTE EN BOLETA"));
   });
 
+  it("un CUIT mal leído por la IA no bloquea el rescate por código de barras", async () => {
+    // Caso real (`Fact. 51837`, 2026-08-26): membrete en imagen. La IA devolvió
+    // 30-70701800-6, un CUIT que NO está en el papel; el código de barras AFIP dice
+    // 30-70741550-5. Con la puerta angosta (sólo "no se extrajo ningún CUIT") el
+    // rescate determinístico no corría y la boleta quedaba etiquetada con el CUIT
+    // equivocado.
+    const ctx = makeContext();
+    ctx.providerRepository.findAllForMatching.mockResolvedValue([
+      { id: "p1", canonicalName: "B PACE E HIJOS S.R.L.", cuit: "30-70741550-5", matchNames: null, paymentAlias: null },
+    ]);
+    // El consorcio matchea por su CUIT real (el 30-11111111-1 del fixture es un
+    // placeholder y `extractCuitsFromText` ya no lo levanta).
+    ctx.consortiumRepository.findAllForMatching.mockResolvedValue([
+      { id: "c1", canonicalName: "ARAOZ 192", rawName: "CONSORCIO ARAOZ 192", cuit: "30-55007155-6", matchNames: null },
+    ]);
+    ctx.consortiumRepository.findByCanonicalName.mockResolvedValue({
+      id: "c1", canonicalName: "ARAOZ 192", rawName: "CONSORCIO ARAOZ 192",
+      cuit: "30-55007155-6", bank: null, statementsFolderId: "stmt-1",
+    });
+    ctx.pdfExtractor.extractTextFromPdf.mockResolvedValue(
+      "FACTURA Nro. 0010-00051837 CONSORCIO CUIT: 30-55007155-6 importe total a pagar 3070741550506001086095857203130202603121 Nro. de CAE: 86095857203130"
+    );
+    ctx.aiChain.run.mockImplementation(async (_t, cb) => {
+      cb?.("gemini", true);
+      return {
+        data: okExtraction({ providerTaxId: "30-70701800-6", allTaxIds: ["30707018006", "30550071556"] }),
+        usage: null,
+        provider: "gemini",
+      };
+    });
+    const summary = createBaseSummary(1);
+
+    await processDriveFile(makeFile(), asContext(ctx), summary);
+
+    // El código de barras aporta el CUIT real y el proveedor matchea.
+    expect(metricsCore().result).toBe("ok");
+    expect(ctx.invoiceRepository.saveProcessedInvoice).toHaveBeenCalled();
+  });
+
   it("no_amount: renombra SIN MONTO y mueve a Revisión", async () => {
     const ctx = makeContext();
     ctx.aiChain.run.mockImplementation(async (_t, cb) => {

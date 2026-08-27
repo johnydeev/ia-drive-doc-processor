@@ -34,6 +34,16 @@
   alta, ningún reintento lo resuelve y gastaría tokens al vacío.
 
 ### Fixed
+- **Un CUIT mal leído por la IA ya no bloquea el rescate por código de barras (2026-08-26)**. El
+  fallback determinístico de la RG 1702 sólo corría cuando **no** se había extraído ningún CUIT de
+  proveedor. Caso real (`Fact. 51837`): membrete en imagen, la IA devolvió `30-70701800-6` — un CUIT
+  que **no figura en el papel** — y el código de barras dice `30-70741550-5`. Como había "un" CUIT,
+  la puerta se cerraba y la boleta quedaba etiquetada con el CUIT equivocado, mandando a dar de alta
+  un proveedor inexistente. Ahora el código de barras también corre cuando el proveedor **no
+  matcheó** con un CUIT que sí se extrajo: cuesta 0 tokens y se autovalida (checksum + CAE + punto de
+  venta impresos). La **visión** mantiene la puerta angosta, porque sí cuesta tokens. Si el CUIT del
+  código tampoco está en el directorio, queda igual en `allTaxIds`, así que la etiqueta de Sin
+  Asignar nombra el CUIT real del emisor y no el que leyó mal la IA.
 - **Los CUITs de relleno ya no se toman como CUIT del consorcio (2026-08-26)**. `23000000000`
   **pasa** el checksum mod-11 (2×5 + 3×4 = 22), así que `extractCuitsFromText` lo levantaba como un
   CUIT válido. Caso real: ASCENSORES CHERE facturó al CONSORCIO DE PROPIETARIOS FRANKLIN 25 poniendo

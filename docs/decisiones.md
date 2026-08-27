@@ -116,6 +116,33 @@ todos iguales — y `extractCuitsFromText` los descarta. El checksum solo no alc
 Con el filtro, esa boleta cae en **`CUIT DE CONSORCIO INEXISTENTE EN BOLETA`**, que es la lectura
 correcta y la que dice qué hacer: exigirle al proveedor que emita con el CUIT del consorcio.
 
+### Corolario 2 — el código de barras tapado por un CUIT mal leído (mismo día)
+
+`Fact. 51837` (B. Pace e Hijos, ARAOZ 192) tiene el membrete en imagen. El texto directo son 541
+caracteres y **no** contiene el CUIT del emisor, pero sí la línea del código de barras AFIP:
+
+```
+3070741550506001086095857203130202603121
+   └─ CUIT 30-70741550-5 · tipo 06 · pto vta 0010 · CAE 86095857203130 · vto 20260312
+```
+
+Todo corrobora con lo impreso (`B / 06`, `Nro. 0010-00051837`, `Nro. de CAE: 86095857203130`).
+
+Pero la IA devolvió `30-70701800-6`, un CUIT que **no está en el papel**. Como el gate del rescate
+determinístico exigía que **no** hubiera CUIT de proveedor, un CUIT mal leído alcanzaba para cerrar
+la puerta: la boleta quedaba en Sin Asignar etiquetada con el CUIT inventado.
+
+**Decisión:** separar las dos puertas.
+
+| Fallback | Cuándo corre | Por qué |
+|---|---|---|
+| Código de barras | Falta el CUIT **o** el proveedor no matcheó | 0 tokens y se autovalida |
+| Visión (Gemini) | Sólo cuando falta el CUIT | Cuesta tokens |
+
+Además, si el CUIT del código tampoco está en el directorio, el re-matching se conserva igual: el
+CUIT real queda en `allTaxIds` y la etiqueta de Sin Asignar nombra al emisor verdadero. El
+administrador da de alta el proveedor correcto en vez de uno que no existe.
+
 ### Impacto
 
 `src/lib/cuit.ts` (`isPlaceholderCuit` + filtro en `extractCuitsFromText`),
