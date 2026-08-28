@@ -90,6 +90,28 @@ una factura llegó como "CONSORCIO DE PROPIETARIOS EVA PERON" (el número estaba
   código dice `30-70741550-5`.
 - 13 tests nuevos. Suite **807 → 819**.
 
+### Verificado en producción (2026-08-28)
+
+Primera corrida real, 4 boletas: **1 ok, 3 sin asignar**, las tres correctamente etiquetadas.
+
+| Boleta | Resultado | Etiqueta |
+|---|---|---|
+| `Fact. 51837` | **ok** | rescatada por el código de barras |
+| `FcB 00002033` | sin asignar | `CUIT DE CONSORCIO NO REGISTRADO EN DB: 30601201751` |
+| `Factura C 00001201` | sin asignar | `CUIT DE CONSORCIO NO REGISTRADO EN DB: 30545412876` |
+| `FcB 00002273` | sin asignar | `CUIT DE CONSORCIO NO REGISTRADO EN DB: 33557848709` |
+
+El rescate por código de barras funcionó exactamente como se diseñó: la IA devolvió
+`30-70701800-6` (no está en el papel), el proveedor no matcheó, el código aportó
+`30-70741550-5` y la boleta se resolvió **sin gastar tokens**.
+
+Hallazgos de la corrida:
+- **Cerebras devolvió 402 en las 4 boletas.** La cadena depende 100% de Gemini free tier.
+- Una boleta tardó **89 s sólo en la IA** (100 s en total): el barrido de modelos de Gemini
+  peleando con la cuota diaria. Es la presión del free tier haciéndose visible.
+- Bug encontrado y corregido: las etiquetas nuevas no estaban en `KNOWN_SUFFIX_TAGS`, así que
+  un segundo reproceso las habría apilado en el nombre del archivo.
+
 ### ⚠️ Antes de desplegar
 **Verificar que TODOS los edificios tengan CUIT cargado en `_Consorcios`.** Un edificio sin CUIT deja
 de matchear cualquier factura común. En el lote de diagnóstico, `Abono Agosto Franklin 25` había

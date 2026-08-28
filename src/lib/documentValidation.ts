@@ -37,6 +37,12 @@ export const KNOWN_SUFFIX_TAGS = [
   "CONSORCIO SIN REGISTRAR",
   "SIN PERÍODO",
   "LSP SIN REGISTRAR",
+  // Facturas comunes (2026-08-26). Van DESPUÉS de las viejas para que un archivo
+  // que arrastra una etiqueta anterior también se limpie al reprocesarse.
+  "CUIT DE CONSORCIO INEXISTENTE EN BOLETA",
+  "CUIT DE CONSORCIO NO REGISTRADO EN DB",
+  "CUIT DE PROVEEDOR INEXISTENTE EN BOLETA",
+  "CUIT DE PROVEEDOR NO REGISTRADO EN DB",
 ] as const;
 
 function stripKnownSuffixTags(base: string): string {

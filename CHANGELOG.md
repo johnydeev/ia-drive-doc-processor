@@ -34,6 +34,11 @@
   alta, ningún reintento lo resuelve y gastaría tokens al vacío.
 
 ### Fixed
+- **Las etiquetas nuevas de CUIT no se apilaban al reprocesar (2026-08-28)**. `KNOWN_SUFFIX_TAGS`
+  — la lista que `appendTag` usa para limpiar de forma idempotente — no incluía las cuatro etiquetas
+  nuevas. La primera pasada las aplicaba bien (limpiaba la etiqueta vieja), pero un segundo
+  reproceso habría dejado `x - CUIT DE ... - CUIT DE ....pdf`. Detectado revisando la primera corrida
+  real en producción.
 - **Un CUIT mal leído por la IA ya no bloquea el rescate por código de barras (2026-08-26)**. El
   fallback determinístico de la RG 1702 sólo corría cuando **no** se había extraído ningún CUIT de
   proveedor. Caso real (`Fact. 51837`): membrete en imagen, la IA devolvió `30-70701800-6` — un CUIT

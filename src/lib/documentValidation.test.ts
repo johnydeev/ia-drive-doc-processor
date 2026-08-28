@@ -19,6 +19,26 @@ describe("documentValidation existente", () => {
 });
 
 describe("appendTag (etiquetado idempotente)", () => {
+  it("no apila las etiquetas nuevas de CUIT al reprocesar", () => {
+    // Producción 2026-08-28: una boleta reprocesada tres veces terminaría como
+    // "x - CUIT DE ... - CUIT DE ... - CUIT DE ....pdf" si el tag no se limpia.
+    expect(
+      appendTag("FcB 00002033 - CUIT DE CONSORCIO NO REGISTRADO EN DB.pdf", "CUIT DE CONSORCIO NO REGISTRADO EN DB")
+    ).toBe("FcB 00002033 - CUIT DE CONSORCIO NO REGISTRADO EN DB.pdf");
+  });
+
+  it("reemplaza una etiqueta vieja por la nueva de CUIT", () => {
+    expect(
+      appendTag("FcB 00002033 - CONSORCIO SIN REGISTRAR.pdf", "CUIT DE CONSORCIO NO REGISTRADO EN DB")
+    ).toBe("FcB 00002033 - CUIT DE CONSORCIO NO REGISTRADO EN DB.pdf");
+  });
+
+  it("reemplaza una etiqueta de CUIT por otra cuando cambia el motivo", () => {
+    expect(
+      appendTag("Fact. 51837 - CUIT DE PROVEEDOR INEXISTENTE EN BOLETA.pdf", "CUIT DE PROVEEDOR NO REGISTRADO EN DB")
+    ).toBe("Fact. 51837 - CUIT DE PROVEEDOR NO REGISTRADO EN DB.pdf");
+  });
+
   it("agrega la etiqueta antes de la extensión", () => {
     expect(appendTag("factura.pdf", "SIN PROVEEDOR")).toBe("factura - SIN PROVEEDOR.pdf");
   });
