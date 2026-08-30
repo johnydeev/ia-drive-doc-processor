@@ -72,6 +72,38 @@ selectiva sólo lista lo que está ahí.
 
 - [ ] Definir cuál es el CUIT correcto de **Metrogas**: la base tiene `30-65786367-6`.
 
+## 🗓️ El vencimiento se veía un día antes en Boletas entrantes (2026-08-29)
+
+**Estado: implementado y verificado (typecheck + lint 0 errores + 829 tests + build + build:jobs OK).
+Sin migración. Sin commitear al momento de escribir esto.**
+
+Lo reportó el owner mirando la boleta `00002-00208625`: la base dice `2026-07-07` y la tabla mostraba
+`6/7/26`. Pasaba con **todas** las boletas.
+
+**Causa raíz: formateo, no datos.** El `dueDate` es una fecha de calendario y se guarda a medianoche
+UTC. `formatDateOnly` de `/admin/boletas` la formateaba en la zona del navegador: en AR (UTC-3) la
+medianoche del 7 son las 21:00 del 6. La vista de consorcios **no** tenía el bug — su `formatDate` ya
+pasaba `timeZone: "UTC"`, con el comentario que lo explica; Boletas entrantes nació con su propio
+helper y se quedó sin esa parte.
+
+La cadena de escritura estaba sana en todos sus tramos: la IA devuelve `YYYY-MM-DD`, Sheets recibe el
+string crudo y la base guarda medianoche UTC. **No hay datos que corregir.**
+
+Hecho:
+- `formatDateOnly` pasa a llevar `timeZone: "UTC"`. `formatDateTime` (que muestra `createdAt`, un
+  instante real) **queda en hora local a propósito**.
+- Los dos helpers salieron de `page.tsx` a **`boletas/lib/format.ts`**, junto al resto de la lógica
+  pura de la vista, y estrenan **7 tests**. El test fuerza `process.env.TZ` a Buenos Aires: sin eso
+  el caso pasa en verde en un runner en UTC y no prueba nada.
+- Caso más visible que quedó fijado por test: un vencimiento del 1° de mes se mostraba como el
+  **último día del mes anterior** (`2026-09-01` → `31/8/26`).
+
+**Pendiente anotado (no se hizo acá):** hay **tres** helpers de fecha casi iguales en el panel
+(`boletas`, `consortiums`, `invoices`). La fuente única corresponde, pero mezclarla con un bugfix de
+producción amplía el diff; el riesgo real es que el próximo helper vuelva a nacer sin `timeZone`.
+
+Detalle y alternativas descartadas: `docs/decisiones.md` (2026-08-29).
+
 ## 📋 Tablero del owner (verificado contra la base el 2026-08-29)
 
 Todo lo de acá lo hace el owner; nada requiere cambios de código.
@@ -87,14 +119,54 @@ Todo lo de acá lo hace el owner; nada requiere cambios de código.
 | 7 | **Partidas de AGIP en `_LspServices`** | ❌ **0 filas** | Todo el soporte de ABL |
 | 8 | `_LspServices` faltantes: AySA `1015440` (SAN ANTONIO 345), Edesur `100188012` | ❌ | Esas boletas rebotan sin fallback |
 | 9 | **Instalar poppler** (`pdftoppm` en el PATH) | ❌ | Probar boletas escaneadas y de membrete en imagen |
-| 10 | Corregir a mano la boleta `00002-00208625` (tiene el vto. del CAE) | ❌ | — |
+| 10 | Reprocesar la boleta `00002-00208625` (tiene el vto. del CAE) | ❌ | — |
 | 11 | Banco propio para Edificio de Prueba | ❌ | Sólo cosmético en la vista de obligaciones |
-| 12 | Definir el CUIT correcto de Metrogas | ❌ | — |
+| 12 | Definir el CUIT correcto de Metrogas | ✅ se cierra: el de la base es válido | — |
 | 13 | Lote fijo de regresión (15-25 boletas + `.expected.json`) | ❌ | Comparar key free vs paga de Gemini |
 
 **Riesgo operativo abierto, sin dueño:** en la corrida real del 2026-08-28 **Cerebras devolvió 402 en
 las 4 boletas**. La cadena está colgada de Gemini free tier, cuya cuota es diaria **por modelo**; una
 boleta tardó 89 s sólo en IA barriendo modelos agotados.
+
+### Detalle de la tarea 10 — dónde está la boleta `00002-00208625`
+
+| Dato | Valor |
+|---|---|
+| Consorcio | **EVA PERON 1761** |
+| Proveedor | `ROMERO MIGUEL A` (Fumigaciones Miguel) |
+| Período | **08/2026** (`ACTIVE`) |
+| Monto | $ 69.200,00 |
+| Vencimiento cargado | `2026-07-07` ← es el vto. del CAE, tiene que quedar **vacío** |
+| Por qué se veía `6/7/26` | Bug de formateo de la vista, arreglado el 2026-08-29. **Son dos problemas distintos**: la vista lo corría un día, y el dato en sí es la fecha equivocada (la del CAE) |
+| PDF | https://drive.google.com/file/d/1cO00X0m5tQXy-pbvsCuOh8NxjdCCS4pS/view |
+
+**No se corrige a mano: no hay endpoint ni UI para editar el vencimiento de una boleta.** El camino
+es reprocesarla: borrarla desde **Boletas entrantes** (`/admin/boletas`) devuelve el PDF a
+`Pendientes`, el scheduler la reencola y el guard del CAE (ya desplegado) la vuelve a extraer con el
+vencimiento vacío. **No tiene pagos registrados**, así que el borrado no va a dar 409.
+
+> Ojo: borrarla desde la pestaña **Boletas** del consorcio manda el PDF a **Revisión** y **no** se
+> reprocesa. Tiene que ser desde Boletas entrantes.
+
+### Detalle de la tarea 12 — el CUIT de Metrogas
+
+La duda venía del diagnóstico del 2026-08-17: la base tenía `30-65786367-6` y `CLAUDE.md` documentaba
+`30-65786442-4`. **Lo resuelve el checksum, sin consultar a nadie** (validado con `isValidCuit` de
+`src/lib/cuit.ts`):
+
+| CUIT | Válido |
+|---|---|
+| `30-65786367-6` (el de la base) | **sí** |
+| `30-65786442-4` (el que decía la doc) | **no** — dígito verificador mal, debería ser 7 |
+
+O sea el de la doc era un CUIT **imposible**, seguramente mal transcripto. `CLAUDE.md` ya no lo
+menciona (se quitó la tabla que hardcodeaba un CUIT por empresa), así que la contradicción sólo vivía
+en este archivo.
+
+**Además el CUIT de Metrogas casi no importa para el pipeline:** sus boletas se asignan por el
+**número de cliente** contra `LspService` (23 servicios cargados), no por CUIT — en las boletas de
+servicio el CUIT del emisor suele estar sólo en el logo. El CUIT del proveedor se usa para mostrarlo
+y para la hoja, no para matchear.
 
 ## 🔑 Facturas comunes: matching 100% por CUIT (2026-08-26)
 

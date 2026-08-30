@@ -8,6 +8,7 @@ import { useAuthGuard } from "@/lib/useAuthGuard";
 import { useBatchRunner, type BatchEntry } from "./hooks/useBatchRunner";
 import { BatchProgressModal } from "./components/BatchProgressModal";
 import { adaptDeleteResponse, adaptMoveResponse, SKIP_LABELS } from "./lib/batchAdapters";
+import { formatDateOnly, formatDateTime } from "./lib/format";
 import type { BatchItemResult } from "./lib/batchProgress";
 
 type ThemeMode = "dark" | "light";
@@ -41,15 +42,6 @@ type MovePreviewItem = { invoiceId: string; consortium: string | null; movable: 
 function formatAmount(v: number | null) {
   if (v == null) return "—";
   return new Intl.NumberFormat("es-AR", { style: "currency", currency: "ARS", minimumFractionDigits: 2 }).format(v);
-}
-function formatDateTime(iso: string) {
-  const d = new Date(iso);
-  return isNaN(d.getTime()) ? "—" : d.toLocaleString("es-AR", { dateStyle: "short", timeStyle: "short" });
-}
-function formatDateOnly(iso: string | null) {
-  if (!iso) return "—";
-  const d = new Date(iso);
-  return isNaN(d.getTime()) ? "—" : d.toLocaleDateString("es-AR", { dateStyle: "short" });
 }
 /** Últimos 4 dígitos del número de boleta (identificador corto para la lista). */
 function formatBoletaShort(n: string | null) {

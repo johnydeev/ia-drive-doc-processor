@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+### Fixed
+- **El vencimiento se mostraba un día antes en Boletas entrantes (2026-08-29)**. `formatDateOnly` de
+  `/admin/boletas` formateaba el `dueDate` —una fecha de calendario, guardada a medianoche UTC— en la
+  zona horaria del navegador. En Argentina (UTC-3) la medianoche del 7 es las 21:00 del 6, así que la
+  tabla mostraba el día anterior en **todas** las boletas; en un vencimiento del primero de mes el
+  error cambiaba hasta el mes (`2026-09-01` se veía `31/8/26`). Se agregó `timeZone: "UTC"`, igual
+  que en la vista de consorcios, que ya lo tenía. `createdAt` sigue formateándose en hora local, que
+  es lo correcto para un instante real. Los helpers pasaron de `page.tsx` a
+  `boletas/lib/format.ts` con 7 tests que fuerzan `TZ=America/Argentina/Buenos_Aires` — sin eso el
+  caso pasa en verde en un runner en UTC y no prueba nada. **El dato guardado siempre estuvo bien**:
+  no hay que corregir boletas. Suite 822 → 829.
+
 ### Docs
 - **Pasada de verificación de pendientes contra la base de producción (2026-08-29)**. Sin cambios de
   código: se consultó la base para saber qué tareas del owner ya estaban hechas. Resultados:

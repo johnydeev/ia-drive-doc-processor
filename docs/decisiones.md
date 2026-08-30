@@ -4,6 +4,69 @@ Registro de decisiones tomadas ante problemas reales encontrados en producción.
 
 ---
 
+## 2026-08-29 — El vencimiento se mostraba un día antes en Boletas entrantes
+
+### Problema
+
+El owner reportó que en **Boletas entrantes** (`/admin/boletas`) el vencimiento de **todas** las
+boletas aparece **un día antes** del que dice el papel. Caso testigo: la boleta `00002-00208625`
+(EVA PERON 1761) tiene en la base `dueDate = 2026-07-07 00:00:00` y la tabla mostraba `6/7/26`.
+
+Es un error de **presentación**, no de datos. La traza completa del vencimiento:
+
+| Etapa | Valor | Estado |
+|---|---|---|
+| La IA lo extrae | `"2026-07-07"` (los prompts piden `YYYY-MM-DD`) | ✅ |
+| Se escribe en Sheets | el string crudo, sin convertir a `Date` | ✅ |
+| Se guarda en la base | `new Date("2026-07-07")` → medianoche **UTC** | ✅ |
+| La API lo serializa | `dueDate.toISOString()` → `"2026-07-07T00:00:00.000Z"` | ✅ |
+| **La tabla lo formatea** | `toLocaleDateString("es-AR", { dateStyle: "short" })` | ❌ |
+
+El último paso formatea un instante UTC en la **zona del navegador**. En Argentina (UTC-3) la
+medianoche del 7 es **las 21:00 del 6**, así que se muestra el 6. Pasa siempre, con todas las
+boletas, porque todas las fechas *date-only* se guardan a medianoche UTC. En un vencimiento del
+primero de mes el error cambia hasta el mes: `2026-09-01` se veía como `31/8/26`.
+
+La vista de consorcios (`/admin/consortiums`) **no** tenía el bug: su `formatDate` ya pasaba
+`timeZone: "UTC"`, con un comentario explicando exactamente este riesgo. Boletas entrantes nació con
+su propio helper y se quedó sin esa parte.
+
+### Decisión
+
+Formatear las fechas *date-only* en **UTC**, igual que la vista de consorcios, y separar
+explícitamente las dos clases de fecha que conviven en la tabla:
+
+- **`dueDate`** (día del calendario, sin hora) → `timeZone: "UTC"`. El día que dice el papel es el
+  mismo para todos los que lo miren.
+- **`createdAt`** (instante real) → **sin** `timeZone`. Es un momento en el tiempo y corresponde
+  mostrarlo en la zona del que mira.
+
+Los dos helpers salieron de `page.tsx` a `boletas/lib/format.ts`, que es donde vive el resto de la
+lógica pura de esa vista (`batchAdapters`, `batchProgress`), y estrenaron tests. El test fuerza
+`process.env.TZ` a `America/Argentina/Buenos_Aires`: sin eso el caso pasa en verde en un runner en
+UTC y no prueba nada.
+
+### Alternativas descartadas
+
+- **Guardar el vencimiento como `String` en vez de `DateTime`.** Resolvería la clase entera de bugs
+  de zona horaria, pero es una migración de datos sobre una columna que participa del business key y
+  de la deduplicación, para arreglar un formateo de una línea.
+- **Unificar los helpers de fecha de todo el panel en `src/lib/`.** Es la fuente única que
+  corresponde, pero toca `consortiums`, `invoices` y `obligaciones` en el mismo cambio que un bugfix
+  de producción. Queda anotado como pendiente: hoy hay tres helpers de fecha casi iguales, y el
+  próximo que se escriba puede volver a nacer sin `timeZone`.
+- **Restar el offset al `Date` antes de formatear.** Es el arreglo que parece obvio y falla en
+  cuanto cambia el horario de verano de la zona del navegador.
+
+### Impacto
+
+- `src/app/admin/boletas/lib/format.ts` (nuevo) + `format.test.ts` (nuevo, 7 tests).
+- `src/app/admin/boletas/page.tsx`: se le quitaron los dos helpers locales y ahora importa.
+- **No hay que corregir datos**: lo guardado siempre estuvo bien. Se arregló lo que se veía.
+- Suite **822 → 829**.
+
+---
+
 ## 2026-08-26 — Facturas comunes: la identidad es el CUIT, no el nombre
 
 ### Problema
