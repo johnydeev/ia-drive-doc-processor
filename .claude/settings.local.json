@@ -5,7 +5,8 @@
       "Bash(node -e \"const m = require\\(''pdf-parse''\\); console.log\\(Object.keys\\(m\\)\\)\")",
       "Bash(node -e \":*)",
       "Bash(npx tsx -e \":*)",
-      "Bash(SKIP_ENV_VALIDATION=1 npm run build)"
+      "Bash(SKIP_ENV_VALIDATION=1 npm run build)",
+      "mcp__c73694b2-6762-4495-be7a-d6abb68d52ac__list_projects"
     ]
   }
 }

@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+### Docs
+- **Pasada de verificación de pendientes contra la base de producción (2026-08-29)**. Sin cambios de
+  código: se consultó la base para saber qué tareas del owner ya estaban hechas. Resultados:
+  Edificio de Prueba **existe** (CUIT `11-11111111-9`, período 08/2026 activo, sin banco asignado);
+  la migración `20260818120000_unique_cuit_por_cliente` está **aplicada** desde el 2026-08-19 con sus
+  dos índices; los **47 consorcios tienen CUIT** (precondición de la reforma de matching); `AGIP`
+  está cargado como proveedor pero **no tiene ni una partida en `_LspServices`**, así que el soporte
+  de ABL sigue sin poder funcionar; los duplicados del ALTA y las altas de `RENZI MARIANA DEL PILAR`
+  y `ASCENSORES CHERE` están resueltas. `docs/progreso.md` estrena un **tablero del owner** con el
+  estado de las 13 tareas abiertas, y se corrigieron los "Estado: sin commitear" de las secciones de
+  las sesiones 55-60, que ya estaban commiteadas y desplegadas.
+
 ### Changed
 - **Facturas comunes: el matching de consorcio pasa a ser SOLO por CUIT (2026-08-26)**. Se eliminan
   los niveles por nombre (exacto / fuzzy / alias) para las boletas que no son LSP. El nombre y la

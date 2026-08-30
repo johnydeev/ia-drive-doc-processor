@@ -1,10 +1,17 @@
 # Progreso del proyecto — drive-doc-processor
 
-Actualizado al 26/08/2026 (sesión 60 — facturas comunes con matching 100% por CUIT y 4 etiquetas nuevas; soporte de ABL/AGIP; Groq eliminado; revertido el cambio de orden de la cadena: pendiente de key paga).
+Actualizado al 29/08/2026 (sesión 61 — pasada de verificación contra la base de producción: se
+confirmó qué pendientes ya estaban hechos y se corrigieron los estados de commit).
 
-## ✅ Smokes pendientes en producción (al 2026-08-20)
+> **Cómo leer los "Estado:" de este archivo.** Se escriben en el momento de terminar el trabajo, así
+> que un **"Sin commitear"** en una sección vieja significa *no estaba commiteado ese día*, no que
+> siga pendiente. **Todo lo anterior a `b77c07b` (2026-08-28) está commiteado y desplegado** — cada
+> commit a `master` es un deploy real. Los estados se corrigieron hasta la sesión 60 inclusive; de
+> ahí para abajo el archivo queda como registro histórico.
 
-Todo lo de las sesiones 57 y 58 está commiteado y desplegado, pero **verificado sólo por tests**. Esto
+## ✅ Smokes pendientes en producción (al 2026-08-29)
+
+Todo lo de las sesiones 57 a 60 está commiteado y desplegado, pero **verificado sólo por tests**. Esto
 es lo que falta confirmar contra datos reales, en orden de dependencia.
 
 **Estado de las carpetas de Drive al momento de escribir esto:** Pendientes **0**, Sin Asignar **22**,
@@ -13,8 +20,13 @@ selectiva sólo lista lo que está ahí.
 
 ### 0. Preparación
 
-- [ ] Crear el consorcio **"Edificio de Prueba"** (ver su sección en `CLAUDE.md`: va en el ALTA, CUIT
-      placeholder, banco propio). Hoy **no existe**.
+- [x] Crear el consorcio **"Edificio de Prueba"** — **hecho** (verificado en la base el 2026-08-29:
+      `EDIFICIO DE PRUEBA`, CUIT `11-11111111-9`, período 08/2026 `ACTIVE`, 0 boletas).
+- [ ] **Asignarle un banco propio** (hoy `bankId = null`). No bloquea nada: sólo lo deja mezclado
+      entre los edificios reales en la vista de obligaciones, que agrupa por banco.
+- [ ] Si se lo quiere usar para probar el pipeline con un PDF real, cargarle `matchNames`. Con CUIT
+      placeholder **no matchea por CUIT** (no pasa checksum) y `matchNames` está vacío, así que hoy
+      no matchea por ningún camino.
 
 ### 1. Extracción — mover los PDFs a Pendientes y usar la corrida selectiva
 
@@ -60,10 +72,34 @@ selectiva sólo lista lo que está ahí.
 
 - [ ] Definir cuál es el CUIT correcto de **Metrogas**: la base tiene `30-65786367-6`.
 
+## 📋 Tablero del owner (verificado contra la base el 2026-08-29)
+
+Todo lo de acá lo hace el owner; nada requiere cambios de código.
+
+| # | Tarea | Estado | Bloquea |
+|---|---|---|---|
+| 1 | Todos los consorcios con CUIT en `_Consorcios` | ✅ 47/47, 0 sin CUIT | — |
+| 2 | `AGIP` en `_Proveedores` (CUIT vacío, TIPO `SERVICIO`) | ✅ cargado | — |
+| 3 | Consorcio **Edificio de Prueba** | ✅ existe (CUIT `11-11111111-9`, período 08/2026 `ACTIVE`) | — |
+| 4 | Migración `20260818120000_unique_cuit_por_cliente` | ✅ aplicada 2026-08-19 | — |
+| 5 | Duplicados del ALTA + alta de `RENZI MARIANA DEL PILAR` | ✅ resueltos | — |
+| 6 | Alta de `ASCENSORES CHERE` (`23-07773623-9`) | ✅ como `CHERE JUAN JOSE` | — |
+| 7 | **Partidas de AGIP en `_LspServices`** | ❌ **0 filas** | Todo el soporte de ABL |
+| 8 | `_LspServices` faltantes: AySA `1015440` (SAN ANTONIO 345), Edesur `100188012` | ❌ | Esas boletas rebotan sin fallback |
+| 9 | **Instalar poppler** (`pdftoppm` en el PATH) | ❌ | Probar boletas escaneadas y de membrete en imagen |
+| 10 | Corregir a mano la boleta `00002-00208625` (tiene el vto. del CAE) | ❌ | — |
+| 11 | Banco propio para Edificio de Prueba | ❌ | Sólo cosmético en la vista de obligaciones |
+| 12 | Definir el CUIT correcto de Metrogas | ❌ | — |
+| 13 | Lote fijo de regresión (15-25 boletas + `.expected.json`) | ❌ | Comparar key free vs paga de Gemini |
+
+**Riesgo operativo abierto, sin dueño:** en la corrida real del 2026-08-28 **Cerebras devolvió 402 en
+las 4 boletas**. La cadena está colgada de Gemini free tier, cuya cuota es diaria **por modelo**; una
+boleta tardó 89 s sólo en IA barriendo modelos agotados.
+
 ## 🔑 Facturas comunes: matching 100% por CUIT (2026-08-26)
 
-**Estado: implementado y verificado (typecheck + lint 0 errores + 812 tests + build + build:jobs OK).
-Sin migración. Sin commitear.**
+**Estado: implementado, verificado y EN PRODUCCIÓN. Sin migración. Commiteado en `f4d2cd1` +
+`ffd9126` + `b77c07b`.**
 
 El diagnóstico de una corrida selectiva mostró que el nombre del receptor no identifica un edificio:
 una factura llegó como "CONSORCIO DE PROPIETARIOS EVA PERON" (el número estaba sólo en la línea
@@ -112,10 +148,11 @@ Hallazgos de la corrida:
 - Bug encontrado y corregido: las etiquetas nuevas no estaban en `KNOWN_SUFFIX_TAGS`, así que
   un segundo reproceso las habría apilado en el nombre del archivo.
 
-### ⚠️ Antes de desplegar
-**Verificar que TODOS los edificios tengan CUIT cargado en `_Consorcios`.** Un edificio sin CUIT deja
-de matchear cualquier factura común. En el lote de diagnóstico, `Abono Agosto Franklin 25` había
-entrado por nombre (método `exacto`): con esta reforma necesita el CUIT de FRANKLIN 25.
+### ✅ Precondición verificada (2026-08-29)
+**Los 47 consorcios tienen CUIT cargado — 0 sin CUIT.** Era el riesgo de la reforma: un edificio sin
+CUIT deja de matchear cualquier factura común. En el lote de diagnóstico, `Abono Agosto Franklin 25`
+había entrado por nombre (método `exacto`); con esta reforma necesita el CUIT de FRANKLIN 25, que
+está cargado.
 
 > Criterio del owner: una boleta sin CUIT del consorcio **no sirve como respaldo de rendición de
 > cuentas** — no identifica fiscalmente a quién se le facturó. Que rebote es correcto, no un costo.
@@ -135,8 +172,8 @@ Detalle y alternativas descartadas: `docs/decisiones.md` (2026-08-26).
 
 ## 🏛️ ABL / Impuesto Inmobiliario de AGIP (2026-08-25)
 
-**Estado: implementado y verificado (typecheck + lint 0 errores + 807 tests + build + build:jobs OK).
-Sin migración. Falta cargar el directorio.**
+**Estado: implementado, verificado y EN PRODUCCIÓN. Sin migración. Commiteado en `f7edabc`.
+⚠️ Falta el paso 2 del directorio — sin él el código no sirve de nada.**
 
 El ABL no tenía soporte: su texto no pasa el gate `isUtilityBill`, así que caía en el prompt de
 facturas normales y terminaba en Sin Asignar siempre.
@@ -155,13 +192,15 @@ resuelve contra `LspService` igual que el número de cliente de Edesur.
 - 8 tests nuevos sobre el texto real de la boleta. Suite **799 → 807**.
 
 ### Pendiente — lo tiene que hacer el owner
-1. En `_Proveedores`: `AGIP` en RAZÓN SOCIAL, **CUIT vacío**, TIPO `SERVICIO`.
-2. En `_LspServices`: una fila por edificio — PROVEEDOR `AGIP`, NRO CLIENTE = la partida **sin
-   guiones ni dígito verificador** (`3755690`, no `007-003755690-1`).
-3. Sincronizar directorio y reencolar las boletas de ABL que estén en Sin Asignar.
+1. [x] En `_Proveedores`: `AGIP` en RAZÓN SOCIAL, **CUIT vacío**, TIPO `SERVICIO` — **hecho**
+   (verificado en la base el 2026-08-29).
+2. [ ] En `_LspServices`: una fila por edificio — PROVEEDOR `AGIP`, NRO CLIENTE = la partida **sin
+   guiones ni dígito verificador** (`3755690`, no `007-003755690-1`). **Hoy no hay ni una fila de
+   AGIP**: las 77 existentes son EDESUR 23, METROGAS 23, AYSA 20, TELECOM 7, EDENOR 4.
+3. [ ] Sincronizar directorio y reencolar las boletas de ABL que estén en Sin Asignar.
 
 > Sin el paso 2 las boletas siguen rebotando: la partida es lo único que identifica al edificio y no
-> hay fallback por nombre.
+> hay fallback por nombre. El paso 1 solo no alcanza.
 
 Detalle y alternativas descartadas: `docs/decisiones.md` (2026-08-25).
 
@@ -169,7 +208,7 @@ Detalle y alternativas descartadas: `docs/decisiones.md` (2026-08-25).
 
 ## 🥇 Gemini: modelos, 503 y medición (2026-08-24, revisado 2026-08-25)
 
-**Estado: implementado y verificado. Sin migración. Sin commitear.**
+**Estado: implementado, verificado y EN PRODUCCIÓN. Sin migración. Commiteado en `6cf43f4`.**
 
 > **Revisión del 2026-08-25 (sesión 60):** la entrega asumía una cuenta paga de Gemini que **no se
 > contrató**. El owner decidió no cargar crédito por ahora, así que se **revirtió la pieza 1**
@@ -280,7 +319,8 @@ degradar de modelo, no rendirse.
 ## 🗓️ Obligaciones por período: cada mes es una hoja cerrada (2026-08-20)
 
 **Estado: implementado y verificado (typecheck + lint 0 errores + 768 tests + build + build:jobs OK).
-Migración `20260820000000_invoice_carry_over_requested` **YA APLICADA** por el owner. Sin commitear.**
+Migración `20260820000000_invoice_carry_over_requested` **YA APLICADA** por el owner (2026-08-20
+20:07 UTC). Commiteado en `3a5d0ee` + `99f7253`.**
 
 Spec: `docs/superpowers/specs/2026-08-20-obligaciones-por-periodo-design.md`
 Plan: `docs/superpowers/plans/2026-08-20-obligaciones-por-periodo.md`
@@ -338,8 +378,9 @@ propio para que quede agrupado aparte en la vista de obligaciones.
 
 ## 🆔 El CUIT no se repite: validación en el sync + unique en la base (2026-08-18)
 
-**Estado: implementado y verificado (typecheck + lint 0 errores + 743 tests + build + build:jobs OK).
-Migración `20260818120000_unique_cuit_por_cliente` PENDIENTE de aplicar por el owner.**
+**Estado: implementado, verificado y EN PRODUCCIÓN. Commiteado en `85b6498`. Migración
+`20260818120000_unique_cuit_por_cliente` **YA APLICADA** (2026-08-19 18:22 UTC; verificado el
+2026-08-29: existen `Consortium_clientId_cuit_key` y `Provider_clientId_cuit_key`).**
 
 Origen: el owner cargó dos veces a `ROMERO RENZI CAMILA` en el ALTA. Al revisar la hoja aparecieron
 **dos** filas repetidas (también `CAMPANA JORGE ARIEL`), y al mirar el schema, el agujero grande:
@@ -365,14 +406,13 @@ Hecho:
 **Verificado antes de aplicar:** 0 CUITs repetidos entre los 186 proveedores y los 46 consorcios, y
 ninguno en el ALTA. El índice entra limpio.
 
-**⏳ Pendiente del owner:** aplicar la migración; borrar la fila repetida de `ROMERO RENZI CAMILA`
-(dejar la que tiene `CAMILA ROMERO RENZI | FUMIGACIONES MIGUEL`) y la de `CAMPANA JORGE ARIEL`;
-sincronizar para que entre `RENZI MARIANA DEL PILAR` (`27-16635120-6`), que ya está en la hoja.
+**✅ Cerrado (verificado el 2026-08-29):** migración aplicada, `ROMERO RENZI CAMILA` y
+`CAMPANA JORGE ARIEL` quedaron con una sola fila cada uno, y `RENZI MARIANA DEL PILAR`
+(`27-16635120-6`, fantasía `FUMIGACIONES MIGUEL`) ya está en la base.
 
 ## 📅 Guard del vencimiento del CAE (2026-08-18)
 
-**Estado: implementado y verificado (typecheck + lint 0 errores + 729 tests + build + build:jobs OK).
-Sin migración. Sin commitear.**
+**Estado: implementado, verificado y EN PRODUCCIÓN. Sin migración. Commiteado en `52a179c`.**
 
 **Lo encontró el primer reporte de la corrida selectiva**, el mismo día que se estrenó la feature. La
 factura `00002-00208625` (Fumigaciones Miguel → EVA PERON 1761) entró como `ok` con
@@ -412,7 +452,7 @@ diagnosticar las tres sin bajar un solo PDF:
 El directorio ya tiene dos de esa familia con fantasía "FUMIGACIONES MIGUEL" (`ROMERO MIGUEL A`
 20-16654129-9 y `ROMERO RENZI CAMILA` 27-33516399-6). Falta la tercera.
 
-**⏳ Pendiente del owner:** cargar `MARIANA DEL PILAR RENZI` (`27-16635120-6`) en `_Proveedores`.
+**✅ Hecho:** `RENZI MARIANA DEL PILAR` (`27-16635120-6`) está cargada (verificado 2026-08-29).
 
 **Detalle menor detectado:** en la Factura C la IA extrajo `consortium: "CONSUMIDOR FINAL"` — tomó la
 condición de IVA del receptor como nombre del edificio. No molestó porque el consorcio matcheó por
@@ -421,7 +461,8 @@ CUIT, pero en una boleta sin el CUIT del consorcio sería un rebote.
 ## 🎯 Corrida selectiva con diagnóstico (2026-08-18)
 
 **Estado: implementado y verificado (typecheck + lint 0 errores + 717 tests + build + build:jobs OK).
-Migración `20260818000000_processing_job_diagnostics` **YA APLICADA** por el owner. Sin commitear.**
+Migración `20260818000000_processing_job_diagnostics` **YA APLICADA** por el owner. Commiteado en
+`e161fc5`.**
 
 Diseño: `docs/superpowers/specs/2026-08-18-corrida-selectiva-diagnostico-design.md`
 
@@ -456,8 +497,7 @@ JSON con el texto de cada boleta.
 
 ## 🔎 El texto del OCR ya no se descarta por ser más corto (2026-08-18)
 
-**Estado: implementado y verificado (typecheck + lint 0 errores + 682 tests + build + build:jobs OK).
-Sin migración. Sin commitear.**
+**Estado: implementado, verificado y EN PRODUCCIÓN. Sin migración. Commiteado en `f4fbdff`.**
 
 Origen: `FC-0002-00208193-B` (CASTRO BARROS 1310) rebotó por SIN PROVEEDOR **teniendo el proveedor
 cargado**: el emisor es `ROMERO MIGUEL ANGEL` (Fumigaciones Miguel), CUIT `20-16654129-9`, y está en
@@ -493,8 +533,7 @@ y la boleta cae al fallback visual como hasta ahora — no empeora nada.
 
 ## 🔢 CUIT del emisor desde el código de barras AFIP (2026-08-18)
 
-**Estado: implementado y verificado (typecheck + lint 0 errores + 673 tests + build + build:jobs OK).
-Sin migración. Sin commitear.**
+**Estado: implementado, verificado y EN PRODUCCIÓN. Sin migración. Commiteado en `f4fbdff`.**
 
 Salió de revisar la carpeta Sin Asignar en Drive: `Fact. 51837` (ARAOZ 192) rebotó por SIN PROVEEDOR
 teniendo el CUIT del emisor **en el propio texto**, escondido dentro de la cadena de 40 dígitos del
@@ -550,8 +589,7 @@ diagnóstico.
 
 ## 📷 PDFs escaneados: extracción por Gemini Vision (2026-08-17)
 
-**Estado: implementado y verificado (typecheck + lint 0 errores + 661 tests + build + build:jobs OK).
-Sin migración. Sin commitear.**
+**Estado: implementado, verificado y EN PRODUCCIÓN. Sin migración. Commiteado en `3400c0a`.**
 
 Salió del diagnóstico de abajo: `FB0004-00033366` y `FB0004-00034082` son PDFs cuyas páginas son
 imágenes (12 caracteres de texto), el OCR no alcanzó y terminaron en Revisión por SIN MONTO. Nunca
@@ -630,7 +668,7 @@ se detectó uno faltante: la cuenta AySA `1015440` de SAN ANTONIO 345.
 | AySA SAN ANTONIO 345 | **ok** | Ídem. Matchea por nombre/dirección; su `LspService` igual falta |
 | DON BOSCO 3859 / PONCE MIGUEL ANGEL | **ok** | Ídem |
 | EDENOR PUEYRREDON 2418 | resuelto al cargar ALTA | `LspService` vacío (arriba) |
-| Reparación BELGRANO 1431 | falta dato | CUIT `23-07773623-9` (ASCENSORES CHERE) no está en `_Proveedores`. Existe `CHERE TOBIAS NICOLAS` con `20-41914174-8`, que es otra persona |
+| Reparación BELGRANO 1431 | **resuelto** | Faltaba el CUIT `23-07773623-9` (ASCENSORES CHERE); se cargó como `CHERE JUAN JOSE`. No confundir con `CHERE TOBIAS NICOLAS` (`20-41914174-8`), que es otra persona |
 | `FB0004-00033366` / `FB0004-00034082` | Revisión | PDFs escaneados: 12 caracteres de texto. Nunca llegaron a `Invoice` (no hay boletas con monto nulo desde el 08/06). Problema de OCR/visión, no de prompt |
 | LSD ×5 | fuera de alcance | Ver pendiente abajo |
 | VEP AFIP ×2 | fuera de alcance | Decisión del owner: ignorarlos |
@@ -660,7 +698,10 @@ se detectó uno faltante: la cuenta AySA `1015440` de SAN ANTONIO 345.
       Hoy los 5 LSD caen en Sin Asignar y gastan tokens; 2 de 5 además dan **falso positivo FATERYH**
       en el router (el texto trae el nombre del convenio colectivo de la federación).
 - [x] **PDFs escaneados sin texto útil** — resuelto el 2026-08-17 con la rama de Vision (ver arriba).
-- [ ] Cargar `ASCENSORES CHERE` (`23-07773623-9`) y completar los `_LspServices` faltantes.
+- [x] Cargar `ASCENSORES CHERE` (`23-07773623-9`) — **hecho**: está como `CHERE JUAN JOSE` con
+      fantasía `ASCENSORES CHERE` (verificado 2026-08-29).
+- [ ] Completar los `_LspServices` faltantes (AySA `1015440` de SAN ANTONIO 345, Edesur `100188012`,
+      y **todas** las partidas de AGIP).
 
 ## 🏷️ `_Proveedores`: terminología, alias múltiples y oficio (2026-08-17)
 
