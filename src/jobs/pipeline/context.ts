@@ -5,6 +5,7 @@ import type { AiUsageMetrics } from "@/types/aiUsage.types";
 import type { InvoiceRepository } from "@/repositories/invoice.repository";
 import type { identifyLSPProvider } from "@/lib/extraction";
 import { pipelineLog } from "@/lib/logger";
+import { AiRequestCounter } from "@/lib/aiRequestCounter";
 
 /** Tipo del registro devuelto por la verificación de duplicado por hash. */
 type DuplicateByHash = Awaited<ReturnType<InvoiceRepository["findDuplicateByHash"]>>;
@@ -74,6 +75,14 @@ export interface PipelineContext {
   startedAt: number;
 
   // ── Estado acumulado que fluye entre pasos (lo van poblando a medida que avanzan) ──
+  /**
+   * Requests HTTP a la IA de ESTA boleta, abiertas por `provider:model`. Lo
+   * incrementan los extractores, no el pipeline: el barrido de modelos de Gemini
+   * son varias requests dentro de un solo intento de la cadena.
+   */
+  aiRequests: AiRequestCounter;
+  /** `true` si se gastó Gemini Vision (imagen, PDF escaneado o membrete). */
+  usedVision: boolean;
   /** Binario del PDF/imagen descargado de Drive. */
   buffer: Buffer | null;
   /** URL pública del archivo en Drive. */
@@ -152,6 +161,8 @@ export function createPipelineContext(
 
   return {
     file, deps, summary, m, runStep, startedAt: Date.now(),
+    aiRequests: new AiRequestCounter(),
+    usedVision: false,
     buffer: null,
     sourceFileUrl: "",
     finalSourceFolderId: undefined,

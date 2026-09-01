@@ -6,6 +6,7 @@ import {
 } from "@/lib/extraction";
 import { AiUsageMetrics, AiProvider } from "@/types/aiUsage.types";
 import { AiExtractor } from "@/services/aiExtraction";
+import type { AiRequestCounter } from "@/lib/aiRequestCounter";
 import { ExtractedDocumentData } from "@/types/extractedDocument.types";
 
 /**
@@ -62,11 +63,12 @@ export class OpenAICompatibleExtractorService implements AiExtractor {
     }
   }
 
-  async extractStructuredData(text: string): Promise<ExtractedDocumentData> {
+  async extractStructuredData(text: string, counter?: AiRequestCounter): Promise<ExtractedDocumentData> {
     if (!text.trim()) {
       throw new Error(`No text provided for ${this.provider} extraction`);
     }
     this.lastUsage = null;
+    counter?.record(this.provider, this.model);
     const prompt = buildExtractionPrompt(text);
 
     const response = await this.complete({

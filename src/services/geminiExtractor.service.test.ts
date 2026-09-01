@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import type { GenerativeModel } from "@google/generative-ai";
 import { GeminiExtractorService } from "@/services/geminiExtractor.service";
 import { RateLimitError } from "@/lib/aiErrors";
+import { AiRequestCounter } from "@/lib/aiRequestCounter";
 
 /** Respuesta exitosa con la forma que devuelve el SDK. */
 function okResponse(overrides: Record<string, unknown> = {}) {
@@ -261,5 +262,56 @@ describe("GeminiExtractorService — tokens del fallback visual", () => {
       consortiumName: null,
       consortiumTaxId: null,
     });
+  });
+});
+
+describe("GeminiExtractorService — contador de requests", () => {
+  it("cuenta una request por cada modelo del barrido", async () => {
+    const fake = new FakeGemini({});           // los 3 modelos dan 404
+    const counter = new AiRequestCounter();
+
+    await expect(fake.extractStructuredData(TEXTO, counter)).rejects.toThrow();
+
+    // La verdad la tiene el fake: una entrada en `calls` por generateContent.
+    expect(counter.total()).toBe(fake.calls.length);
+    expect(counter.total()).toBe(3);
+  });
+
+  it("cuenta una sola request cuando el primer modelo responde", async () => {
+    const fake = new FakeGemini({ "gemini-2.5-flash-lite": [okResponse()] });
+    const counter = new AiRequestCounter();
+
+    await fake.extractStructuredData(TEXTO, counter);
+
+    expect(counter.total()).toBe(1);
+    expect(counter.snapshot()).toEqual({ "gemini:gemini-2.5-flash-lite": 1 });
+  });
+
+  it("cuenta el reintento del 503 como una request más del MISMO modelo", async () => {
+    const fake = new FakeGemini({
+      "gemini-2.5-flash-lite": [httpError(503, "Service Unavailable"), okResponse()],
+    });
+    const counter = new AiRequestCounter();
+
+    await fake.extractStructuredData(TEXTO, counter);
+
+    expect(counter.snapshot()).toEqual({ "gemini:gemini-2.5-flash-lite": 2 });
+    expect(counter.total()).toBe(fake.calls.length);
+  });
+
+  it("cuenta las requests de la visión, que antes no dejaban rastro", async () => {
+    const fake = new FakeGemini({
+      "gemini-2.5-flash-lite": [okResponse({ providerTaxId: "30-71497816-7" })],
+    });
+    const counter = new AiRequestCounter();
+
+    await fake.extractPartiesFromImage(Buffer.from("fake-png"), undefined, counter);
+
+    expect(counter.total()).toBe(1);
+  });
+
+  it("sin contador se comporta igual (el parámetro es opcional)", async () => {
+    const fake = new FakeGemini({ "gemini-2.5-flash-lite": [okResponse()] });
+    await expect(fake.extractStructuredData(TEXTO)).resolves.toBeTruthy();
   });
 });

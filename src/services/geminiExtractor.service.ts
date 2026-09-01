@@ -8,6 +8,7 @@ import {
 import { AiUsageMetrics } from "@/types/aiUsage.types";
 import { AiExtractor } from "@/services/aiExtraction";
 import { isRateLimitError, isTransientServerError, RateLimitError } from "@/lib/aiErrors";
+import type { AiRequestCounter } from "@/lib/aiRequestCounter";
 import { ExtractedDocumentData } from "@/types/extractedDocument.types";
 
 /**
@@ -155,13 +156,19 @@ export class GeminiExtractorService implements AiExtractor {
    */
   private async generateWithTransientRetry(
     modelName: string,
-    request: Parameters<GenerativeModel["generateContent"]>[0]
+    request: Parameters<GenerativeModel["generateContent"]>[0],
+    counter?: AiRequestCounter
   ): Promise<GenerateContentResult> {
+    // Este es el ÚNICO punto del servicio donde se hace la llamada HTTP, así que
+    // es el único que cuenta: el barrido de modelos y el reintento por 503 quedan
+    // cubiertos sin repetir el `record` en los tres métodos públicos.
     try {
+      counter?.record("gemini", modelName);
       return await this.getModel(modelName).generateContent(request);
     } catch (error) {
       if (!isTransientServerError(error)) throw error;
       await this.sleep(TRANSIENT_RETRY_BACKOFF_MS);
+      counter?.record("gemini", modelName);
       return await this.getModel(modelName).generateContent(request);
     }
   }
@@ -190,7 +197,7 @@ export class GeminiExtractorService implements AiExtractor {
     };
   }
 
-  async extractStructuredData(text: string): Promise<ExtractedDocumentData> {
+  async extractStructuredData(text: string, counter?: AiRequestCounter): Promise<ExtractedDocumentData> {
     if (!text.trim()) {
       throw new Error("No text provided for Gemini extraction");
     }
@@ -204,7 +211,7 @@ export class GeminiExtractorService implements AiExtractor {
         const result = await this.generateWithTransientRetry(modelName, {
           contents: [{ role: "user", parts: [{ text: prompt }] }],
           generationConfig: { temperature: 0, responseMimeType: "application/json" },
-        });
+        }, counter);
         const outputText = result.response.text() || "{}";
         const parsed = parseExtractionOutput(outputText);
         const refined = refineExtractionWithRawText(parsed, text);
@@ -237,7 +244,8 @@ export class GeminiExtractorService implements AiExtractor {
    */
   async extractPartiesFromImage(
     pngBuffer: Buffer,
-    knownConsortiumName?: string
+    knownConsortiumName?: string,
+    counter?: AiRequestCounter
   ): Promise<{
     providerName: string | null;
     providerTaxId: string | null;
@@ -281,7 +289,7 @@ export class GeminiExtractorService implements AiExtractor {
         const result = await this.generateWithTransientRetry(modelName, {
           contents,
           generationConfig: { temperature: 0, responseMimeType: "application/json" },
-        });
+        }, counter);
         const outputText = result.response.text() || "{}";
         const clean = outputText.replace(/```json|```/g, "").trim();
         const parsed = JSON.parse(clean) as {
@@ -305,7 +313,8 @@ export class GeminiExtractorService implements AiExtractor {
 
   async extractStructuredDataFromImage(
     imageBuffer: Buffer,
-    mimeType: "image/jpeg" | "image/png"
+    mimeType: "image/jpeg" | "image/png",
+    counter?: AiRequestCounter
   ): Promise<ExtractedDocumentData> {
     this.lastUsage = null;
     const base64Image = imageBuffer.toString("base64");
@@ -330,7 +339,7 @@ export class GeminiExtractorService implements AiExtractor {
         const result = await this.generateWithTransientRetry(modelName, {
           contents,
           generationConfig: { temperature: 0, responseMimeType: "application/json" },
-        });
+        }, counter);
         const outputText = result.response.text() || "{}";
         const parsed = parseExtractionOutput(outputText);
         const refined = refineExtractionWithRawText(parsed, "");

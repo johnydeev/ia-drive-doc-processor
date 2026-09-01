@@ -7,6 +7,7 @@ import {
 } from "@/lib/extraction";
 import { AiUsageMetrics } from "@/types/aiUsage.types";
 import { AiExtractor } from "@/services/aiExtraction";
+import type { AiRequestCounter } from "@/lib/aiRequestCounter";
 import { ExtractedDocumentData } from "@/types/extractedDocument.types";
 
 export class ClaudeExtractorService implements AiExtractor {
@@ -24,8 +25,9 @@ export class ClaudeExtractorService implements AiExtractor {
     this.model = options?.model?.trim() || env.ANTHROPIC_MODEL || "claude-haiku-4-5-20251001";
   }
 
-  async extractStructuredData(text: string): Promise<ExtractedDocumentData> {
+  async extractStructuredData(text: string, counter?: AiRequestCounter): Promise<ExtractedDocumentData> {
     this.lastUsage = null;
+    counter?.record("anthropic", this.model);
     const prompt = buildExtractionPrompt(text);
 
     const response = await this.client.messages.create({

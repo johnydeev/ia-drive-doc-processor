@@ -1,5 +1,6 @@
 import { isRateLimitError } from "@/lib/aiErrors";
 import { AiProvider, AiUsageMetrics } from "@/types/aiUsage.types";
+import type { AiRequestCounter } from "@/lib/aiRequestCounter";
 import { ExtractedDocumentData } from "@/types/extractedDocument.types";
 
 /**
@@ -12,7 +13,11 @@ import { ExtractedDocumentData } from "@/types/extractedDocument.types";
  */
 export interface AiExtractor {
   readonly provider: AiProvider;
-  extractStructuredData(text: string): Promise<ExtractedDocumentData>;
+  /**
+   * `counter` es opcional y lo incrementa **el extractor**, no la cadena: un
+   * barrido de 3 modelos de Gemini son 3 requests dentro de un solo intento.
+   */
+  extractStructuredData(text: string, counter?: AiRequestCounter): Promise<ExtractedDocumentData>;
   getLastUsage(): AiUsageMetrics | null;
 }
 
@@ -24,7 +29,7 @@ export interface AiProviderCredentials {
 
 /**
  * Configuración para construir la cadena. El orden de fallback lo define
- * `PROVIDER_ORDER`: Cerebras → Gemini → OpenAI → Claude. Solo se incluyen los
+ * `PROVIDER_ORDER`: Gemini → Cerebras → OpenAI → Claude. Solo se incluyen los
  * proveedores que tienen `apiKey` presente.
  */
 export interface AiExtractionChainConfig {
@@ -81,11 +86,12 @@ export class AiExtractionChain {
 
   async run(
     text: string,
-    onAttempt?: AiAttemptCallback
+    onAttempt?: AiAttemptCallback,
+    counter?: AiRequestCounter
   ): Promise<AiExtractionResult | null> {
     for (const extractor of this.extractors) {
       try {
-        const data = await extractor.extractStructuredData(text);
+        const data = await extractor.extractStructuredData(text, counter);
         onAttempt?.(extractor.provider, true);
         return { data, usage: extractor.getLastUsage(), provider: extractor.provider };
       } catch (error) {
@@ -116,19 +122,32 @@ interface ProviderSlot {
 }
 
 /**
- * Orden de fallback: **Cerebras → Gemini → OpenAI → Claude**.
+ * Orden de fallback: **Gemini → Cerebras → OpenAI → Claude**.
  *
- * Gemini va SEGUNDO a propósito mientras la key sea del free tier: su cuota es
- * diaria POR MODELO (~20 requests), así que ponerlo primero quema el balde en
- * las primeras boletas del día y deja al resto pagando el barrido fallido antes
- * de llegar a Cerebras.
+ * Gemini pasó a PRIMERO el 2026-08-30 (pieza 1 del spec
+ * `2026-08-24-gemini-tier-pago-cadena-y-modelos-design.md`), por decisión del
+ * owner: Cerebras venía devolviendo **402 (sin cuota)** en todas las boletas, o
+ * sea la cadena ya dependía de Gemini de hecho, pero pagando primero un intento
+ * fallido contra Cerebras en cada boleta.
  *
- * El spec `2026-08-24-gemini-tier-pago-cadena-y-modelos-design.md` propone
- * moverlo a primero, pero eso vale SOLO con la cuenta paga (pieza 1). Mientras
- * tanto el orden queda como estaba. Cambiarlo es mover este bloque al principio
- * del array y dar vuelta el test de `providerOrder`.
+ * **El riesgo del free tier sigue vigente**: la cuota de Gemini es diaria POR
+ * MODELO (~20 requests), así que en un día de mucho volumen las primeras boletas
+ * queman el balde y el resto paga el barrido de los 3 modelos antes de caer al
+ * siguiente proveedor. Con Cerebras sano y en segundo lugar eso se absorbe; sin
+ * Cerebras, no hay red.
+ *
+ * Volver atrás es mover este bloque después del de Cerebras y dar vuelta el test
+ * de `providerOrder`.
  */
 const PROVIDER_ORDER: ProviderSlot[] = [
+  {
+    provider: "gemini",
+    credentials: (c) => c.gemini,
+    build: async (creds) => {
+      const { GeminiExtractorService } = await import("@/services/geminiExtractor.service");
+      return new GeminiExtractorService({ apiKey: creds.apiKey, model: creds.model });
+    },
+  },
   {
     provider: "cerebras",
     credentials: (c) => c.cerebras,
@@ -140,14 +159,6 @@ const PROVIDER_ORDER: ProviderSlot[] = [
         baseURL: "https://api.cerebras.ai/v1",
         model: creds.model?.trim() || "gpt-oss-120b",
       });
-    },
-  },
-  {
-    provider: "gemini",
-    credentials: (c) => c.gemini,
-    build: async (creds) => {
-      const { GeminiExtractorService } = await import("@/services/geminiExtractor.service");
-      return new GeminiExtractorService({ apiKey: creds.apiKey, model: creds.model });
     },
   },
   {

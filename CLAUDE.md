@@ -28,8 +28,8 @@ Registro cronológico de cambios por fecha. Incluir highlights de lo que se hizo
 ---
 ## Descripción del proyecto
 Sistema multi-tenant en **Next.js + TypeScript + Prisma + PostgreSQL (Supabase)** para administración de consorcios de propiedad horizontal en Argentina.
-Procesa automáticamente PDFs de facturas/boletas desde Google Drive usando IA (cadena de fallback **Cerebras → Gemini → OpenAI → Claude**, orden declarado en `PROVIDER_ORDER` de `aiExtraction.ts`; **Groq se eliminó del proyecto el 2026-08-25** — estaba fuera de producción desde 2026-06-25), extrae datos estructurados, los guarda en la DB y los envía a Google Sheets.
-> Mover Gemini a primero está diseñado (pieza 1 del spec `2026-08-24-gemini-tier-pago-cadena-y-modelos`) pero **NO aplicado**: depende de una key de tier pago que todavía no existe. Con key free, Gemini primero quema su cuota diaria por modelo en las primeras boletas del día.
+Procesa automáticamente PDFs de facturas/boletas desde Google Drive usando IA (cadena de fallback **Gemini → Cerebras → OpenAI → Claude**, orden declarado en `PROVIDER_ORDER` de `aiExtraction.ts`; **Groq se eliminó del proyecto el 2026-08-25** — estaba fuera de producción desde 2026-06-25), extrae datos estructurados, los guarda en la DB y los envía a Google Sheets.
+> **Gemini pasó a primero el 2026-08-30** (pieza 1 del spec `2026-08-24-gemini-tier-pago-cadena-y-modelos`), por decisión del owner: Cerebras devolvía 402 en todas las boletas, así que la cadena ya dependía de Gemini pero pagaba un intento fallido antes. **El riesgo del free tier sigue**: la cuota es diaria por modelo (~20 requests), así que en un día de volumen alto las primeras boletas queman el balde y el resto paga el barrido de los 3 modelos. Con Cerebras sano detrás eso se absorbe; sin Cerebras, no hay red.
 ---
 
 ## Arquitectura del sistema
@@ -133,6 +133,10 @@ Client          → Tenant. Roles: ADMIN / CLIENT / VIEWER. consortiumsEnabled (
   ├── ProcessingJob → Cola de jobs (PENDING/PROCESSING/COMPLETED/FAILED)
   │                    diagnosticRunId? → agrupa los jobs de una corrida selectiva
   │                    diagnosticsJson? → diagnóstico de esa boleta (solo corrida selectiva)
+  │                    outcome / reasonCategory / aiRequests / usedVision / aiRequestsJson
+  │                      → métricas de consumo de IA (2026-08-31). Una fila por archivo
+  │                        procesado, entre o no entre como boleta: es la única tabla que
+  │                        también cubre los rebotes. Consultas: scripts/metrics-cuota.sql
   ├── SchedulerState → Estado runtime del scheduler por cliente
   │                    lastDirectorySyncAt: última sincronización ALTA
   ├── ProcessingLog  → Historial de ejecuciones
@@ -263,7 +267,7 @@ Siempre usar `resolveGoogleConfig(client)` para construir el `GoogleSheetsServic
 1. **Download** PDF desde Drive
 2. **Dedup hash** → SHA256 del binario
 3. **Extracción texto** (`textExtractStep`, sin tokens) → pdf-parse → fallback OCR (tesseract). El texto del OCR se conserva si es más largo **o si aporta un CUIT que el texto directo no tiene** (`lib/ocrMerge.ts`, 2026-08-18): antes se descartaba por longitud y con él se iba el CUIT del membrete. Si pdf-parse no saca texto propio, el PDF es un **escaneo** (`isLastPdfScanned()`). Luego **triage capa 1** (`documentTriageGate`): heurística `classifyDocumentType` sobre el texto ANTES de la IA → si es claramente no-boleta (oblea, certificado de fumigación, plano…) se renombra `[NO BOLETA]` y va a Revisión **sin gastar tokens** (sesgo conservador: ante la duda, es boleta).
-4. **Extracción IA** (`aiExtractStep`) → **PDF escaneado**: la página 1 que rindió el OCR va a **Gemini Vision** (2026-08-18); si falla sigue la cadena, si da 429/503 vuelve a Pendientes. Resto: cadena Cerebras → Gemini → OpenAI → Claude (fallback final OCR_ONLY). El barrido de modelos de Gemini son 3 (`gemini-2.5-flash-lite` → `2.5-flash` → `flash-latest`; se podaron los dos `2.0-*` que devolvían 404); un 503 reintenta el MISMO modelo una vez antes de saltar, y si los 3 caen por 429/503 la boleta vuelve a Pendientes, no a Revisión (2026-08-24). Luego **triage capa 2** (`isBoletaGate`): si la IA devolvió `isBoleta=false` → `[NO BOLETA]` + Revisión.
+4. **Extracción IA** (`aiExtractStep`) → **PDF escaneado**: la página 1 que rindió el OCR va a **Gemini Vision** (2026-08-18); si falla sigue la cadena, si da 429/503 vuelve a Pendientes. Resto: cadena Gemini → Cerebras → OpenAI → Claude (fallback final OCR_ONLY). El barrido de modelos de Gemini son 3 (`gemini-2.5-flash-lite` → `2.5-flash` → `flash-latest`; se podaron los dos `2.0-*` que devolvían 404); un 503 reintenta el MISMO modelo una vez antes de saltar, y si los 3 caen por 429/503 la boleta vuelve a Pendientes, no a Revisión (2026-08-24). Luego **triage capa 2** (`isBoletaGate`): si la IA devolvió `isBoleta=false` → `[NO BOLETA]` + Revisión.
 5. **Dedup business key** → boletaNumber + providerTaxId + dueDate + amount
 6. **Resolve assignment** → match consorcio + proveedor + período activo del consorcio
 7. **Canonización** → reemplazar datos OCR por datos canónicos de DB

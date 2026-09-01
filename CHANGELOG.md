@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Verified
+- **Guard del vencimiento del CAE, primera verificación en producción (2026-08-30)**. Se reprocesaron
+  `00002-00208625` y `00002-00208626` (ROMERO MIGUEL A → EVA PERON 1761, período 08/2026, mismo monto
+  y números consecutivos): las dos entraron con `dueDate = null`, o sea el guard descarta la "Fecha de
+  Vto. de CAE" que antes se guardaba como vencimiento de pago. La misma corrida confirma además el
+  **matching por CUIT** de facturas comunes (entraron sin pasar por Sin Asignar) y que dos boletas
+  hermanas con el mismo monto y el mismo edificio **no se deduplican** entre sí.
+
 ### Fixed
 - **El vencimiento se mostraba un día antes en Boletas entrantes (2026-08-29)**. `formatDateOnly` de
   `/admin/boletas` formateaba el `dueDate` —una fecha de calendario, guardada a medianoche UTC— en la
@@ -13,6 +21,66 @@
   `boletas/lib/format.ts` con 7 tests que fuerzan `TZ=America/Argentina/Buenos_Aires` — sin eso el
   caso pasa en verde en un runner en UTC y no prueba nada. **El dato guardado siempre estuvo bien**:
   no hay que corregir boletas. Suite 822 → 829.
+
+### Added
+- **Triage decisivo de no-boletas: VEP y LSD dejan de gastar requests (2026-08-31)**. Cada VEP y cada
+  LSD gastaba una request de la cuota de Gemini para terminar rebotando, y cada reproceso la volvía a
+  gastar. El triage de capa 1 no podía agarrarlos, y **no por falta de patrones**:
+  `classifyDocumentType` exige marcador negativo **y ninguna señal de boleta**, y un VEP tiene `$`,
+  `IMPORTE`, `VENCIMIENTO` y CUIT. Verificado sobre los 9 papeles reales: la heurística vieja los
+  clasificaba a los 9 como `boleta`.
+  - Capa 0 nueva (`detectDecisiveNotBoleta`): marcadores que descartan el documento **aunque tenga
+    todas las señales de una boleta**, calibrados sobre 4 VEP y 5 LSD reales. **9 de 9 detectados**,
+    0 falsos positivos sobre facturas y boletas de servicio.
+  - **El F931 de ARCA no se rompe.** Se extrae con 2 páginas porque el importe está en el VEP de la
+    página 2, así que su texto *contiene* "Volante Electrónico de Pago". Por eso el marcador de VEP
+    sólo cuenta en los primeros 200 caracteres: un VEP suelto lo trae en el carácter 4, el F931 tiene
+    la declaración jurada en la página 1. Con test que lo fija.
+  - El tipo va al nombre del archivo (`[NO BOLETA - VEP]`) y a `m.reason`, que la instrumentación
+    persiste en `ProcessingJob.reasonCategory`: se puede contar cuántas requests ahorró cada tipo.
+  - **Tests 843 → 857.**
+
+### Changed
+- **Las no-boletas van a Sin Asignar, no a Revisión (2026-08-31)**. Decisión del owner: va a armar un
+  flujo propio para procesar VEP y LSD como gastos, así que son documentos *pendientes de asignar* y
+  no descarte — y tenerlos en una sola carpeta es lo que hace posible la limpieza manual antes de
+  reprocesar. Alcanza también a las no-boletas que ya se detectaban (obleas, planos) y a las de capa 2.
+
+### Fixed
+- **`markNotBoleta` apilaba el prefijo al reprocesar (2026-08-31)**. Anteponía `"[NO BOLETA] "` sin
+  quitar el que ya estuviera, así que devolver un archivo a Pendientes y volver a procesarlo daba
+  `[NO BOLETA] [NO BOLETA] archivo.pdf`. Mismo bug que tuvieron las etiquetas de sufijo antes de
+  `KNOWN_SUFFIX_TAGS`. Ahora es idempotente contra cualquier prefijo previo, con o sin tipo.
+
+### Added
+- **Instrumentación de requests y cuota de IA por boleta (2026-08-31)**. Hasta ahora no se
+  registraba **ni una sola request**: `TokenUsage` guarda una fila por corrida y `Invoice` sólo
+  existe para las boletas que entran, así que el 30% de tokens que no termina en ninguna boleta se
+  podía calcular pero no atribuir. Y la cuota del free tier de Gemini se gasta **por request y por
+  modelo** (~20/día cada uno, 3 modelos ≈ 60/día), no por token.
+  - Cinco columnas nullable en `ProcessingJob` — `outcome`, `reasonCategory`, `aiRequests`,
+    `usedVision`, `aiRequestsJson` —, la única tabla con una fila por archivo procesado entre o no
+    entre como boleta. Migración `20260831000000_processing_job_metrics`.
+  - `AiRequestCounter` por boleta, con la regla de que **incrementa quien hace la llamada HTTP,
+    nunca el orquestador**: contar los intentos de la cadena haría que un barrido de 3 modelos de
+    Gemini contara 1. En Gemini vive dentro de `generateWithTransientRetry`, así que el barrido y el
+    reintento por 503 quedan contados en un solo lugar.
+  - Seam `onOutcome` en el `finally` de `runPipeline` — el único punto por el que salen los ocho
+    caminos de salida. A diferencia de `onDiagnostics`, lo inyecta el worker **siempre**. La
+    escritura es best-effort: una métrica no puede hacer fallar una boleta ya procesada.
+  - `scripts/metrics-cuota.sql` con las consultas: requests/día contra el techo de 60, abierto por
+    modelo, rebotes por categoría, gasto por resultado y costo de los reprocesos.
+  - **Tests 830 → 843.**
+
+### Changed
+- **Gemini pasa a primero en la cadena de extracción (2026-08-30)**. El orden queda
+  **Gemini → Cerebras → OpenAI → Claude**. Cerebras venía devolviendo **402 (sin cuota)** en todas
+  las boletas de la corrida del 28/08, así que la cadena ya dependía de Gemini de hecho, pero pagaba
+  un intento fallido contra Cerebras en cada boleta. Es la pieza 1 del spec del 2026-08-24, que
+  estaba diseñada y sin aplicar. **El riesgo del free tier sigue vigente**: con cuota diaria por
+  modelo, un día de volumen alto quema el balde en las primeras boletas y el resto paga el barrido
+  de los 3 modelos antes de caer al siguiente proveedor — con Cerebras sano detrás eso se absorbe,
+  sin Cerebras no hay red.
 
 ### Docs
 - **Pasada de verificación de pendientes contra la base de producción (2026-08-29)**. Sin cambios de

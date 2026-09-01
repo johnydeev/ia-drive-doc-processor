@@ -155,14 +155,22 @@ describe("AiExtractionChain metadata", () => {
 });
 
 describe("createAiExtractionChain — orden capacidad-primero", () => {
-  it("ordena Cerebras → Gemini → OpenAI → Claude cuando todos tienen key", async () => {
+  it("ordena Gemini → Cerebras → OpenAI → Claude cuando todos tienen key", async () => {
     const chain = await createAiExtractionChain({
       cerebras: { apiKey: "x", model: "llama-3.3-70b" },
       gemini: { apiKey: "x" },
       openai: { apiKey: "x" },
       anthropic: { apiKey: "x" },
     });
-    expect(chain.providerOrder).toEqual(["cerebras", "gemini", "openai", "anthropic"]);
+    expect(chain.providerOrder).toEqual(["gemini", "cerebras", "openai", "anthropic"]);
+  });
+
+  it("cae a Cerebras cuando no hay key de Gemini", async () => {
+    const chain = await createAiExtractionChain({
+      cerebras: { apiKey: "x" },
+      openai: { apiKey: "x" },
+    });
+    expect(chain.providerOrder).toEqual(["cerebras", "openai"]);
   });
 
   it("incluye solo los proveedores con apiKey presente", async () => {

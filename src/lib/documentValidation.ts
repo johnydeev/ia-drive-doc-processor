@@ -72,8 +72,21 @@ export function appendNoAmountTag(fileName: string): string {
   return appendTag(fileName, "SIN MONTO");
 }
 
-/** Antepone el prefijo "[NO BOLETA] " al nombre del archivo (triage de no-boletas). */
-export function markNotBoleta(fileName: string): string {
-  return `[NO BOLETA] ${fileName}`;
+/** Prefijo de no-boleta, con o sin tipo: "[NO BOLETA] " o "[NO BOLETA - VEP] ". */
+const NOT_BOLETA_PREFIX_RE = /^\s*\[NO BOLETA(?:\s*-\s*[^\]]+)?\]\s*/i;
+
+/**
+ * Antepone el prefijo "[NO BOLETA] " al nombre del archivo (triage de no-boletas).
+ * Con `kind`, el prefijo lleva el tipo: "[NO BOLETA - VEP] ".
+ *
+ * **Idempotente**: primero quita el prefijo que hubiera (el mismo u otro tipo),
+ * para que reprocesar no lo apile. Sin esto, devolver un archivo a Pendientes y
+ * volver a procesarlo daba "[NO BOLETA] [NO BOLETA] archivo.pdf" — el mismo bug
+ * que tuvieron las etiquetas de sufijo antes de `KNOWN_SUFFIX_TAGS`.
+ */
+export function markNotBoleta(fileName: string, kind?: string): string {
+  const base = fileName.replace(NOT_BOLETA_PREFIX_RE, "");
+  const label = kind ? `[NO BOLETA - ${kind}]` : "[NO BOLETA]";
+  return `${label} ${base}`;
 }
 

@@ -5,6 +5,26 @@ describe("markNotBoleta", () => {
   it("antepone el prefijo [NO BOLETA] al nombre", () => {
     expect(markNotBoleta("boleta.pdf")).toBe("[NO BOLETA] boleta.pdf");
   });
+
+  it("es IDEMPOTENTE: no apila el prefijo al reprocesar", () => {
+    expect(markNotBoleta("[NO BOLETA] boleta.pdf")).toBe("[NO BOLETA] boleta.pdf");
+  });
+
+  it("reemplaza el tipo cuando el archivo ya venía etiquetado con otro", () => {
+    expect(markNotBoleta("[NO BOLETA - VEP] x.pdf", "LSD")).toBe("[NO BOLETA - LSD] x.pdf");
+  });
+
+  it("agrega el tipo cuando se lo pasan", () => {
+    expect(markNotBoleta("vep.pdf", "VEP")).toBe("[NO BOLETA - VEP] vep.pdf");
+  });
+
+  it("no apila el prefijo con tipo", () => {
+    expect(markNotBoleta("[NO BOLETA - VEP] vep.pdf", "VEP")).toBe("[NO BOLETA - VEP] vep.pdf");
+  });
+
+  it("un prefijo con tipo se limpia al volver al genérico", () => {
+    expect(markNotBoleta("[NO BOLETA - PRESUPUESTO] x.pdf")).toBe("[NO BOLETA] x.pdf");
+  });
 });
 
 // Tests de regresión mínimos de los helpers existentes (no cambian).

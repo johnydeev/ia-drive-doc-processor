@@ -490,7 +490,11 @@ describe("processDriveFile — caracterización de los 7 caminos de salida", () 
     expect(metricsCore().result).toBe("failed");
   });
 
-  it("not_boleta (heurística): no llama a la IA, renombra [NO BOLETA] y va a Revisión", async () => {
+  // 2026-08-31: el destino de las no-boletas pasó de Revisión a SIN ASIGNAR. El
+  // owner va a armar un flujo propio para VEP/LSD, así que son documentos
+  // pendientes de asignar y no descarte; tenerlos en una sola carpeta es lo que
+  // hace posible la limpieza manual antes de reprocesar.
+  it("not_boleta (heurística): no llama a la IA, renombra [NO BOLETA] y va a Sin Asignar", async () => {
     const ctx = makeContext();
     // Texto que la heurística clasifica como no-boleta (certificado sin monto).
     ctx.pdfExtractor.extractTextFromPdf.mockResolvedValue(
@@ -502,14 +506,61 @@ describe("processDriveFile — caracterización de los 7 caminos de salida", () 
 
     expect(ctx.aiChain.run).not.toHaveBeenCalled();
     expect(ctx.driveService.renameFile.mock.calls[0][1]).toMatch(/\[NO BOLETA\]/);
-    expect(ctx.driveService.moveFileToFolder).toHaveBeenCalledWith("file-1", "pending", "failed");
+    expect(ctx.driveService.moveFileToUnassigned).toHaveBeenCalledWith("file-1", "pending", "unassigned");
     expect(ctx.sheetsService.insertRow).not.toHaveBeenCalled();
     expect(ctx.invoiceRepository.saveProcessedInvoice).not.toHaveBeenCalled();
     expect(summary.notBoleta).toBe(1);
     expect(metricsCore().result).toBe("not_boleta");
   });
 
-  it("not_boleta (IA): aiChain devuelve isBoleta:false → [NO BOLETA] a Revisión", async () => {
+  it("not_boleta (VEP): corta ANTES de la IA y etiqueta el tipo", async () => {
+    const ctx = makeContext();
+    // Texto real de un VEP de ARCA (recortado). Tiene $, IMPORTE, VENCIMIENTO y
+    // CUIT, así que la heurística vieja lo dejaba pasar y gastaba una request.
+    ctx.pdfExtractor.extractTextFromPdf.mockResolvedValue(
+      `VEP
+Volante Electrónico de Pago
+Nro. VEP: 1647417780
+Organismo Recaudador: ARCA
+CUIT: 30-71717054-3
+Día de Expiración: 2026-08-01
+Importe total a pagar $4.267.254,03`
+    );
+    const summary = createBaseSummary(1);
+
+    await processDriveFile(makeFile(), asContext(ctx), summary);
+
+    expect(ctx.aiChain.run).not.toHaveBeenCalled();
+    expect(ctx.driveService.renameFile.mock.calls[0][1]).toMatch(/\[NO BOLETA - VEP\]/);
+    expect(ctx.driveService.moveFileToUnassigned).toHaveBeenCalledWith("file-1", "pending", "unassigned");
+    expect(ctx.sheetsService.insertRow).not.toHaveBeenCalled();
+    expect(summary.notBoleta).toBe(1);
+    expect(metricsCore().result).toBe("not_boleta");
+    // El tipo queda en `reason` → lo persiste ProcessingJob.reasonCategory.
+    expect(metricsCore().reason).toBe("VEP");
+  });
+
+  it("not_boleta (LSD): corta ANTES de la IA y etiqueta el tipo", async () => {
+    const ctx = makeContext();
+    ctx.pdfExtractor.extractTextFromPdf.mockResolvedValue(
+      `EMPRESA DOMICILIO FISCAL
+PERIODO PROVINCIA
+NRO.LIQUIDACIÓN
+ACTIVIDAD PPAL
+30-52063978-7 - CONSORCIO COPROPIETARIOS
+IDENTIFICADOR ÚNICO DEL LIBRO 000000045900718
+0000000001 - Sueldo Basico 30,00 $ 1.318.092,00`
+    );
+    const summary = createBaseSummary(1);
+
+    await processDriveFile(makeFile(), asContext(ctx), summary);
+
+    expect(ctx.aiChain.run).not.toHaveBeenCalled();
+    expect(ctx.driveService.renameFile.mock.calls[0][1]).toMatch(/\[NO BOLETA - LSD\]/);
+    expect(metricsCore().reason).toBe("LSD");
+  });
+
+  it("not_boleta (IA): aiChain devuelve isBoleta:false → [NO BOLETA] a Sin Asignar", async () => {
     const ctx = makeContext();
     ctx.aiChain.run.mockImplementation(async (_t, cb) => {
       cb?.("gemini", true);
@@ -520,7 +571,7 @@ describe("processDriveFile — caracterización de los 7 caminos de salida", () 
     await processDriveFile(makeFile(), asContext(ctx), summary);
 
     expect(ctx.driveService.renameFile.mock.calls[0][1]).toMatch(/\[NO BOLETA\]/);
-    expect(ctx.driveService.moveFileToFolder).toHaveBeenCalledWith("file-1", "pending", "failed");
+    expect(ctx.driveService.moveFileToUnassigned).toHaveBeenCalledWith("file-1", "pending", "unassigned");
     expect(ctx.sheetsService.insertRow).not.toHaveBeenCalled();
     expect(ctx.invoiceRepository.saveProcessedInvoice).not.toHaveBeenCalled();
     expect(summary.notBoleta).toBe(1);
@@ -847,5 +898,47 @@ ${BARCODE_TIGRE}`
       expect(spy).not.toHaveBeenCalled();
       expect(ctx.aiChain.run).toHaveBeenCalledTimes(1);
     });
+  });
+});
+
+describe("colector de métricas de consumo (onOutcome)", () => {
+  it("emite el outcome con las requests contadas cuando la boleta entra", async () => {
+    const ctx = makeContext();
+    const onOutcome = vi.fn();
+    (ctx as unknown as { onOutcome: unknown }).onOutcome = onOutcome;
+    const summary = createBaseSummary(1);
+
+    await processDriveFile(makeFile(), asContext(ctx), summary);
+
+    expect(onOutcome).toHaveBeenCalledTimes(1);
+    expect(onOutcome.mock.calls[0][0]).toMatchObject({
+      fileId: "file-1",
+      outcome: "ok",
+      usedVision: false,
+    });
+  });
+
+  it("se emite también cuando la boleta queda sin asignar", async () => {
+    const ctx = makeContext();
+    ctx.providerRepository.findAllForMatching.mockResolvedValue([]);
+    const onOutcome = vi.fn();
+    (ctx as unknown as { onOutcome: unknown }).onOutcome = onOutcome;
+    const summary = createBaseSummary(1);
+
+    await processDriveFile(makeFile(), asContext(ctx), summary);
+
+    expect(onOutcome.mock.calls[0][0]).toMatchObject({ outcome: "unassigned" });
+    // La categoría es la que nombra la etiqueta del archivo en Sin Asignar.
+    expect(onOutcome.mock.calls[0][0].reasonCategory).toBeTruthy();
+  });
+
+  it("sin colector, el pipeline se comporta igual que antes", async () => {
+    const ctx = makeContext();
+    const summary = createBaseSummary(1);
+
+    await processDriveFile(makeFile(), asContext(ctx), summary);
+
+    expect(summary.processed).toBe(1);
+    expect(ctx.sheetsService.insertRow).toHaveBeenCalled();
   });
 });

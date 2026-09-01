@@ -7,6 +7,7 @@ import {
 } from "@/lib/extraction";
 import { AiUsageMetrics } from "@/types/aiUsage.types";
 import { AiExtractor } from "@/services/aiExtraction";
+import type { AiRequestCounter } from "@/lib/aiRequestCounter";
 import { ExtractedDocumentData } from "@/types/extractedDocument.types";
 
 export class AiExtractorService implements AiExtractor {
@@ -25,8 +26,9 @@ export class AiExtractorService implements AiExtractor {
     this.model = options?.model?.trim() || env.OPENAI_MODEL || "gpt-4o-mini";
   }
 
-  async extractStructuredData(text: string): Promise<ExtractedDocumentData> {
+  async extractStructuredData(text: string, counter?: AiRequestCounter): Promise<ExtractedDocumentData> {
     this.lastUsage = null;
+    counter?.record("openai", this.model);
     const prompt = buildExtractionPrompt(text);
 
     const response = await this.client.responses.create({

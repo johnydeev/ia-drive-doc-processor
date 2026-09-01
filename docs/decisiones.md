@@ -4,6 +4,155 @@ Registro de decisiones tomadas ante problemas reales encontrados en producción.
 
 ---
 
+## 2026-08-31 — Los VEP y los LSD gastaban una request de IA cada uno
+
+### Problema
+
+El owner tenía varios VEP y LSD en Sin Asignar. Cada uno gasta una request de la cuota de Gemini
+para terminar rebotando, y cada reproceso la vuelve a gastar. Con Gemini ahora primero en la cadena
+y Cerebras devolviendo 402, esas requests salen del mismo balde de ~20/día por modelo que las
+boletas reales.
+
+El pipeline **ya tenía** un triage (capa 1, `documentTriageGate`) que corre antes de la IA y cuesta
+0 tokens. No los agarraba, y **no era por falta de patrones**: `classifyDocumentType` exige que haya
+marcador negativo **Y ninguna señal de boleta**, donde "señal de boleta" es `$`, `IMPORTE`,
+`VENCIMIENTO`, `COMPROBANTE`, `CAE` o tener cualquier CUIT válido.
+
+Un VEP tiene `$`, `IMPORTE`, `VENCIMIENTO` y CUIT. Un LSD tiene `$` y CUIT. **Agregarlos a
+`NOT_BOLETA_MARKERS` no habría servido de nada**: `hasBoletaSignal` los rescataba igual. Verificado
+sobre los 9 papeles reales: la heurística vieja clasificaba a los 9 como `boleta`.
+
+### Decisión
+
+**Capa 0 del triage: `detectDecisiveNotBoleta`.** Marcadores que descartan el documento **aunque
+tenga todas las señales de una boleta**, porque identifican el formulario por su nombre propio.
+Devuelve el tipo, que va al nombre del archivo y a `m.reason`.
+
+**Los marcadores se calibraron sobre 4 VEP y 5 LSD reales, no de memoria.** No es un detalle: el
+spec original proponía buscar `"LIBRO DE SUELDOS DIGITAL"`, y **el texto extraíble de un LSD no dice
+eso en ningún lado**. Ese marcador no habría detectado nada y el trabajo habría parecido terminado.
+
+| Tipo | Marcadores reales | Regla |
+|---|---|---|
+| VEP | `VOLANTE ELECTRONICO DE PAGO`, `NRO. VEP:` | Sólo en los primeros **200 caracteres** |
+| LSD | `EMPRESA DOMICILIO FISCAL`, `NRO.LIQUIDACION`, `ACTIVIDAD PPAL`, `IDENTIFICADOR UNICO DEL LIBRO`, `IDENTIFICADOR UNICO DE HOJA MOVIL`, `LEGAJO CUIL APELLIDO Y NOMBRE` | Al menos **2 coincidencias** |
+
+**La ventana de 200 caracteres del VEP es lo que evita el falso positivo grave.** El **F931 de ARCA**
+se extrae con 2 páginas porque el "Importe total a pagar" está en el VEP de la página 2 — o sea su
+texto **contiene** "Volante Electrónico de Pago", y es un gasto real que se paga y tiene prompt
+propio. Buscando en el documento entero, el fix habría empezado a descartar F931. Un VEP suelto trae
+el marcador en el carácter 4; en el F931 la página 1 es la declaración jurada. Hay test que lo fija.
+
+Para el LSD se exigen 2 marcadores: cada frase por separado podría aparecer en otro documento de
+RRHH, las seis juntas son su encabezado.
+
+**Destino: Sin Asignar, no Revisión.** Decisión del owner: va a armar un flujo propio para procesar
+VEP y LSD como gastos, así que son documentos *pendientes de asignar*, no descarte. Y tenerlos en
+una sola carpeta es lo que hace posible la limpieza manual antes de reprocesar. Cambia también para
+las no-boletas que ya se detectaban (obleas, planos) y para las de capa 2.
+
+**`markNotBoleta` pasa a ser idempotente** y a aceptar el tipo. Antes anteponía `"[NO BOLETA] "` sin
+quitar el prefijo previo: con el flujo nuevo —devolver archivos a Pendientes para reprocesarlos— eso
+daba `[NO BOLETA] [NO BOLETA] archivo.pdf`. Es el mismo bug que tuvieron las etiquetas de sufijo
+antes de `KNOWN_SUFFIX_TAGS`. Por ser prefijo y no sufijo, **no** entra en esa lista.
+
+### Alternativas descartadas
+
+- **Un censo aparte que barra Pendientes antes del worker** (la idea original del owner). Ahorra
+  exactamente las mismas requests, porque el triage de capa 1 ya corre antes de la IA — pero duplica
+  la descarga de Drive y el OCR, agrega un proceso que mantener, y sólo funciona cuando alguien lo
+  dispara. El gate funciona siempre.
+- **Agregar los tipos a `NOT_BOLETA_MARKERS`.** No funciona (arriba).
+- **Preguntarle a la IA si es boleta antes de extraer.** Es lo que ya hace la capa 2, y cuesta
+  exactamente la request que se quiere ahorrar.
+
+### Impacto
+
+`lib/documentClassifier.ts` (+`detectDecisiveNotBoleta`, 7 tests con texto real) ·
+`lib/documentValidation.ts` (`markNotBoleta` idempotente, 6 tests) ·
+`processPendingDocuments.job.ts` (capa 0 en el gate + `divertNotBoleta` a Sin Asignar).
+**Tests 843 → 857.** Sin migración.
+
+Verificado contra los 9 PDFs reales: **9 de 9 detectados**, 0 falsos positivos sobre facturas y
+boletas de servicio.
+
+**Pendiente:** los otros tipos que el owner mencionó —presupuestos, estados de cuenta, pedidos— NO
+se implementaron. No hay papeles de muestra, y escribir esos marcadores de memoria es exactamente el
+error que el caso del LSD demuestra.
+
+---
+
+## 2026-08-31 — No se registraba ni una sola request de IA
+
+### Problema
+
+El owner preguntó si la reforma de matching por CUIT (2026-08-26) había bajado el consumo de tokens
+y aflojado la presión sobre el free tier de Gemini. **La pregunta no se podía responder.**
+
+Lo que había:
+
+| Tabla | Granularidad | Qué falta |
+|---|---|---|
+| `TokenUsage` | una fila por **corrida** (aggregate + provider + model) | no registra llamadas, sólo tokens |
+| `Invoice` | tokens por boleta que **entró** | las que rebotan no dejan fila |
+
+Medición posible con eso, sobre julio → 26/08: 376 boletas, 2.133.247 tokens, de los cuales
+**642.755 (30,1%) no terminaron en ninguna boleta**. El número se podía calcular, pero no atribuir:
+no había forma de saber qué fracción era rebotes, reprocesos, no-boletas o barrido de modelos
+agotados.
+
+Y sobre todo faltaba lo que de verdad gobierna el free tier: **la cuota se gasta por request y por
+modelo** (~20/día cada uno, 3 modelos ≈ 60/día), no por token. El único contador que existía
+—`onAttempt`— cuenta intentos **por proveedor**, y el barrido de modelos vive adentro de
+`GeminiExtractorService`: un "intento" puede ser entre 1 y 6 requests HTTP.
+
+### Decisión
+
+**1. Cinco columnas nullable en `ProcessingJob`** (`outcome`, `reasonCategory`, `aiRequests`,
+`usedVision`, `aiRequestsJson`). Es la única tabla con una fila por archivo procesado, entre o no
+entre como boleta. Los tokens **no** se agregan ahí: ya los tienen `Invoice` y `TokenUsage`, y una
+tercera fuente puede contradecir a las otras dos.
+
+**2. `AiRequestCounter` (`src/lib/aiRequestCounter.ts`), uno por boleta, con una regla: incrementa
+quien hace la llamada HTTP, nunca el orquestador.** Si contara `AiExtractionChain.run`, un barrido de
+3 modelos contaría 1 — y habría que acordarse de arreglarlo el día que otro extractor agregue un
+retry interno. En Gemini el contador quedó dentro de `generateWithTransientRetry`, que es el único
+punto del servicio donde se hace la llamada: así el barrido **y** el reintento por 503 quedan
+contados sin repetir el `record` en los tres métodos públicos.
+
+Como la cadena se construye una vez por corrida y no por boleta, el contador no podía ir en el
+constructor: viaja como parámetro opcional de `run()` y de `extractStructuredData()`.
+
+**3. Seam `onOutcome` en el `finally` de `runPipeline`**, al lado del de diagnóstico. Ese `finally`
+es el único punto por el que salen los ocho caminos de salida, incluidos los que fallan. Diferencia
+con `onDiagnostics`: éste lo inyecta el worker **siempre**, no sólo en la corrida selectiva. La
+escritura es best-effort — una métrica no puede hacer fallar el procesamiento de una boleta que ya
+se procesó bien.
+
+### Alternativas descartadas
+
+- **Contador estático en el servicio, reseteado por boleta.** Menos plumbing, pero es exactamente el
+  patrón que causó el bug del 2026-08-24: `workingModelName` es `static` y dejaba al worker fijado al
+  modelo caro hasta el reinicio. Un contador es todavía más fácil de corromper, porque lo tocan
+  varios caminos.
+- **Tabla nueva de eventos de IA**, una fila por request. Máxima resolución, pero crece ~10× más
+  rápido que `ProcessingJob` y pide política de retención antes de servir para algo. Si las columnas
+  se quedan cortas, es la evolución natural.
+- **Parsear los logs `[metrics]` y `[gemini]`.** Cero cambios en los servicios, pero los logs no se
+  persisten: el análisis quedaría atado al stdout del contenedor y se pierde en cada deploy.
+
+### Impacto
+
+Archivos: `lib/aiRequestCounter.ts` (nuevo, 5 tests) · los 4 extractores + `aiExtraction.ts` ·
+`pipeline/context.ts` · `pipeline/runner.ts` · `processPendingDocuments.job.ts` · `jobWorkerMain.ts` ·
+`scripts/metrics-cuota.sql` (nuevo). Migración `20260831000000_processing_job_metrics`.
+**Tests 830 → 843.**
+
+Lo que habilita: responder la pregunta original con datos, y recién entonces atacar el 30% de
+overhead sabiendo de dónde sale.
+
+---
+
 ## 2026-08-29 — El vencimiento se mostraba un día antes en Boletas entrantes
 
 ### Problema

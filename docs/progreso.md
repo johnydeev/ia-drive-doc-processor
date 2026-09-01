@@ -41,12 +41,17 @@ selectiva sólo lista lo que está ahí.
 - [ ] En cada corrida, revisar el **reporte en `Pendientes/_diagnosticos`**: el `.md` para el resumen y
       el JSON si algo rebota.
 
-### 2. Guard del vencimiento del CAE
+### 2. Guard del vencimiento del CAE — ✅ VERIFICADO EN PRODUCCIÓN (2026-08-30)
 
-- [ ] Al reprocesar cualquier boleta con "Fecha de Vto. de CAE", confirmar que el vencimiento queda
-      **vacío** y no toma esa fecha.
-- [ ] **Corregir a mano la boleta `00002-00208625`** (EVA PERON 1761): sigue con `vto=2026-07-07`, que
-      es el vencimiento del CAE. El guard evita los próximos, no corrige el pasado.
+- [x] Al reprocesar una boleta con "Fecha de Vto. de CAE", el vencimiento queda **vacío**.
+- [x] **Boleta `00002-00208625` corregida** (EVA PERON 1761). El owner la borró desde Boletas
+      entrantes junto con su hermana `00002-00208626` (ese proveedor emite dos por mes para ese
+      edificio, números consecutivos y mismo monto) y las dos volvieron a entrar solas.
+
+Las dos, con `dueDate = null` y `dueDateNorm = ""`, período 08/2026, `isDuplicate = false`. La misma
+corrida deja probadas tres cosas: el guard del CAE, el **matching por CUIT** de facturas comunes
+(entraron sin pasar por Sin Asignar) y que dos boletas hermanas con **el mismo monto y el mismo
+edificio no se pisan** por deduplicación.
 
 ### 3. Obligaciones por período (lo más nuevo)
 
@@ -74,8 +79,7 @@ selectiva sólo lista lo que está ahí.
 
 ## 🗓️ El vencimiento se veía un día antes en Boletas entrantes (2026-08-29)
 
-**Estado: implementado y verificado (typecheck + lint 0 errores + 829 tests + build + build:jobs OK).
-Sin migración. Sin commitear al momento de escribir esto.**
+**Estado: implementado, verificado y EN PRODUCCIÓN. Sin migración. Commiteado en `76a91cb`.**
 
 Lo reportó el owner mirando la boleta `00002-00208625`: la base dice `2026-07-07` y la tabla mostraba
 `6/7/26`. Pasaba con **todas** las boletas.
@@ -104,6 +108,131 @@ producción amplía el diff; el riesgo real es que el próximo helper vuelva a n
 
 Detalle y alternativas descartadas: `docs/decisiones.md` (2026-08-29).
 
+## 🚫 VEP y LSD dejan de gastar requests (2026-08-31)
+
+**Estado: implementado y verificado (typecheck + lint 0 errores + 857 tests + build:jobs OK). Sin
+migración. Sin commitear al momento de escribir esto.**
+
+Spec: `docs/superpowers/specs/2026-08-31-triage-no-boletas-decisivo-design.md`
+
+Es la **pieza 3** (atacar el overhead), acotada a la clase que rebota **siempre**.
+
+Hecho:
+- **Capa 0 del triage** (`detectDecisiveNotBoleta`): marcadores que descartan el documento aunque
+  tenga todas las señales de una boleta. La capa 1 no podía agarrarlos — exige que NO haya señales de
+  boleta, y un VEP tiene `$`, `IMPORTE`, `VENCIMIENTO` y CUIT.
+- **Calibrado sobre 9 papeles reales** (4 VEP + 5 LSD) que pasó el owner. **9 de 9 detectados**, y la
+  heurística vieja clasificaba a los 9 como `boleta` — o sea las 9 gastaban una request.
+- **El F931 de ARCA no se rompe**: su texto contiene "Volante Electrónico de Pago" (el importe está
+  en el VEP de la página 2), así que el marcador de VEP sólo cuenta en los primeros 200 caracteres.
+- **Destino Sin Asignar** con etiqueta por tipo (`[NO BOLETA - VEP]`). El tipo queda en
+  `ProcessingJob.reasonCategory` → se puede medir cuántas requests ahorró cada uno.
+- **`markNotBoleta` idempotente** (antes apilaba el prefijo al reprocesar).
+
+> **Lo que enseñó la calibración:** el spec proponía buscar `"LIBRO DE SUELDOS DIGITAL"` y **el texto
+> extraíble de un LSD no dice eso en ningún lado**. Escrito de memoria, el detector no habría
+> detectado nada y el trabajo habría parecido terminado. Los marcadores se sacan del papel, siempre.
+
+**Decisión del owner (2026-09-01):** por ahora **sólo VEP y LSD**. Presupuestos, estados de cuenta y
+pedidos **no** se implementan con marcadores propios — no hay papeles de muestra y no vale el
+trabajo. La idea para cubrirlos de forma genérica es la regla de abajo.
+
+### "Sin 2 CUITs válidos, se desestima" — ya es el comportamiento actual
+
+El owner aclaró (2026-09-01) que la regla aplica **sólo a boletas comunes**, y que usar Vision para
+sacar los CUITs de una imagen es válido. Con ese alcance, **el criterio ya rige desde la reforma del
+2026-08-26** y no hay nada que cambiar:
+
+- Factura común → matching **100% por CUIT** (`cuitOnly = !lspProvider`). Sin el CUIT del consorcio
+  o del proveedor va a Sin Asignar con su etiqueta `*_INEXISTENTE`.
+- Esas etiquetas son justamente las que **disparan el código de barras AFIP y el fallback visual**,
+  o sea Vision ya se usa para rescatar el CUIT antes de rendirse.
+- El criterio de fondo es el del owner: una boleta sin el CUIT del consorcio **no sirve como respaldo
+  de rendición de cuentas**, así que rebotar es correcto.
+
+**Modelo de identificación, confirmado por el owner:** las boletas comunes se identifican por los dos
+CUITs; los LSP por un **número específico** que apunta a un consorcio ya cargado — número de cliente
+en los servicios, **partida** en AGIP, **clave** en SUTERH.
+
+> Estado real de ese modelo: los servicios y AGIP ya funcionan así (a AGIP le faltan las filas en
+> `_LspServices` — tarea 7 del tablero). **SUTERH no**: hoy matchea por nombre del proveedor, porque
+> el CUIT impreso es el del consorcio. Pasarlo a identificarse por clave es trabajo nuevo.
+
+### ⏳ Lo único que quedaría: adelantar la regla antes de la IA
+
+Hoy la boleta se desestima **después** de llamar a la IA, así que la request ya se gastó. Cortarla
+antes sólo es seguro en un caso acotado:
+
+1. No es LSP (`identifyLSPProvider(text) === null`) — se calcula gratis sobre el texto.
+2. El PDF tiene **texto propio** (`isLastPdfScanned() === false`): con texto, Vision no aportaría, así
+   que no se pierde ningún rescate.
+3. Corre **primero** el código de barras AFIP (0 tokens) y suma ese CUIT.
+4. Recién entonces: menos de 2 CUITs válidos → desestimar sin llamar a la IA.
+
+Cuánto rinde es medible antes de construirlo: consulta 2 de `scripts/metrics-cuota.sql` filtrando
+`reasonCategory` en `consortium_cuit_missing` y `provider_cuit_missing`.
+
+**⏳ Smoke:** después de desplegar, reprocesar un VEP y confirmar que entra a Sin Asignar como
+`[NO BOLETA - VEP]` con `aiRequests = 0` en `ProcessingJob`.
+
+## 📊 Instrumentación de requests y cuota de IA (2026-08-31)
+
+**Estado: implementado y verificado (typecheck + lint 0 errores + 843 tests + build:jobs OK).
+Migración `20260831000000_processing_job_metrics` **YA APLICADA** por el owner (2026-08-31;
+verificado en la base: las 5 columnas existen, nullable, con los tipos esperados). Sin commitear al
+momento de escribir esto.**
+
+Spec: `docs/superpowers/specs/2026-08-31-instrumentacion-requests-cuota-ia-design.md`
+Plan: `docs/superpowers/plans/2026-08-31-instrumentacion-requests-cuota-ia.md`
+
+Origen: el owner preguntó si la reforma de matching por CUIT bajó el consumo. **No se podía
+responder**: no se registraba ni una request. El 30,1% de overhead (642.755 tokens sobre julio →
+26/08) se podía calcular pero no atribuir.
+
+Hecho:
+- **5 columnas en `ProcessingJob`** — `outcome`, `reasonCategory`, `aiRequests`, `usedVision`,
+  `aiRequestsJson`. Una fila por archivo procesado, **entre o no entre como boleta**: es la única
+  tabla que cubre los rebotes. Los tokens no se duplican ahí.
+- **`AiRequestCounter`** por boleta. Regla: **incrementa quien hace la llamada HTTP, nunca el
+  orquestador** — contar los intentos de la cadena haría que un barrido de 3 modelos contara 1. En
+  Gemini vive dentro de `generateWithTransientRetry`, el único punto donde se llama al modelo, así
+  que el barrido y el reintento por 503 quedan cubiertos en un solo lugar.
+- **Seam `onOutcome`** en el `finally` de `runPipeline`, el único punto por el que salen los 8
+  caminos. Lo inyecta el worker SIEMPRE (el de diagnóstico, sólo en corrida selectiva). Best-effort:
+  si la escritura falla, se loguea y el job se cierra igual.
+- **`scripts/metrics-cuota.sql`**: requests/día contra el techo de ~60, abierto por modelo, rebotes
+  por categoría, gasto por resultado, y costo de los reprocesos. Con un control de sanidad — los
+  `duplicate` tienen que dar `aiRequests = 0`, porque `dedupHashStep` corre antes de la IA.
+
+**Desvío del spec, consciente:** el spec pedía un test de que el fallo al escribir la métrica no
+rompe el job. **No hay suite para `jobWorkerMain`** (el único test de `src/jobs/` es el del
+pipeline); montarla pide mockear Prisma y el ciclo del worker, y es un proyecto aparte. La garantía
+queda en el `try/catch`, igual que el guardado de diagnósticos, que tampoco tiene test.
+
+**⏳ Después de aplicar la migración:** dejar correr un día y verificar con la consulta 1 que el
+número de requests es coherente con la cantidad de boletas. Si da MENOS requests que boletas, el
+contador se está perdiendo llamadas.
+
+**Lo que sigue (pieza 3):** atacar el 30% de overhead, ya con datos. Pendiente también la idea de
+ahorro que el owner quiere sumar.
+
+## 🥇 Gemini pasa a primero en la cadena (2026-08-30)
+
+**Estado: implementado y verificado (830 tests). Sin migración. Sin commitear al momento de escribir
+esto — va junto con la instrumentación.**
+
+`PROVIDER_ORDER` queda **Gemini → Cerebras → OpenAI → Claude**. Es la pieza 1 del spec del
+2026-08-24, que estaba diseñada y sin aplicar por depender de una key paga.
+
+Lo que cambió la decisión: **Cerebras devolvió 402 (sin cuota) en las 4 boletas** de la corrida del
+28/08. La cadena ya dependía de Gemini de hecho, pero pagaba un intento fallido contra Cerebras en
+cada boleta.
+
+> **El riesgo del free tier sigue vigente.** La cuota de Gemini es diaria **por modelo** (~20
+> requests), así que en un día de volumen alto las primeras boletas queman el balde y el resto paga
+> el barrido de los 3 modelos antes de caer al proveedor siguiente. Con Cerebras sano en segundo
+> lugar eso se absorbe; sin Cerebras, no hay red. **El owner se encarga de Cerebras.**
+
 ## 📋 Tablero del owner (verificado contra la base el 2026-08-29)
 
 Todo lo de acá lo hace el owner; nada requiere cambios de código.
@@ -119,10 +248,13 @@ Todo lo de acá lo hace el owner; nada requiere cambios de código.
 | 7 | **Partidas de AGIP en `_LspServices`** | ❌ **0 filas** | Todo el soporte de ABL |
 | 8 | `_LspServices` faltantes: AySA `1015440` (SAN ANTONIO 345), Edesur `100188012` | ❌ | Esas boletas rebotan sin fallback |
 | 9 | **Instalar poppler** (`pdftoppm` en el PATH) | ❌ | Probar boletas escaneadas y de membrete en imagen |
-| 10 | Reprocesar la boleta `00002-00208625` (tiene el vto. del CAE) | ❌ | — |
+| 10 | Reprocesar la boleta `00002-00208625` (tenía el vto. del CAE) | ✅ reprocesada 2026-08-30, entró con vencimiento vacío | — |
 | 11 | Banco propio para Edificio de Prueba | ❌ | Sólo cosmético en la vista de obligaciones |
 | 12 | Definir el CUIT correcto de Metrogas | ✅ se cierra: el de la base es válido | — |
 | 13 | Lote fijo de regresión (15-25 boletas + `.expected.json`) | ❌ | Comparar key free vs paga de Gemini |
+| 14 | Aplicar migración `20260831000000_processing_job_metrics` + `prisma generate` | ✅ hecho 2026-08-31 | — |
+| 14b | Dejar correr un día y validar el contador con `scripts/metrics-cuota.sql` | ❌ | Confirmar que no se pierden llamadas |
+| 15 | Resolver **Cerebras 402** | ❌ (lo toma el owner) | Con Gemini primero y sin Cerebras, no hay red bajo el free tier |
 
 **Riesgo operativo abierto, sin dueño:** en la corrida real del 2026-08-28 **Cerebras devolvió 402 en
 las 4 boletas**. La cadena está colgada de Gemini free tier, cuya cuota es diaria **por modelo**; una
@@ -507,8 +639,9 @@ Hecho:
 **Verificado contra el texto real del reporte de producción**: corrige la boleta que estaba mal y no
 toca las otras dos.
 
-**⏳ Pendiente del owner:** la boleta `00002-00208625` ya está en la base con el vencimiento
-equivocado — el guard evita los próximos, no corrige el pasado.
+**✅ Cerrado el 2026-08-30:** la boleta `00002-00208625` se reprocesó (borrada desde Boletas
+entrantes) y volvió a entrar con el vencimiento **vacío**, igual que su hermana `00002-00208626`.
+Primera verificación del guard contra un PDF real en producción.
 
 ## 🔬 Primera corrida selectiva real: qué mostró (2026-08-18)
 

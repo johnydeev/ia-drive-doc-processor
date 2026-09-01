@@ -1,7 +1,7 @@
 import { env } from "@/config/env";
 import { nextQuotaResetUtc } from "@/lib/quotaReset";
 import { parseProcessIntervalMinutes } from "@/jobs/runProcessingCycle";
-import { processSingleDriveFileJob } from "@/jobs/processPendingDocuments.job";
+import { processSingleDriveFileJob, type JobOutcome } from "@/jobs/processPendingDocuments.job";
 import { getPrismaClient } from "@/lib/prisma";
 import { withDbRetry } from "@/lib/dbRetry";
 import { workerLog } from "@/lib/logger";
@@ -191,6 +191,10 @@ async function handleJob(job: {
     ? (payload: BoletaDiagnostics) => { diagnostics = payload; }
     : undefined;
 
+  // Métricas de consumo: se recolectan SIEMPRE, no sólo en la corrida selectiva.
+  let outcome: JobOutcome | null = null;
+  const onOutcome = (payload: JobOutcome) => { outcome = payload; };
+
   try {
     const sheetName = resolveSheetName(client);
     const mapping = resolveMapping(client);
@@ -220,7 +224,8 @@ async function handleJob(job: {
         name: job.driveFileName ?? job.driveFileId,
       },
       undefined,
-      onDiagnostics
+      onDiagnostics,
+      onOutcome
     );
 
     if (summary.failed > 0) {
@@ -239,6 +244,27 @@ async function handleJob(job: {
       await diagnosticsService.saveJobDiagnostics(job.id, diagnostics);
     } catch (error) {
       workerLog.unhandledError(job.id, `No se pudo guardar el diagnóstico: ${errMessage(error)}`);
+    }
+  }
+
+  // Métricas de consumo de IA. Best-effort a propósito: si la escritura falla se
+  // loguea y el job se cierra igual — una métrica nunca puede hacer fallar el
+  // procesamiento de una boleta que ya se procesó bien.
+  if (outcome) {
+    const metrics: JobOutcome = outcome;
+    try {
+      await getPrismaClient().processingJob.update({
+        where: { id: job.id },
+        data: {
+          outcome: metrics.outcome,
+          reasonCategory: metrics.reasonCategory,
+          aiRequests: metrics.aiRequests,
+          usedVision: metrics.usedVision,
+          aiRequestsJson: metrics.aiRequestsByModel,
+        },
+      });
+    } catch (error) {
+      workerLog.unhandledError(job.id, `No se pudieron guardar las métricas de consumo: ${errMessage(error)}`);
     }
   }
 

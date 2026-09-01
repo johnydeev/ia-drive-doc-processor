@@ -116,6 +116,19 @@ model ProcessingJob {
   /// Diagnóstico de esta boleta (métricas + extraído + texto que vio la IA). Solo
   /// se llena en corridas selectivas; después se consolida en el reporte de Drive.
   diagnosticsJson Json?
+  /// Cómo terminó la boleta: ok / unassigned / duplicate / not_boleta /
+  /// no_amount / no_period / rate_limited / failed.
+  outcome         String?
+  /// En `unassigned` es la reasonCategory del assignment (las 4 de CUIT
+  /// incluidas); en el resto de los caminos, el motivo del corte.
+  reasonCategory  String?
+  /// Requests HTTP reales a la IA: barrido de modelos y visión incluidos. La
+  /// cuota del free tier se gasta por request, no por token.
+  aiRequests      Int?
+  /// Si se gastó Gemini Vision en esta boleta.
+  usedVision      Boolean?
+  /// Requests abiertas por "provider:model" — la cuota free es POR MODELO.
+  aiRequestsJson  Json?
   createdAt     DateTime  @default(now())
   startedAt     DateTime?
   finishedAt    DateTime?

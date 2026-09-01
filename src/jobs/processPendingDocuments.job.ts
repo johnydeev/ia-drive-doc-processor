@@ -26,7 +26,7 @@ import { isRateLimitError, RateLimitError } from "@/lib/aiErrors";
 import { PdfTextExtractorService } from "@/services/pdfTextExtractor.service";
 import { isMissingAmount, cuitAppearsInText, appendNoAmountTag, appendTag, markNotBoleta } from "@/lib/documentValidation";
 import { reflowAfipTotals } from "@/lib/afipTotalsReflow";
-import { classifyDocumentType } from "@/lib/documentClassifier";
+import { classifyDocumentType, detectDecisiveNotBoleta } from "@/lib/documentClassifier";
 import { runPipeline } from "@/jobs/pipeline/runner";
 import { createPipelineContext, type PipelineContext, type StepResult } from "@/jobs/pipeline/context";
 
@@ -101,7 +101,30 @@ export type ProcessingContext = {
    * pipeline se comporta exactamente igual que antes.
    */
   onDiagnostics?: (payload: BoletaDiagnostics) => void;
+  /**
+   * Colector de MÉTRICAS DE CONSUMO. A diferencia de `onDiagnostics` —que solo
+   * existe en la corrida selectiva— este lo inyecta el worker SIEMPRE, para
+   * poder medir requests contra la cuota diaria del free tier. Sin colector el
+   * pipeline se comporta igual.
+   */
+  onOutcome?: (payload: JobOutcome) => void;
 };
+
+/**
+ * Cómo terminó UNA boleta y cuánto costó en requests. Se emite en todos los
+ * caminos de salida del pipeline, incluidos los que fallan.
+ */
+export interface JobOutcome {
+  fileId: string;
+  /** ok / unassigned / duplicate / not_boleta / no_amount / no_period / rate_limited / failed. */
+  outcome: string;
+  /** En `unassigned` es la reasonCategory; en el resto, el motivo del corte. */
+  reasonCategory: string | null;
+  /** Requests HTTP reales, con barrido de modelos y visión incluidos. */
+  aiRequests: number;
+  aiRequestsByModel: Record<string, number>;
+  usedVision: boolean;
+}
 
 // Fuente única del mapping por defecto (ver clientProcessingConfig). Se re-exporta
 // porque el worker y los tests de caracterización lo importan de acá.
@@ -186,7 +209,8 @@ function normalizeMatchMethod(m: string | null | undefined): string | null {
 async function createProcessingContext(
   config: ProcessJobConfig,
   mapping: SheetsRowMapping,
-  onDiagnostics?: (payload: BoletaDiagnostics) => void
+  onDiagnostics?: (payload: BoletaDiagnostics) => void,
+  onOutcome?: (payload: JobOutcome) => void
 ): Promise<ProcessingContext> {
   const driveService = new GoogleDriveService(config.googleConfig);
   const pdfExtractor = new PdfTextExtractorService();
@@ -204,8 +228,10 @@ async function createProcessingContext(
   const openaiModel = config.aiConfig?.openaiModel?.trim() || env.OPENAI_MODEL;
   const anthropicModel = config.aiConfig?.anthropicModel?.trim() || env.ANTHROPIC_MODEL;
   const geminiModule = geminiApiKey ? await import("@/services/geminiExtractor.service") : null;
-  // Cadena: Cerebras → Gemini → OpenAI → Claude. Groq se eliminó del proyecto
-  // el 2026-08-25 (estaba fuera de producción desde 2026-06-25).
+  // Cadena: Gemini → Cerebras → OpenAI → Claude (Gemini pasó a primero el
+  // 2026-08-30). Groq se eliminó del proyecto el 2026-08-25 (estaba fuera de
+  // producción desde 2026-06-25). El orden real lo define `PROVIDER_ORDER`;
+  // el orden de estas claves no importa.
   const aiChain = await createAiExtractionChain({
     cerebras: { apiKey: cerebrasApiKey, model: cerebrasModel },
     gemini: { apiKey: geminiApiKey, model: geminiModel },
@@ -228,6 +254,7 @@ async function createProcessingContext(
     geminiApiKey, geminiModel,
     existingDuplicateKeys,
     onDiagnostics,
+    onOutcome,
   };
 }
 
@@ -640,7 +667,24 @@ async function dedupHashStep(ctx: PipelineContext): Promise<StepResult> {
 }
 
 /** Deriva un documento no-boleta a Revisión con prefijo [NO BOLETA] (sin Sheets/DB). */
-async function divertNotBoleta(ctx: PipelineContext, layer: "heuristic" | "ai"): Promise<StepResult> {
+/**
+ * Saca de circulación un documento que no es una boleta.
+ *
+ * **Destino: Sin Asignar** (2026-08-31, antes era Revisión). Decisión del owner:
+ * los VEP y los LSD van a tener un flujo propio más adelante, así que son
+ * documentos *pendientes de asignar*, no descarte — y tenerlos todos en una sola
+ * carpeta es lo que hace posible la limpieza manual antes de reprocesar.
+ *
+ * `kind` es el tipo detectado (VEP, LSD…) y va en el nombre del archivo, para
+ * poder filtrarlos por tipo dentro de la carpeta. `m.reason` lo persiste en
+ * `ProcessingJob.reasonCategory`, así que se puede contar cuántas requests
+ * ahorró cada tipo.
+ */
+async function divertNotBoleta(
+  ctx: PipelineContext,
+  layer: "heuristic" | "ai" | "decisive",
+  kind?: string
+): Promise<StepResult> {
   const { file } = ctx;
   const { resolvedConfig, driveService } = ctx.deps;
   const m = ctx.m;
@@ -648,19 +692,24 @@ async function divertNotBoleta(ctx: PipelineContext, layer: "heuristic" | "ai"):
   const finalSourceFolderId = ctx.finalSourceFolderId;
 
   m.result = "not_boleta";
-  m.reason = layer;
-  pipelineLog.stepStart(cid, `🚫 No es boleta (${layer}) → Revisión [NO BOLETA]: "${file.name}"`);
-  if (resolvedConfig.driveFailedFolderId && finalSourceFolderId) {
-    await ctx.runStep("Renombrar [NO BOLETA]", () => driveService.renameFile(file.id, markNotBoleta(file.name)), "move");
+  m.reason = kind ?? layer;
+  const label = kind ? `[NO BOLETA - ${kind}]` : "[NO BOLETA]";
+  pipelineLog.stepStart(cid, `🚫 No es boleta (${layer}) → Sin Asignar ${label}: "${file.name}"`);
+  if (resolvedConfig.driveUnassignedFolderId && finalSourceFolderId) {
     await ctx.runStep(
-      "Mover a Revisión (no boleta)",
-      () => driveService.moveFileToFolder(file.id, finalSourceFolderId, resolvedConfig.driveFailedFolderId!),
+      `Renombrar ${label}`,
+      () => driveService.renameFile(file.id, markNotBoleta(file.name, kind)),
       "move"
     );
-    pipelineLog.movedToFailed(cid, file.id);
+    await ctx.runStep(
+      "Mover a Sin Asignar (no boleta)",
+      () => driveService.moveFileToUnassigned(file.id, finalSourceFolderId, resolvedConfig.driveUnassignedFolderId!),
+      "move"
+    );
+    pipelineLog.movedToUnassigned(cid, file.id, `no es boleta${kind ? ` (${kind})` : ""}`);
   }
   ctx.summary.notBoleta = (ctx.summary.notBoleta ?? 0) + 1;
-  pipelineLog.fileCompleted(cid, file.name, { processed: 0, unassigned: 0, duplicate: false }, "NO BOLETA → Revisión");
+  pipelineLog.fileCompleted(cid, file.name, { processed: 0, unassigned: 0, duplicate: false }, "NO BOLETA → Sin Asignar");
   return { kind: "halt", result: m.result, reason: m.reason };
 }
 
@@ -668,6 +717,16 @@ async function divertNotBoleta(ctx: PipelineContext, layer: "heuristic" | "ai"):
 async function documentTriageGate(ctx: PipelineContext): Promise<StepResult> {
   // Sin texto (imágenes) la heurística no aplica → decide la capa 2 (isBoletaGate).
   if (!ctx.docText) return { kind: "continue" };
+
+  // Capa 0: tipos inequívocos (VEP, LSD). Van ANTES de la heurística porque se
+  // descartan aunque tengan todas las señales de una boleta ($, IMPORTE, CUIT),
+  // que es justamente lo que hacía que `classifyDocumentType` los dejara pasar y
+  // gastaran una request de IA cada vez.
+  const decisiveKind = detectDecisiveNotBoleta(ctx.docText);
+  if (decisiveKind) {
+    return divertNotBoleta(ctx, "decisive", decisiveKind);
+  }
+
   if (classifyDocumentType(ctx.docText) === "not_boleta") {
     return divertNotBoleta(ctx, "heuristic");
   }
@@ -769,7 +828,12 @@ async function runVisionExtraction(
 ): Promise<{ extracted: ExtractedDocumentData; usage: import("@/types/aiUsage.types").AiUsageMetrics | null }> {
   const { geminiModule, geminiApiKey, geminiModel } = ctx.deps;
   const extractor = new geminiModule!.GeminiExtractorService({ apiKey: geminiApiKey, model: geminiModel });
-  const extracted = await ctx.runStep(label, () => extractor.extractStructuredDataFromImage(image, mimeType), "ai");
+  ctx.usedVision = true;
+  const extracted = await ctx.runStep(
+    label,
+    () => extractor.extractStructuredDataFromImage(image, mimeType, ctx.aiRequests),
+    "ai"
+  );
   const usage = extractor.getLastUsage?.() ?? null;
   accumulateTokenUsage(ctx.summary.tokenUsage, usage);
   return { extracted, usage };
@@ -867,13 +931,17 @@ async function aiExtractStep(ctx: PipelineContext): Promise<StepResult> {
     const aiResult = await runStep(
       "Extracción IA",
       () =>
-        aiChain.run(docText, (provider, ok, errorMsg, rateLimited) => {
-          pipelineLog.aiExtraction(cid, provider, ok, errorMsg);
-          if (!ok) {
-            aiFailures += 1;
-            if (rateLimited) aiRateLimited += 1;
-          }
-        }),
+        aiChain.run(
+          docText,
+          (provider, ok, errorMsg, rateLimited) => {
+            pipelineLog.aiExtraction(cid, provider, ok, errorMsg);
+            if (!ok) {
+              aiFailures += 1;
+              if (rateLimited) aiRateLimited += 1;
+            }
+          },
+          ctx.aiRequests
+        ),
       "ai"
     );
 
@@ -1166,9 +1234,11 @@ async function assignmentStep(ctx: PipelineContext): Promise<StepResult> {
           apiKey: geminiApiKey,
           model: geminiModel,
         });
+        ctx.usedVision = true;
         const visual = await visualExtractor.extractPartiesFromImage(
           membretePng,
-          assignment.canonicalConsortium ?? extracted.consortium ?? ""
+          assignment.canonicalConsortium ?? extracted.consortium ?? "",
+          ctx.aiRequests
         );
 
         const visionCuits = [visual.providerTaxId, visual.consortiumTaxId]
@@ -1592,11 +1662,12 @@ export async function processSingleDriveFileJob(
   config: ProcessJobConfig,
   file: ProcessDriveFileInput,
   mapping?: SheetsRowMapping,
-  onDiagnostics?: (payload: BoletaDiagnostics) => void
+  onDiagnostics?: (payload: BoletaDiagnostics) => void,
+  onOutcome?: (payload: JobOutcome) => void
 ): Promise<ProcessJobSummary> {
   const resolvedConfig = normalizeConfig(config, mapping);
   const resolvedMapping = resolvedConfig.mapping ?? DEFAULT_MAPPING;
-  const context = await createProcessingContext(resolvedConfig, resolvedMapping, onDiagnostics);
+  const context = await createProcessingContext(resolvedConfig, resolvedMapping, onDiagnostics, onOutcome);
   const summary = createBaseSummary(1);
   summary.clientId = resolvedConfig.clientId;
   summary.clientName = resolvedConfig.clientName;

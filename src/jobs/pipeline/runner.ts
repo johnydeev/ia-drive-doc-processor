@@ -118,5 +118,19 @@ export async function runPipeline(steps: PipelineStep[], ctx: PipelineContext): 
       canonical: m.canonical,
       promptText: ctx.docText,
     });
+
+    // Métricas de consumo de IA. Este colector lo inyecta el worker SIEMPRE (el
+    // de diagnóstico, sólo en la corrida selectiva), porque la pregunta que
+    // responde —cuántas requests contra la cuota diaria— es de todos los días.
+    // Va acá y no en los pasos por la misma razón que `[metrics]`: es el único
+    // punto por el que salen los ocho caminos, incluidos los que fallan.
+    deps.onOutcome?.({
+      fileId: file.id,
+      outcome: m.result,
+      reasonCategory: m.reason,
+      aiRequests: ctx.aiRequests.total(),
+      aiRequestsByModel: ctx.aiRequests.snapshot(),
+      usedVision: ctx.usedVision,
+    });
   }
 }
