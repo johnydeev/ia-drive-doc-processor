@@ -13,6 +13,16 @@
   allTaxIds?: string[] | null;
   /** La IA juzga si el documento es una boleta/factura/recibo (capa 2 del triage). */
   isBoleta?: boolean | null;
+  /**
+   * Sólo en una Liquidación de Sueldos Digital: el libro y su lista de empleados. El
+   * pipeline lo abre en una boleta por empleado (spec 2026-09-01).
+   */
+  lsd?: {
+    consortiumTaxId: string | null;
+    libroId: string | null;
+    periodo: string | null;
+    empleados: Array<{ cuil: string; apellidoNombre: string | null; sueldoNeto: number | string | null }>;
+  } | null;
   period?: string | null;
   sourceFileUrl?: string | null;
   isDuplicate?: "YES" | "NO" | null;

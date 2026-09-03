@@ -3,6 +3,7 @@ import { formatCuit } from "@/lib/cuit";
 import { correctCaeDueDate } from "@/lib/caeDueDateGuard";
 import { correctVatContainedAmount } from "@/lib/vatContainedAmountGuard";
 import { ExtractedDocumentData } from "@/types/extractedDocument.types";
+import { buildLsdPrompt } from "@/lib/lsdExtraction";
 
 /**
  * Normaliza un CUIT devuelto por la IA al formato canónico `XX-XXXXXXXX-X`
@@ -58,6 +59,26 @@ export const EXTRACTED_DOCUMENT_SCHEMA = z
     // Triage capa 2: la IA marca si el documento es una boleta. Default conservador
     // `true` (si la IA lo omite, se trata como boleta y sigue el flujo normal).
     isBoleta: z.boolean().nullable().default(true),
+    // Sólo lo llena el prompt de la Liquidación de Sueldos Digital: el libro y su lista
+    // de empleados. Un LSD no tiene número de factura ni monto único, así que el
+    // resto de los campos quedan en null y el pipeline abre esto en N boletas.
+    lsd: z
+      .object({
+        consortiumTaxId: z.string().nullable().default(null),
+        libroId: z.string().nullable().default(null),
+        periodo: z.string().nullable().default(null),
+        empleados: z
+          .array(
+            z.object({
+              cuil: z.string(),
+              apellidoNombre: z.string().nullable().default(""),
+              sueldoNeto: z.union([z.number(), z.string()]).nullable().default(null),
+            })
+          )
+          .default([]),
+      })
+      .nullable()
+      .default(null),
   })
   .passthrough();
 
@@ -82,6 +103,7 @@ const OUTPUT_JSON_TEMPLATE = {
 // ═══════════════════════════════════════════════════════════════════════════
 
 export type LSPProvider =
+  | "LSD"
   | "EDESUR"
   | "EDENOR"
   | "AYSA"
@@ -141,8 +163,41 @@ function isPersonalTelecom(upper: string): boolean {
   );
 }
 
+/**
+ * Marcadores del encabezado de una Liquidación de Sueldos Digital. Salen de los 5 libros
+ * reales que aportó el owner: el texto extraíble **no** dice "liquidación de sueldos
+ * digital" en ningún lado, así que el marcador obvio no habría detectado nada.
+ *
+ * Se exigen DOS: cada frase suelta podría aparecer en otro documento de RRHH,
+ * las seis juntas son el encabezado del libro.
+ */
+const LSD_HEADER_MARKERS = [
+  "EMPRESA DOMICILIO FISCAL",
+  "NRO.LIQUIDACION",
+  "ACTIVIDAD PPAL",
+  "IDENTIFICADOR UNICO DEL LIBRO",
+  "IDENTIFICADOR UNICO DE HOJA MOVIL",
+  "LEGAJO CUIL APELLIDO Y NOMBRE",
+];
+
+function isLibroSueldos(upper: string): boolean {
+  const sinAcentos = upper.normalize("NFD").replace(/[̀-ͯ]/g, "");
+  const hits = LSD_HEADER_MARKERS.filter((marker) => sinAcentos.includes(marker)).length;
+  return hits >= 2;
+}
+
 export function identifyLSPProvider(text: string): LSPProvider | null {
   const upper = text.slice(0, 4000).toUpperCase();
+
+  // ── Liquidación de Sueldos Digital (LSD) ───────────────────────────────────────
+  // VA PRIMERO, antes que los sindicales: el libro nombra el convenio colectivo
+  // de la federación en la fila de cada empleado ("FEDERACIÓN ARGENTINA
+  // TRABAJADORES DE EDIF.DE RENTA Y PROPIED"), que es el falso positivo FATERYH
+  // detectado el 2026-08-17 (2 de 5 libros caían en el prompt sindical).
+  //
+  // No es una boleta: es un documento con VARIOS gastos, uno por empleado. El
+  // pipeline lo abre en N boletas (spec 2026-09-01).
+  if (isLibroSueldos(upper)) return "LSD";
 
   // ── Boletas sindicales (SUTERH / FATERYH / SERACARH) ─────────────────────
   // No son servicios públicos (van ANTES del gate isUtilityBill) pero usan el
@@ -332,6 +387,8 @@ export function buildExtractionPrompt(text: string): string {
 
   // Route to specific prompt per LSP provider
   switch (lspProvider) {
+    case "LSD":
+      return buildLsdPrompt(relevantText);
     case "EDESUR":
       return buildEdesurPrompt(relevantText);
     case "EDENOR":

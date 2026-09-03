@@ -81,3 +81,28 @@ export class FixedExpenseRepository {
     await this.prisma.fixedExpense.delete({ where: { id } });
   }
 }
+
+/**
+ * IDs de proveedor de los gastos fijos de EMPLEADO activos de un consorcio.
+ *
+ * Es el **padrón del edificio**: la única fuente exacta de cuántos empleados
+ * tiene. Contra esto se valida que una Liquidación de Sueldos Digital venga completo —
+ * el papel no declara la cantidad de empleados, y contar los CUIL de su texto es
+ * ruidoso porque el libro está lleno de números largos que pasan el checksum por
+ * casualidad (spec `2026-09-01-lsd-un-libro-n-empleados-design.md` §3.5).
+ */
+export async function findActiveEmployeeFixedExpenseProviderIds(
+  consortiumId: string
+): Promise<string[]> {
+  const rows = await getPrismaClient().fixedExpense.findMany({
+    where: {
+      consortiumId,
+      active: true,
+      providerId: { not: null },
+      provider: { providerType: "EMPLEADO" },
+    },
+    select: { providerId: true },
+  });
+
+  return rows.map((row) => row.providerId).filter((id): id is string => Boolean(id));
+}

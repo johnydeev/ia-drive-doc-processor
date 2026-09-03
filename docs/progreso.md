@@ -108,6 +108,47 @@ producción amplía el diff; el riesgo real es que el próximo helper vuelva a n
 
 Detalle y alternativas descartadas: `docs/decisiones.md` (2026-08-29).
 
+## 📗 Liquidación de Sueldos: un archivo, N gastos (2026-09-01)
+
+**Estado: implementado y verificado (typecheck + lint 0 errores + 889 tests + build:jobs OK). Sin
+migración. Sin commitear al momento de escribir esto.**
+
+Spec: `docs/superpowers/specs/2026-09-01-lsd-un-libro-n-empleados-design.md`
+Plan: `docs/superpowers/plans/2026-09-01-lsd-un-libro-n-empleados.md`
+
+Un LSD contiene el sueldo de VARIOS empleados, y cada uno es un gasto distinto del edificio. El
+pipeline producía como máximo una `Invoice` por archivo.
+
+Hecho:
+- **`ctx.invoices`**: lista de boletas por archivo. Vacía = una sola (todos los documentos); con
+  contenido = fan-out. Sólo `sheetsStep` y `persistStep` iteran — los otros 14 pasos no se enteran y
+  la red de caracterización quedó intacta.
+- **El consorcio sale del CUIT del encabezado**, que el libro trae impreso: los 5 libros reales
+  matchean exacto contra la base. Sin `LspService` y sin alta extra.
+- **El libro entra completo o no entra**: todos los CUIL de alta **y** todos los gastos fijos de
+  empleado cubiertos. La segunda condición es la que detecta que la IA se salteó a alguien.
+- **Hash derivado por empleado**, porque `Invoice` tiene unique `(clientId, documentHash)`. Sin
+  migración.
+- **Corte temprano por `driveFileId`**, que además evita que cualquier archivo reprocesado vuelva a
+  pagar la IA.
+- El LSD **salió del triage de no-boletas** y va **primero** en el router, antes que los sindicales
+  (el libro nombra el convenio de la federación: era el falso positivo FATERYH del 2026-08-17).
+
+**Dos gates hubo que exceptuar**, porque asumían un documento = un gasto: el de `SIN MONTO` (un libro
+no tiene monto único) y el de proveedor (los proveedores son los empleados).
+
+**⏳ Pendiente del owner, y es bloqueante:** dar de alta a los empleados en `_Proveedores` (CUIL en
+el campo CUIT, tipo `EMPLEADO`) y crear su **gasto fijo** en cada edificio. Sin el padrón cargado la
+validación de completitud no tiene contra qué comparar, y sin gasto fijo el sueldo **no aparece en la
+hoja** del edificio, que es la orden de pago.
+
+**⏳ Smoke:** procesar un LSD de 2 empleados y confirmar 2 gastos en la hoja, cada uno con su CBU, y
+el PDF una sola vez en Rendiciones.
+
+> **Costo conocido, aceptado por el owner:** un **suplente** que cubre vacaciones aparece en el libro
+> sin alta previa y **frena el libro entero** hasta que se lo cargue y se reprocese (una request más).
+> Se evaluó darlo de alta automáticamente y se descartó: nada se crea solo en el directorio.
+
 ## 🚫 VEP y LSD dejan de gastar requests (2026-08-31)
 
 **Estado: implementado y verificado (typecheck + lint 0 errores + 857 tests + build:jobs OK). Sin
@@ -129,7 +170,7 @@ Hecho:
   `ProcessingJob.reasonCategory` → se puede medir cuántas requests ahorró cada uno.
 - **`markNotBoleta` idempotente** (antes apilaba el prefijo al reprocesar).
 
-> **Lo que enseñó la calibración:** el spec proponía buscar `"LIBRO DE SUELDOS DIGITAL"` y **el texto
+> **Lo que enseñó la calibración:** el spec proponía buscar `"LIQUIDACIÓN DE SUELDOS DIGITAL"` y **el texto
 > extraíble de un LSD no dice eso en ningún lado**. Escrito de memoria, el detector no habría
 > detectado nada y el trabajo habría parecido terminado. Los marcadores se sacan del papel, siempre.
 

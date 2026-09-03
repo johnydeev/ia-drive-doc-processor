@@ -440,3 +440,43 @@ describe("buildInvoicePrompt — identificación del consorcio receptor", () => 
     expect(prompt).toContain("CONSORCIO DE PROPIETARIOS");
   });
 });
+
+describe("identifyLSPProvider — Liquidación de Sueldos Digital (LSD)", () => {
+  /** Encabezado real de un LSD (ALMIRANTE BROWN 706, julio 2026), recortado. */
+  const LSD_TEXT = `EMPRESA DOMICILIO FISCAL
+PERIODO PROVINCIA
+NRO.LIQUIDACIÓN
+ACTIVIDAD PPAL
+30-52063978-7 - CONSORCIO COPROPIETARIOS AV ALMIRANTE B BROWN ALMTE AV. 706 06A
+202607 CIUDAD AUTONOMA BUENOS AIRES
+949920 - SERVICIOS DE CONSORCIOS DE EDIFICIOS
+LEGAJO CUIL APELLIDO Y NOMBRE FECHA INGRESO FECHA CESE DOCUMENTO
+IDENTIFICADOR ÚNICO DEL LIBRO 000000045900718 FECHA DE EMISIÓN DEL LIBRO 07/08/2026`;
+
+  it("identifica un LSD por el encabezado del libro", () => {
+    expect(identifyLSPProvider(LSD_TEXT)).toBe("LSD");
+  });
+
+  it("gana sobre el falso positivo FATERYH del convenio colectivo", () => {
+    // El LSD nombra el convenio de la federación en la fila del empleado; sin la
+    // detección temprana el router lo mandaba al prompt sindical.
+    const conConvenio = `${LSD_TEXT}
+008 - A tiempo completo indeterminado 0589/10 - FEDERACIÓN ARGENTINA TRABAJADORES DE EDIF.DE RENTA Y PROPIED`;
+    expect(identifyLSPProvider(conConvenio)).toBe("LSD");
+  });
+
+  it("un F931 de ARCA NO se identifica como LSD", () => {
+    const f931 = "ARCA F. 931 S.U.S.S. CUIT 30-52063978-7 Total contribuciones $ 1.200.000";
+    expect(identifyLSPProvider(f931)).not.toBe("LSD");
+  });
+
+  it("una factura común no se identifica como LSD", () => {
+    expect(identifyLSPProvider("FACTURA B 0001 CUIT 30-12345678-9 TOTAL $ 1000 CAE 123")).toBeNull();
+  });
+
+  it("buildExtractionPrompt rutea un LSD a su prompt propio", () => {
+    const prompt = buildExtractionPrompt(LSD_TEXT);
+    expect(prompt).toContain("LIQUIDACIÓN DE SUELDOS DIGITAL");
+    expect(prompt).toContain("sueldoNeto");
+  });
+});

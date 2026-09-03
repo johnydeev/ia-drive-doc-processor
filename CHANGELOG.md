@@ -23,6 +23,30 @@
   no hay que corregir boletas. Suite 822 → 829.
 
 ### Added
+- **Una Liquidación de Sueldos genera una boleta por empleado (2026-09-01)**. Los LSD llegan todos los meses
+  y no se procesaban: el pipeline producía como máximo una `Invoice` por archivo, y un libro contiene
+  el sueldo de varios empleados, cada uno un gasto distinto del edificio.
+  - **`ctx.invoices`**: lista de boletas por archivo. Vacía = una sola (todos los documentos); con
+    contenido = fan-out. Sólo `sheetsStep` y `persistStep` iteran; los otros 14 pasos no se enteran.
+  - **El consorcio sale del CUIT del encabezado**, que el libro trae impreso — los 5 libros reales
+    matchean exacto contra la base. No hace falta `LspService` ni identificar el edificio por el CUIL.
+  - **El libro entra completo o no entra**: todos los CUIL dados de alta **y** todos los gastos fijos
+    de empleado cubiertos. La segunda condición detecta que la IA se salteó a alguien; no se puede
+    validar contra el papel, que no declara la cantidad de empleados.
+  - **Hash derivado por empleado** (`sha256(archivo + CUIL)`), porque `Invoice` tiene unique
+    `(clientId, documentHash)` y N boletas del mismo PDF lo violarían. **Sin migración.**
+  - **Corte temprano por `driveFileId`**: como el hash derivado no reconoce un libro reprocesado,
+    `dedupHashStep` consulta también por archivo y reusa la extracción guardada. Vale para todos los
+    documentos, no sólo los libros.
+  - **Tests 857 → 889.**
+
+### Changed
+- **El LSD deja de ser un no-boleta (2026-09-01)**. Salió del triage decisivo donde había entrado el
+  2026-08-31 y pasó al router de prompts, con prompt propio. Va **primero** en `identifyLSPProvider`,
+  antes que los sindicales: el libro nombra el convenio colectivo de la federación en la fila de cada
+  empleado, que era el falso positivo FATERYH detectado el 2026-08-17.
+
+### Added
 - **Triage decisivo de no-boletas: VEP y LSD dejan de gastar requests (2026-08-31)**. Cada VEP y cada
   LSD gastaba una request de la cuota de Gemini para terminar rebotando, y cada reproceso la volvía a
   gastar. El triage de capa 1 no podía agarrarlos, y **no por falta de patrones**:

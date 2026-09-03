@@ -46,7 +46,7 @@ describe("classifyDocumentType", () => {
 /**
  * Textos REALES (recortados) de los papeles que el owner apartó en Sin Asignar.
  * Se calibró sobre 4 VEP y 5 LSD: escribir los marcadores de memoria no habría
- * servido — los LSD, por ejemplo, NO dicen "libro de sueldos digital" en ningún
+ * servido — los LSD, por ejemplo, NO dicen "liquidación de sueldos digital" en ningún
  * lado del texto extraíble.
  */
 const VEP_REAL = `VEP
@@ -61,25 +61,10 @@ Día de Expiración: 2026-08-01
 CONTRIBUCIONES OBRA SOCIAL (352) $1.855.522,44
 Importe total a pagar $4.267.254,03`;
 
-const LSD_REAL = `EMPRESA DOMICILIO FISCAL
-PERIODO PROVINCIA
-NRO.LIQUIDACIÓN
-ACTIVIDAD PPAL
-30-52063978-7 - CONSORCIO COPROPIETARIOS AV ALMIRANTE B BROWN ALMTE AV. 706 06A
-202607 CIUDAD AUTONOMA BUENOS AIRES
-949920 - SERVICIOS DE CONSORCIOS DE EDIFICIOS
-LEGAJO CUIL APELLIDO Y NOMBRE FECHA INGRESO FECHA CESE DOCUMENTO FECHA NACIMIENTO
-IDENTIFICADOR ÚNICO DEL LIBRO 000000045900718 FECHA DE EMISIÓN DEL LIBRO 07/08/2026
-1 27-18116846-9 BRITEZ, PAULA ADELA 02/02/2010 - DNI 18.116.846
-0000000001 - Sueldo Basico 30,00 $ 1.318.092,00 0,00 0,00`;
 
 describe("detectDecisiveNotBoleta", () => {
   it("VEP real → VEP (pese a tener $, IMPORTE, VENCIMIENTO y CUIT)", () => {
     expect(detectDecisiveNotBoleta(VEP_REAL)).toBe("VEP");
-  });
-
-  it("LSD real → LSD (pese a tener $ y CUIT)", () => {
-    expect(detectDecisiveNotBoleta(LSD_REAL)).toBe("LSD");
   });
 
   it("una factura común no dispara ningún tipo", () => {
@@ -115,6 +100,14 @@ Nro. VEP: 1654020372
 Importe total a pagar $1.200.000,00`;
 
     expect(detectDecisiveNotBoleta(f931)).toBeNull();
+  });
+
+  it("un LSD ya NO es un no-boleta: lo procesa el router de prompts", () => {
+    const lsd = `EMPRESA DOMICILIO FISCAL
+NRO.LIQUIDACIÓN
+ACTIVIDAD PPAL
+IDENTIFICADOR ÚNICO DEL LIBRO 000000045900718`;
+    expect(detectDecisiveNotBoleta(lsd)).toBeNull();
   });
 
   it("no se confunde por la palabra 'sueldos' suelta en una factura", () => {

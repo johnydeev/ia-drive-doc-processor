@@ -41,7 +41,7 @@ const BOLETA_MARKERS = [
 ];
 
 /** Tipos de documento que NO son boletas y se identifican sin ambigüedad. */
-export type NotBoletaKind = "VEP" | "LSD";
+export type NotBoletaKind = "VEP";
 
 /** Normaliza para comparar: sin acentos, en mayúsculas, sin espacios repetidos. */
 function normalize(text: string): string {
@@ -63,23 +63,6 @@ function normalize(text: string): string {
 const VEP_HEADER_CHARS = 200;
 const VEP_HEADER_MARKERS = ["VOLANTE ELECTRONICO DE PAGO", "NRO. VEP:", "NRO VEP:"];
 
-/**
- * Marcadores del Libro de Sueldos Digital. Salen del papel real: el texto
- * extraíble **no** dice "libro de sueldos digital" en ningún lado, así que el
- * marcador obvio no habría detectado nada.
- *
- * Se exigen DOS coincidencias: cada frase por separado podría aparecer en otro
- * documento de RRHH, pero las tres juntas son el encabezado del LSD.
- */
-const LSD_MARKERS = [
-  "EMPRESA DOMICILIO FISCAL",
-  "NRO.LIQUIDACION",
-  "ACTIVIDAD PPAL",
-  "IDENTIFICADOR UNICO DEL LIBRO",
-  "IDENTIFICADOR UNICO DE HOJA MOVIL",
-  "LEGAJO CUIL APELLIDO Y NOMBRE",
-];
-const LSD_MIN_MARKERS = 2;
 
 /**
  * Capa 0 del triage: tipos de documento **inequívocos**, que se descartan aunque
@@ -90,14 +73,14 @@ const LSD_MIN_MARKERS = 2;
  * tiene `$` y CUIT. Agregarlos a `NOT_BOLETA_MARKERS` no serviría de nada.
  *
  * Devuelve el tipo (para etiquetar el archivo) o `null` si no es ninguno.
+ *
+ * **El LSD salió de acá el 2026-09-01**: dejó de ser un no-boleta porque ahora se
+ * procesa —un libro produce una boleta por empleado—, así que lo detecta el router
+ * de prompts (`identifyLSPProvider`), no este triage.
  */
 export function detectDecisiveNotBoleta(text: string): NotBoletaKind | null {
   const header = normalize(text.slice(0, VEP_HEADER_CHARS));
   if (VEP_HEADER_MARKERS.some((marker) => header.includes(marker))) return "VEP";
-
-  const body = normalize(text.slice(0, 4000));
-  const hits = LSD_MARKERS.filter((marker) => body.includes(marker)).length;
-  if (hits >= LSD_MIN_MARKERS) return "LSD";
 
   return null;
 }

@@ -26,7 +26,7 @@ Donde "señal de boleta" es `$`, `TOTAL A PAGAR`, `IMPORTE`, `VENCIMIENTO`, `FAC
 | Documento | Señales de boleta que dispara | Resultado |
 |---|---|---|
 | VEP de AFIP | `$`, `IMPORTE`, `VENCIMIENTO`, CUIT | pasa a la IA |
-| LSD (libro de sueldos) | `$`, `IMPORTE`, CUIT | pasa a la IA |
+| LSD (liquidación de sueldos) | `$`, `IMPORTE`, CUIT | pasa a la IA |
 | Estado de cuenta | `$`, `COMPROBANTE`, CUIT | pasa a la IA |
 | Presupuesto | `$`, `IMPORTE`, CUIT | pasa a la IA |
 

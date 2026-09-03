@@ -80,6 +80,18 @@ export interface PipelineContext {
    * incrementan los extractores, no el pipeline: el barrido de modelos de Gemini
    * son varias requests dentro de un solo intento de la cadena.
    */
+  /**
+   * Boletas a escribir por este archivo.
+   *
+   * Vacío = una sola, la de `extracted`: el caso de todos los documentos. Con
+   * contenido = **fan-out**, una Liquidación de Sueldos Digital produce una boleta por
+   * empleado, todas con el mismo archivo de Drive detrás (spec 2026-09-01).
+   */
+  invoices: Array<{
+    extraction: ExtractedDocumentData;
+    providerId: string;
+    documentHash: string;
+  }>;
   aiRequests: AiRequestCounter;
   /** `true` si se gastó Gemini Vision (imagen, PDF escaneado o membrete). */
   usedVision: boolean;
@@ -161,6 +173,7 @@ export function createPipelineContext(
 
   return {
     file, deps, summary, m, runStep, startedAt: Date.now(),
+    invoices: [],
     aiRequests: new AiRequestCounter(),
     usedVision: false,
     buffer: null,

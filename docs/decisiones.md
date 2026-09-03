@@ -4,6 +4,87 @@ Registro de decisiones tomadas ante problemas reales encontrados en producción.
 
 ---
 
+## 2026-09-01 — Una Liquidación de Sueldos no es un gasto: son varios
+
+### Problema
+
+Los LSD llegan todos los meses y no se procesaban. El obstáculo no era la extracción sino el
+modelo: **el pipeline produce como máximo una `Invoice` por archivo**, y un libro contiene el
+sueldo de varios empleados, cada uno de los cuales es un gasto distinto del edificio.
+
+Medido sobre los 5 libros reales que aportó el owner:
+
+- **El CUIT del consorcio viene impreso en el encabezado** y los 5 matchean exacto contra la base.
+  O sea el edificio se resuelve con el matching por CUIT que ya existe: no hace falta `LspService`
+  ni identificar el consorcio por el CUIL del empleado.
+- **Cada libro trae varios empleados en la misma hoja**, en dos columnas. Partir el PDF por páginas
+  no sirve.
+- **Ningún libro declara cuántos empleados tiene.**
+
+### Decisión
+
+**`ctx.invoices`: una lista de boletas por archivo.** Vacía significa "una sola", que es el caso de
+todos los documentos; con contenido es el fan-out. Sólo `sheetsStep` y `persistStep` aprenden a
+iterarla — los otros 14 pasos no se enteran, y la red de tests de caracterización quedó intacta.
+
+**`lsdFanOutStep`** corre después de canonizar (el consorcio ya está resuelto) y antes del gate de
+Sin Asignar, de modo que un libro incompleto reusa el movimiento de archivo que ese gate ya hace.
+
+**El libro entra completo o no entra**, con dos condiciones:
+
+1. todos los CUIL están dados de alta como proveedor `EMPLEADO`;
+2. los empleados cubren **todos los gastos fijos de empleado activos** del consorcio.
+
+La segunda es la que detecta que la IA se salteó a alguien. **No se puede validar contra el papel**
+—no declara la cantidad, y contar los CUIL de su texto es ruidoso: ALMIRANTE BROWN devuelve 5 CUIL
+válidos para 2 empleados con nombre, porque el libro está lleno de números largos (identificador de
+hoja móvil de 20 dígitos, códigos de concepto) y algunos pasan el checksum por casualidad. El padrón
+de gastos fijos, que el owner carga a mano, sí es exacto.
+
+**Hash derivado por empleado** (`sha256(hash del archivo + CUIL)`): `Invoice` tiene unique
+`(clientId, documentHash)` y N boletas del mismo PDF lo violarían. Derivarlo las hace únicas **sin
+migración**. Como efecto colateral, el corte temprano por hash deja de reconocer un libro
+reprocesado, así que `dedupHashStep` pasa a consultar **también por `driveFileId`** — y devuelve la
+extracción guardada, de modo que un reproceso no vuelve a pagar la IA. Sirve para todos los
+documentos, no sólo los libros.
+
+**Dos gates hubo que exceptuar**, porque estaban escritos para documentos de un solo gasto: el de
+`SIN MONTO` (un libro no tiene monto único) y el de proveedor en `resolveAssignment` (los
+proveedores son los empleados, y los resuelve el fan-out por CUIL).
+
+**El LSD salió del triage de no-boletas**, donde había entrado el 2026-08-31: ahora se procesa, así
+que lo detecta el router de prompts. Y va **primero** en `identifyLSPProvider`, antes que los
+sindicales: el libro nombra el convenio colectivo de la federación en la fila de cada empleado, que
+era el falso positivo FATERYH detectado el 2026-08-17.
+
+### Alternativas descartadas
+
+- **Recortar el libro a mano** y subir una captura por empleado (propuesta del owner). Una captura
+  es una imagen, así que el pipeline la manda a **Gemini Vision**: una request por empleado, con
+  peor precisión que el texto. La opción más barata en código resultaba la más cara en cuota, y
+  además es trabajo manual recurrente para 47 edificios.
+- **Carga manual** de los N gastos desde el panel. Cero IA y casi cero código, pero el costo se paga
+  todos los meses.
+- **Que cada paso itere sobre un array**: toca los 12 pasos y rompe la red de caracterización.
+- **Dar de alta al empleado automáticamente** cuando aparece un CUIL desconocido (el suplente que
+  cubre vacaciones). El libro trae CUIL y nombre completo, así que el alta no adivinaría nada, pero
+  el owner prefiere que nada se cree solo en el directorio. Costo aceptado: cada suplente frena el
+  libro hasta que se lo dé de alta.
+
+### Impacto
+
+`lib/lsdExtraction.ts` (nuevo, 8 tests) · `lib/lsdValidation.ts` (nuevo, 8 tests) ·
+`lib/extraction.ts` (router + prompt + schema) · `lib/documentClassifier.ts` (sale LSD) ·
+`repositories/fixedExpense.repository.ts` (padrón) · `repositories/invoice.repository.ts`
+(hash derivado + búsqueda por archivo, 5 tests) · `pipeline/context.ts` · el pipeline.
+**Tests 857 → 889.** Sin migración.
+
+**Pendiente del owner:** dar de alta a los empleados en `_Proveedores` (CUIL en el campo CUIT, tipo
+`EMPLEADO`) y crear su gasto fijo en cada edificio. Sin el padrón cargado, la validación de
+completitud no tiene contra qué comparar.
+
+---
+
 ## 2026-08-31 — Los VEP y los LSD gastaban una request de IA cada uno
 
 ### Problema
@@ -29,7 +110,7 @@ tenga todas las señales de una boleta**, porque identifican el formulario por s
 Devuelve el tipo, que va al nombre del archivo y a `m.reason`.
 
 **Los marcadores se calibraron sobre 4 VEP y 5 LSD reales, no de memoria.** No es un detalle: el
-spec original proponía buscar `"LIBRO DE SUELDOS DIGITAL"`, y **el texto extraíble de un LSD no dice
+spec original proponía buscar `"LIQUIDACIÓN DE SUELDOS DIGITAL"`, y **el texto extraíble de un LSD no dice
 eso en ningún lado**. Ese marcador no habría detectado nada y el trabajo habría parecido terminado.
 
 | Tipo | Marcadores reales | Regla |

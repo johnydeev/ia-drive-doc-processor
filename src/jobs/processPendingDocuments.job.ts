@@ -6,6 +6,8 @@ import { cuitDigits, formatCuit, extractCuitsFromText, cuitsEqual } from "@/lib/
 import { extractEmitterCuitFromBarcode } from "@/lib/afipBarcode";
 import { identifyLSPProvider, LSPProvider, LSP_FALLBACK_NAMES, annotateSindicalProvider, usesConsortiumCuit } from "@/lib/extraction";
 import { refineExtractionWithRawText } from "@/lib/extraction";
+import { parseLsdOutput } from "@/lib/lsdExtraction";
+import { validateLsdRoster } from "@/lib/lsdValidation";
 import { createEmptyTokenUsageSummary } from "@/lib/createEmptyTokenUsageSummary";
 import { pipelineLog } from "@/lib/logger";
 import { formatAliasesInline } from "@/lib/paymentAliases";
@@ -108,6 +110,11 @@ export type ProcessingContext = {
    * pipeline se comporta igual.
    */
   onOutcome?: (payload: JobOutcome) => void;
+  /**
+   * Padrón de empleados del edificio: los proveedores de sus gastos fijos activos
+   * de tipo EMPLEADO. Contra esto se valida que una Liquidación de Sueldos venga completo.
+   */
+  findEmployeeFixedExpenses?: (consortiumId: string) => Promise<string[]>;
 };
 
 /**
@@ -523,6 +530,13 @@ async function resolveAssignment(
 
   // ── 2. Proveedor ─────────────────────────────────────────────────────────
 
+  // Una Liquidación de Sueldos no tiene UN proveedor: los proveedores son sus empleados,
+  // y a cada uno lo resuelve `lsdFanOutStep` por su CUIL. Acá alcanza con el
+  // consorcio y el período; sin esta salida el libro caía en SIN PROVEEDOR.
+  if (lspProvider === "LSD") {
+    return { ...base, unassigned: false };
+  }
+
   const allProviders = await providerRepository.findAllForMatching(clientId);
 
   const rawCuit     = extracted.providerTaxId?.trim() ?? null;
@@ -663,6 +677,26 @@ async function dedupHashStep(ctx: PipelineContext): Promise<StepResult> {
   );
   pipelineLog.hashResult(cid, ctx.fileHash, Boolean(ctx.existingByHash));
   ctx.isDuplicate = Boolean(ctx.existingByHash);
+
+  // Segunda red: ¿ya hay alguna boleta apuntando a este archivo de Drive?
+  //
+  // Una Liquidación de Sueldos guarda sus N boletas con un hash DERIVADO del CUIL de cada
+  // empleado, no con el del binario, así que la búsqueda por hash de arriba no lo
+  // reconoce al reprocesarlo y volvería a pagar la extracción de IA. Preguntar por
+  // `driveFileId` cuesta una consulta y sirve para todos los documentos.
+  if (!ctx.isDuplicate && invoiceRepository.findAnyByDriveFileId) {
+    const yaCargado = await ctx.runStep(
+      "Verificación por archivo de Drive",
+      () => invoiceRepository.findAnyByDriveFileId(cid, ctx.file.id),
+      "dedupHash"
+    );
+    if (yaCargado) {
+      pipelineLog.stepStart(cid, "📋 El archivo ya tiene boletas cargadas — se trata como duplicado");
+      ctx.existingByHash = yaCargado;
+      ctx.isDuplicate = true;
+    }
+  }
+
   return { kind: "continue" };
 }
 
@@ -1023,6 +1057,13 @@ async function missingAmountGate(ctx: PipelineContext): Promise<StepResult> {
   const extracted = ctx.extracted!;
   const finalSourceFolderId = ctx.finalSourceFolderId;
 
+  // Una Liquidación de Sueldos NO tiene monto único: sus importes son el sueldo neto de
+  // cada empleado, y el fan-out los reparte en N boletas más adelante. Sin esta
+  // excepción el libro entero caía en SIN MONTO antes de llegar a repartirse.
+  if (ctx.lspProvider === "LSD" && (extracted.lsd?.empleados?.length ?? 0) > 0) {
+    return { kind: "continue" };
+  }
+
   // ── Gate "sin monto": sin importe (certificados, obleas, informes) o monto no
   // extraíble → Revisión con tag SIN MONTO. `0` es válido (boletas LSP de $0) y NO
   // cae acá. No se escribe en Sheets ni se guarda Invoice.
@@ -1337,7 +1378,83 @@ const UNASSIGNED_TAG_BY_CATEGORY: Record<string, string> = {
   consortium_cuit_not_registered: "CUIT DE CONSORCIO NO REGISTRADO EN DB",
   provider_cuit_missing: "CUIT DE PROVEEDOR INEXISTENTE EN BOLETA",
   provider_cuit_not_registered: "CUIT DE PROVEEDOR NO REGISTRADO EN DB",
+  // Liquidación de Sueldos Digital (2026-09-01): el libro entra completo o no entra.
+  lsd_empleado_no_registrado: "EMPLEADO NO REGISTRADO",
+  lsd_empleado_faltante: "FALTA UN EMPLEADO EN EL LIBRO",
+  lsd_sin_empleados: "LIBRO SIN EMPLEADOS",
 };
+
+/**
+ * 9.5 Fan-out de la Liquidación de Sueldos Digital: un archivo, N gastos.
+ *
+ * Va DESPUÉS de canonizar (el consorcio ya se resolvió por el CUIT del encabezado)
+ * y ANTES del gate de Sin Asignar, para que un libro incompleto reuse el
+ * movimiento de archivo que ese gate ya hace.
+ *
+ * **El libro entra completo o no entra** (spec 2026-09-01 §3.5): si algún CUIL no
+ * está de alta, o si el libro no cubre todos los gastos fijos de empleado del
+ * edificio, no se persiste ninguna boleta. La segunda condición es la que detecta
+ * que la IA se salteó a alguien: el papel no declara cuántos empleados tiene.
+ */
+async function lsdFanOutStep(ctx: PipelineContext): Promise<StepResult> {
+  if (ctx.lspProvider !== "LSD") return { kind: "continue" };
+
+  const cid = ctx.deps.resolvedConfig.clientId;
+  const extracted = ctx.extracted!;
+  const assignment = ctx.assignment!;
+
+  // Sin consorcio resuelto no hay padrón que consultar: decide el gate de siempre.
+  if (assignment.unassigned || !assignment.consortiumId) return { kind: "continue" };
+
+  const consortiumId = assignment.consortiumId;
+  const parsed = parseLsdOutput(JSON.stringify({ lsd: extracted.lsd ?? {} }));
+  const proveedores = await ctx.deps.providerRepository.findAllForMatching(cid);
+  const findPadron =
+    ctx.deps.findEmployeeFixedExpenses ??
+    (await import("@/repositories/fixedExpense.repository")).findActiveEmployeeFixedExpenseProviderIds;
+  const padron = await ctx.runStep(
+    "Padrón de empleados del edificio",
+    () => findPadron(consortiumId),
+    "match"
+  );
+
+  const roster = validateLsdRoster(parsed.empleados, proveedores, padron);
+
+  if (!roster.ok) {
+    pipelineLog.stepStart(cid, `🚫 Libro de sueldos incompleto: ${roster.detail}`);
+    ctx.assignment = {
+      ...assignment,
+      unassigned: true,
+      unassignedReason: roster.detail,
+      reasonCategory: roster.reasonCategory,
+    };
+    return { kind: "continue" };
+  }
+
+  const libroId = parsed.libroId ?? ctx.fileHash.slice(0, 12);
+  ctx.invoices = roster.matched.map(({ employee, providerId }) => ({
+    providerId,
+    documentHash: ctx.deps.invoiceRepository.deriveDocumentHash(ctx.fileHash, employee.cuil),
+    extraction: {
+      ...extracted,
+      lsd: null,
+      provider: employee.apellidoNombre || employee.cuil,
+      providerTaxId: formatCuit(employee.cuil) ?? employee.cuil,
+      amount: employee.sueldoNeto,
+      // Un libro no trae número de comprobante ni fecha de pago: el número se arma
+      // con el identificador del libro + el CUIL, único por gasto.
+      boletaNumber: `${libroId}-${cuitDigits(employee.cuil)}`,
+      dueDate: null,
+      detail: `Sueldo ${parsed.periodo ?? ""}`.trim(),
+    },
+  }));
+
+  pipelineLog.stepStart(
+    cid,
+    `📗 Libro de sueldos: ${ctx.invoices.length} empleado(s) → ${ctx.invoices.length} gasto(s)`
+  );
+  return { kind: "continue" };
+}
 
 /** 10. Gate "sin asignar": no matcheó consorcio/proveedor → Sin Asignar. */
 async function unassignedGate(ctx: PipelineContext): Promise<StepResult> {
@@ -1415,11 +1532,17 @@ async function sheetsStep(ctx: PipelineContext): Promise<StepResult> {
   // se mantienen 1:1. El PDF se mueve a la carpeta "Duplicados" si está
   // configurada; si no, a Escaneados (no se pierde, queda para revisión).
   if (!ctx.isDuplicate) {
-    await ctx.runStep(
-      "Insertar en Google Sheets",
-      () => sheetsService.insertRow(resolvedConfig.sheetName, extracted, resolvedMapping),
-      "sheets"
-    );
+    // `ctx.invoices` vacío = una sola boleta, el caso de siempre. Con contenido es
+    // un fan-out (Liquidación de Sueldos): una fila por empleado, mismo archivo detrás.
+    const filas = ctx.invoices.length > 0 ? ctx.invoices.map((i) => i.extraction) : [extracted];
+
+    for (const fila of filas) {
+      await ctx.runStep(
+        "Insertar en Google Sheets",
+        () => sheetsService.insertRow(resolvedConfig.sheetName, fila, resolvedMapping),
+        "sheets"
+      );
+    }
     pipelineLog.sheetsInserted(cid);
   } else {
     pipelineLog.stepStart(cid, "📋 Duplicado — no se escribe en Sheets (consistencia DB↔Sheets)");
@@ -1513,38 +1636,51 @@ async function persistStep(ctx: PipelineContext): Promise<StepResult> {
 
   const { sourceFileUrl: _url, isDuplicate: _dup, ...extractionFields } = extracted;
 
-  if (!isDuplicate) {
-    const saved = await ctx.runStep(
-      "Guardar invoice",
-      () => invoiceRepository.saveProcessedInvoice({
-        clientId: cid, documentHash: fileHash, fileId: file.id,
-        sourceFileUrl, extraction: extractionFields, isDuplicate,
-        consortiumId: assignment.consortiumId, providerId: assignment.providerId, periodId: assignment.periodId,
-        lspServiceId: assignment.lspServiceId, paymentMethod: extracted.paymentMethod,
-        tokensInput: fileAiUsage?.inputTokens ?? null,
-        tokensOutput: fileAiUsage?.outputTokens ?? null,
-        tokensTotal: fileAiUsage?.totalTokens ?? null,
-        aiProvider: fileAiUsage?.provider ?? null,
-        aiModel: fileAiUsage?.model ?? null,
-      }),
-      "save"
-    );
-    pipelineLog.invoiceSaved(cid, isDuplicate);
+  // `ctx.invoices` vacío = una sola boleta (todos los documentos menos el Libro de
+  // Sueldos). Con contenido, cada entrada trae su propio proveedor y su hash
+  // derivado — el unique (clientId, documentHash) no admite dos filas con el hash
+  // del mismo archivo.
+  const aGuardar = ctx.invoices.length > 0
+    ? ctx.invoices.map((i) => {
+        const { sourceFileUrl: _u, isDuplicate: _d, ...fields } = i.extraction;
+        return { fields, providerId: i.providerId, documentHash: i.documentHash, paymentMethod: i.extraction.paymentMethod };
+      })
+    : [{ fields: extractionFields, providerId: assignment.providerId, documentHash: fileHash, paymentMethod: extracted.paymentMethod }];
 
-    // Vincula la boleta a su obligación de gasto fijo del período (solo DB, best-effort).
-    if (saved) {
-      try {
-        const linkInvoiceToObligation =
-          ctx.deps.linkInvoiceToObligation ??
-          (await import("@/services/obligation.service")).linkInvoiceToObligation;
-        await linkInvoiceToObligation({
-          id: saved.id,
-          periodId: saved.periodId,
-          providerId: saved.providerId,
-          lspServiceId: saved.lspServiceId,
-        });
-      } catch (obErr) {
-        pipelineLog.stepStart(cid, `⚠️ vínculo de obligación falló: ${obErr instanceof Error ? obErr.message : obErr}`);
+  if (!isDuplicate) {
+    for (const boleta of aGuardar) {
+      const saved = await ctx.runStep(
+        "Guardar invoice",
+        () => invoiceRepository.saveProcessedInvoice({
+          clientId: cid, documentHash: boleta.documentHash, fileId: file.id,
+          sourceFileUrl, extraction: boleta.fields, isDuplicate,
+          consortiumId: assignment.consortiumId, providerId: boleta.providerId, periodId: assignment.periodId,
+          lspServiceId: assignment.lspServiceId, paymentMethod: boleta.paymentMethod,
+          tokensInput: fileAiUsage?.inputTokens ?? null,
+          tokensOutput: fileAiUsage?.outputTokens ?? null,
+          tokensTotal: fileAiUsage?.totalTokens ?? null,
+          aiProvider: fileAiUsage?.provider ?? null,
+          aiModel: fileAiUsage?.model ?? null,
+        }),
+        "save"
+      );
+      pipelineLog.invoiceSaved(cid, isDuplicate);
+
+      // Vincula la boleta a su obligación de gasto fijo del período (solo DB, best-effort).
+      if (saved) {
+        try {
+          const linkInvoiceToObligation =
+            ctx.deps.linkInvoiceToObligation ??
+            (await import("@/services/obligation.service")).linkInvoiceToObligation;
+          await linkInvoiceToObligation({
+            id: saved.id,
+            periodId: saved.periodId,
+            providerId: saved.providerId,
+            lspServiceId: saved.lspServiceId,
+          });
+        } catch (obErr) {
+          pipelineLog.stepStart(cid, `⚠️ vínculo de obligación falló: ${obErr instanceof Error ? obErr.message : obErr}`);
+        }
       }
     }
   } else {
@@ -1553,7 +1689,8 @@ async function persistStep(ctx: PipelineContext): Promise<StepResult> {
 
   if (duplicateKey) existingDuplicateKeys.add(duplicateKey);
   if (isDuplicate)  ctx.summary.duplicatesDetected += 1;
-  ctx.summary.processed += 1;
+  // Un archivo puede haber producido N gastos: el contador cuenta boletas, no archivos.
+  ctx.summary.processed += aGuardar.length;
   m.result = isDuplicate ? "duplicate" : "ok";
   m.reason = null;
   pipelineLog.fileCompleted(cid, file.name, { processed: 1, unassigned: 0, duplicate: isDuplicate });
@@ -1582,6 +1719,7 @@ export async function processDriveFile(
       cleanClientNumberStep,
       assignmentStep,
       canonizeStep,
+      lsdFanOutStep,
       unassignedGate,
       noPeriodGate,
       sheetsStep,

@@ -342,6 +342,7 @@ Analiza los primeros 4000 caracteres y retorna:
 | Sindicales (SUTERH/FATERYH/SERACARH) | `buildSindicalPrompt()` |
 | ABL / Inmobiliario (AGIP) | `buildAblPrompt()` |
 | ARCA F931 (SUSS) | `buildArcaPrompt()` |
+| Liquidación de Sueldos Digital (LSD) | `buildLsdPrompt()` — **un archivo produce N boletas**, una por empleado |
 | Genérico LSP | `buildGenericUtilityBillPrompt()` |
 | Facturas normales | `buildInvoicePrompt()` |
 ### Reglas compartidas entre prompts LSP

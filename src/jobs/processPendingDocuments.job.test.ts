@@ -117,6 +117,10 @@ function makeContext(configOver: Partial<ProcessJobConfig> = {}) {
     findDuplicateByBusinessKey: vi.fn().mockResolvedValue(null),
     buildBusinessKeyFromData: vi.fn().mockReturnValue("bk-1"),
     saveProcessedInvoice: vi.fn().mockResolvedValue(undefined),
+    // Fan-out de la Liquidación de Sueldos: cada boleta necesita su propio hash porque
+    // `Invoice` tiene unique (clientId, documentHash).
+    deriveDocumentHash: vi.fn((hash: string, cuil: string) => `${hash}:${cuil}`),
+    findAnyByDriveFileId: vi.fn().mockResolvedValue(null),
   };
 
   const consortiumRepository = {
@@ -540,26 +544,6 @@ Importe total a pagar $4.267.254,03`
     expect(metricsCore().reason).toBe("VEP");
   });
 
-  it("not_boleta (LSD): corta ANTES de la IA y etiqueta el tipo", async () => {
-    const ctx = makeContext();
-    ctx.pdfExtractor.extractTextFromPdf.mockResolvedValue(
-      `EMPRESA DOMICILIO FISCAL
-PERIODO PROVINCIA
-NRO.LIQUIDACIÓN
-ACTIVIDAD PPAL
-30-52063978-7 - CONSORCIO COPROPIETARIOS
-IDENTIFICADOR ÚNICO DEL LIBRO 000000045900718
-0000000001 - Sueldo Basico 30,00 $ 1.318.092,00`
-    );
-    const summary = createBaseSummary(1);
-
-    await processDriveFile(makeFile(), asContext(ctx), summary);
-
-    expect(ctx.aiChain.run).not.toHaveBeenCalled();
-    expect(ctx.driveService.renameFile.mock.calls[0][1]).toMatch(/\[NO BOLETA - LSD\]/);
-    expect(metricsCore().reason).toBe("LSD");
-  });
-
   it("not_boleta (IA): aiChain devuelve isBoleta:false → [NO BOLETA] a Sin Asignar", async () => {
     const ctx = makeContext();
     ctx.aiChain.run.mockImplementation(async (_t, cb) => {
@@ -940,5 +924,139 @@ describe("colector de métricas de consumo (onOutcome)", () => {
 
     expect(summary.processed).toBe(1);
     expect(ctx.sheetsService.insertRow).toHaveBeenCalled();
+  });
+});
+
+describe("corte temprano por archivo ya procesado", () => {
+  it("un archivo con boleta ya cargada corta sin llamar a la IA", async () => {
+    const ctx = makeContext();
+    ctx.invoiceRepository.findAnyByDriveFileId = vi.fn().mockResolvedValue({
+      extraction: okExtraction(),
+      sourceFileUrl: "https://drive/x",
+      fileId: "file-1",
+      businessKey: "bk-1",
+    });
+    const summary = createBaseSummary(1);
+
+    await processDriveFile(makeFile(), asContext(ctx), summary);
+
+    // El hash derivado de una Liquidación de Sueldos no coincide con el del binario, así
+    // que sin este corte un reproceso volvía a pagar la extracción.
+    expect(ctx.aiChain.run).not.toHaveBeenCalled();
+    expect(ctx.invoiceRepository.saveProcessedInvoice).not.toHaveBeenCalled();
+    expect(summary.duplicatesDetected).toBe(1);
+  });
+
+  it("un archivo nuevo sigue el flujo normal", async () => {
+    const ctx = makeContext();
+    const summary = createBaseSummary(1);
+
+    await processDriveFile(makeFile(), asContext(ctx), summary);
+
+    expect(ctx.aiChain.run).toHaveBeenCalled();
+    expect(ctx.invoiceRepository.saveProcessedInvoice).toHaveBeenCalled();
+  });
+});
+
+describe("LSD — un libro, N empleados", () => {
+  /** Encabezado real de un LSD, con el CUIT del consorcio sembrado en makeContext. */
+  const LSD_TEXT = `EMPRESA DOMICILIO FISCAL
+PERIODO PROVINCIA
+NRO.LIQUIDACIÓN
+ACTIVIDAD PPAL
+30-11111111-1 - CONSORCIO THAMES 647
+202607 CIUDAD AUTONOMA BUENOS AIRES
+IDENTIFICADOR ÚNICO DEL LIBRO 000000045900718`;
+
+  function lsdContext(padron: string[]) {
+    const ctx = makeContext();
+    ctx.pdfExtractor.extractTextFromPdf.mockResolvedValue(LSD_TEXT);
+    ctx.providerRepository.findAllForMatching.mockResolvedValue([
+      { id: "e1", canonicalName: "BRITEZ PAULA", cuit: "27-18116846-9", matchNames: null, paymentAlias: null },
+      { id: "e2", canonicalName: "CRUZ RICARDO", cuit: "20-24883768-4", matchNames: null, paymentAlias: null },
+    ]);
+    ctx.aiChain.run.mockImplementation(async (_t: string, cb?: AiAttemptCallback) => {
+      cb?.("gemini", true);
+      return {
+        data: emptyExtraction({
+          allTaxIds: ["30-11111111-1"],
+          lsd: {
+            consortiumTaxId: "30-11111111-1",
+            libroId: "000000045900718",
+            periodo: "202607",
+            empleados: [
+              { cuil: "27-18116846-9", apellidoNombre: "BRITEZ, PAULA", sueldoNeto: 1000 },
+              { cuil: "20-24883768-4", apellidoNombre: "CRUZ, RICARDO", sueldoNeto: 2000 },
+            ],
+          },
+        }),
+        usage: null,
+        provider: "gemini" as const,
+      };
+    });
+    (ctx as unknown as { findEmployeeFixedExpenses: unknown }).findEmployeeFixedExpenses =
+      async () => padron;
+    return ctx;
+  }
+
+  it("genera una boleta por empleado con una sola llamada a la IA", async () => {
+    const ctx = lsdContext(["e1", "e2"]);
+    const summary = createBaseSummary(1);
+
+    await processDriveFile(makeFile(), asContext(ctx), summary);
+
+    expect(ctx.invoiceRepository.saveProcessedInvoice).toHaveBeenCalledTimes(2);
+    expect(ctx.sheetsService.insertRow).toHaveBeenCalledTimes(2);
+    expect(ctx.aiChain.run).toHaveBeenCalledTimes(1);
+    expect(summary.processed).toBe(2);
+    expect(ctx.driveService.moveFileToUnassigned).not.toHaveBeenCalled();
+  });
+
+  it("cada boleta lleva el empleado como proveedor y su sueldo neto", async () => {
+    const ctx = lsdContext(["e1", "e2"]);
+    await processDriveFile(makeFile(), asContext(ctx), createBaseSummary(1));
+
+    const guardadas = ctx.invoiceRepository.saveProcessedInvoice.mock.calls.map((c) => c[0]);
+    expect(guardadas.map((g) => g.providerId).sort()).toEqual(["e1", "e2"]);
+    expect(guardadas.map((g) => g.extraction.amount).sort((a, b) => a - b)).toEqual([1000, 2000]);
+    // Números distintos: la clave de negocio separa las N boletas del mismo libro.
+    const numeros = guardadas.map((g) => g.extraction.boletaNumber);
+    expect(new Set(numeros).size).toBe(2);
+    // Hash derivado por empleado: el unique (clientId, documentHash) lo exige.
+    expect(new Set(guardadas.map((g) => g.documentHash)).size).toBe(2);
+    // Sin vencimiento: un libro no tiene fecha de pago impresa.
+    expect(guardadas.every((g) => g.extraction.dueDate === null)).toBe(true);
+  });
+
+  it("el archivo se mueve UNA sola vez", async () => {
+    const ctx = lsdContext(["e1", "e2"]);
+    await processDriveFile(makeFile(), asContext(ctx), createBaseSummary(1));
+    expect(ctx.driveService.moveFileToFolder).toHaveBeenCalledTimes(1);
+  });
+
+  it("si queda un gasto fijo sin cubrir, NO entra ninguna boleta", async () => {
+    const ctx = lsdContext(["e1", "e2", "e3"]);
+    const summary = createBaseSummary(1);
+
+    await processDriveFile(makeFile(), asContext(ctx), summary);
+
+    expect(ctx.invoiceRepository.saveProcessedInvoice).not.toHaveBeenCalled();
+    expect(ctx.sheetsService.insertRow).not.toHaveBeenCalled();
+    expect(ctx.driveService.moveFileToUnassigned).toHaveBeenCalled();
+    // La etiqueta del archivo dice qué faltó, que es lo que ve el owner en Drive.
+    expect(ctx.driveService.renameFile.mock.calls[0][1]).toContain("FALTA UN EMPLEADO EN EL LIBRO");
+  });
+
+  it("si un CUIL no está de alta (suplente), NO entra ninguna boleta", async () => {
+    const ctx = lsdContext(["e1"]);
+    ctx.providerRepository.findAllForMatching.mockResolvedValue([
+      { id: "e1", canonicalName: "BRITEZ PAULA", cuit: "27-18116846-9", matchNames: null, paymentAlias: null },
+    ]);
+    const summary = createBaseSummary(1);
+
+    await processDriveFile(makeFile(), asContext(ctx), summary);
+
+    expect(ctx.invoiceRepository.saveProcessedInvoice).not.toHaveBeenCalled();
+    expect(ctx.driveService.renameFile.mock.calls[0][1]).toContain("EMPLEADO NO REGISTRADO");
   });
 });

@@ -6,6 +6,7 @@ import {
   BusinessKeyParts,
 } from "@/lib/businessKey";
 import { getPrismaClient } from "@/lib/prisma";
+import { cuitDigits } from "@/lib/cuit";
 import { repoLog, shortLogId } from "@/lib/logger";
 import { ExtractedDocumentData } from "@/types/extractedDocument.types";
 
@@ -48,6 +49,44 @@ export class InvoiceRepository {
 
   computeDocumentHash(input: Buffer | string): string {
     return createHash("sha256").update(input).digest("hex");
+  }
+
+  /**
+   * Hash de documento por empleado, para las N boletas de un mismo Libro de
+   * Sueldos Digital.
+   *
+   * `Invoice` tiene unique `(clientId, documentHash)`, así que N boletas que
+   * comparten el PDF lo violarían. Derivar del CUIL las hace únicas **sin
+   * migración** y conservando la garantía a nivel base.
+   *
+   * Se compara por dígitos para que el formato del CUIL no cambie el hash.
+   */
+  deriveDocumentHash(fileHash: string, cuil: string): string {
+    return createHash("sha256").update(`${fileHash}:${cuitDigits(cuil)}`).digest("hex");
+  }
+
+  /**
+   * ¿Ya hay alguna boleta cargada para este archivo de Drive?
+   *
+   * Es el corte temprano del reproceso: el hash derivado de un LSD no coincide
+   * con el del binario, así que sin esta consulta un libro reprocesado volvería
+   * a gastar la extracción de IA antes de que la clave de negocio lo frene.
+   */
+  async findAnyByDriveFileId(
+    clientId: string,
+    driveFileId: string
+  ): Promise<DuplicateLookupResult | null> {
+    const invoice = await this.prisma.invoice.findFirst({
+      where: { clientId, driveFileId },
+      orderBy: { createdAt: "asc" },
+    });
+
+    if (!invoice) return null;
+
+    repoLog.debug("invoice", `duplicate-by-drive-file client=${shortLogId(clientId)} file=${driveFileId}`);
+    // Mismo shape que el duplicado por hash: el pipeline reusa la extracción
+    // guardada y no vuelve a llamar a la IA.
+    return this.mapInvoiceDuplicate(invoice);
   }
 
   buildBusinessKeyFromData(data: ExtractedDocumentData): string | null {
