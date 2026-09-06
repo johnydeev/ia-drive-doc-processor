@@ -11,6 +11,16 @@
   hermanas con el mismo monto y el mismo edificio **no se deduplican** entre sí.
 
 ### Fixed
+- **El LSD nunca recibía su prompt (2026-09-06)**. Primera prueba real: los 5 libros fueron a Sin
+  Asignar con `lsd_sin_empleados`. El router los detectaba bien (`Tipo documento: LSP — LSD`) pero
+  `buildExtractionPrompt` corría `isReciboHaberes` **antes** de `identifyLSPProvider`, y su regla
+  `SUELDO && CUIL` la cumple todo libro de sueldos → se llevaba el prompt del recibo **individual**
+  y la IA devolvía una boleta con el primer empleado y `lsd: null`. Ahora el router corre primero y
+  el LSD queda exceptuado; `isReciboHaberes` conserva su precedencia sobre el resto (un recibo
+  individual nombra el convenio de la federación y caería en el prompt sindical).
+  - **El test existía y pasaba**: su fixture estaba recortado al encabezado y no contenía la palabra
+    "SUELDO", justo la que dispara el falso positivo. Ahora lleva la fila real de un empleado con
+    `Sueldo Basico` y `Total Neto`. Suite 899 → 901.
 - **El vencimiento se mostraba un día antes en Boletas entrantes (2026-08-29)**. `formatDateOnly` de
   `/admin/boletas` formateaba el `dueDate` —una fecha de calendario, guardada a medianoche UTC— en la
   zona horaria del navegador. En Argentina (UTC-3) la medianoche del 7 es las 21:00 del 6, así que la

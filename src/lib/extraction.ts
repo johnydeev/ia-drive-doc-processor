@@ -228,9 +228,12 @@ export function identifyLSPProvider(text: string): LSPProvider | null {
 
   // ── Boletas sindicales (SUTERH / FATERYH / SERACARH) ─────────────────────
   // No son servicios públicos (van ANTES del gate isUtilityBill) pero usan el
-  // mismo mecanismo de prompt específico. Las tres comparten el CUIT recaudador
-  // 30-54675623-4 (FATERYH recauda todo); el patrón único que distingue cada
-  // tipo es el CÓDIGO DE FORMULARIO + la razón social del encabezado:
+  // mismo mecanismo de prompt específico. Las tres están cargadas en el directorio
+  // SIN CUIT y se matchean por NOMBRE: el CUIT impreso en el papel es el del
+  // CONSORCIO contribuyente y cambia por edificio (`30-54675623-4` es BOEDO 414,
+  // no una sindical — el error opuesto se corrigió el 2026-06-13, ver
+  // docs/decisiones.md). El patrón que distingue cada tipo es el CÓDIGO DE
+  // FORMULARIO + la razón social del encabezado:
   //   F0201 / "SINDICATO UNICO ..."        → SUTERH  (aportes CPF + sindical)
   //   F0106 / concepto "SERACARH"          → SERACARH (contribución SERACARH)
   //   F0101 / "FEDERACION ARGENTINA ..."   → FATERYH (FMVDD, OS, ART 27 bis)
@@ -408,13 +411,20 @@ export function isReciboHaberes(text: string): boolean {
 
 export function buildExtractionPrompt(text: string): string {
   const relevantText = extractRelevantLines(text, 80);
+  const lspProvider = identifyLSPProvider(text);
 
-  // Detectar recibos de haberes antes del router LSP
-  if (isReciboHaberes(text)) {
+  // El recibo de haberes INDIVIDUAL se detecta antes del router porque su texto
+  // nombra el convenio de la federación y caería en el prompt sindical.
+  //
+  // **Excepción: el LSD.** Un libro de sueldos también dice "SUELDO" y "CUIL", así
+  // que `isReciboHaberes` lo daba por recibo individual y se llevaba su prompt: la
+  // IA devolvía UNA boleta con el primer empleado y `lsd: null`, y el libro entero
+  // caía en `lsd_sin_empleados`. Pasó 5 de 5 en la primera prueba real
+  // (2026-09-06). La detección del libro mira su encabezado propio y es más
+  // específica, así que gana.
+  if (lspProvider !== "LSD" && isReciboHaberes(text)) {
     return buildReciboHaberesPrompt(relevantText);
   }
-
-  const lspProvider = identifyLSPProvider(text);
 
   if (!lspProvider) {
     return buildInvoicePrompt(relevantText);

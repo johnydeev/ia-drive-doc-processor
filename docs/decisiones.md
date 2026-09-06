@@ -4,6 +4,62 @@ Registro de decisiones tomadas ante problemas reales encontrados en producción.
 
 ---
 
+## 2026-09-06 — El LSD nunca recibía su prompt: `isReciboHaberes` corría antes del router
+
+### Problema
+
+Primera prueba real del LSD en producción: **los 5 libros fueron a Sin Asignar**, todos con
+`lsd_sin_empleados`. El log del worker mostraba la contradicción exacta:
+
+```
+📋 Tipo documento: LSP — LSD
+[DEBUG-AI] respuesta raw: {"provider":"BAEZ ROMAN, MARCIAL","amount":2226369,
+                           "detail":"Haberes julio/2026", ... ,"lsd":null}
+```
+
+El router detectaba el libro **bien**, pero la IA respondía con el formato de un recibo de sueldo
+individual —un empleado, su neto— y dejaba el roster vacío. Sin empleados, `validateLsdRoster` corta.
+
+**Causa:** `buildExtractionPrompt` tomaba **dos decisiones independientes** y sólo una miraba el
+router. `isReciboHaberes(text)` corría **antes** de `identifyLSPProvider`, y su regla incluye
+`SUELDO && CUIL` — que un libro de sueldos cumple siempre. Resultado: todo LSD se llevaba
+`buildReciboHaberesPrompt` y el prompt del libro **nunca se enviaba**. Reproducido en local sobre los
+5 papeles, sin IA: 5/5.
+
+**Por qué los tests no lo agarraron:** el test `buildExtractionPrompt rutea un LSD a su prompt
+propio` existía y pasaba en verde. Su fixture estaba recortado al encabezado del libro y **no
+contenía la palabra "SUELDO"**, que es justo la que dispara el falso positivo. El fixture omitía la
+única línea que importaba.
+
+### Decisión
+
+El router corre primero y el LSD queda exceptuado del chequeo de recibo individual:
+
+```ts
+const lspProvider = identifyLSPProvider(text);
+if (lspProvider !== "LSD" && isReciboHaberes(text)) {
+  return buildReciboHaberesPrompt(relevantText);
+}
+```
+
+**Excepción puntual, no reordenamiento general.** `isReciboHaberes` sigue corriendo antes del resto
+del router a propósito: un recibo de haberes individual nombra el convenio de la federación en su
+texto y sin esa precedencia caería en el prompt sindical. Lo que se corrige es sólo la colisión con
+el libro, cuya detección —el encabezado propio del LSD— es más específica.
+
+### Impacto
+
+`src/lib/extraction.ts`. El fixture del test ahora lleva la fila real de un empleado con
+`Sueldo Basico` y `Total Neto`, y hay dos tests nuevos: uno fija que el LSD gana sobre el falso
+positivo, otro que el recibo individual sigue ruteando a su prompt. Suite 899 → 901.
+
+**Margen medido:** el prompt usa las primeras 80 líneas no vacías. En los 5 libros el último
+`Total Neto` cae en la línea 68 como peor caso (RIOBAMBA) — **12 de margen**. Un edificio con 3
+empleados podría no entrar en la ventana; si algún día un libro devuelve menos empleados de los que
+tiene, esto es lo primero a revisar.
+
+---
+
 ## 2026-09-03 — El VEP de ARCA pasa a ser un gasto, y `usesConsortiumCuit` no alcanzaba
 
 ### Problema

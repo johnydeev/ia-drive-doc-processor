@@ -623,8 +623,12 @@ ficticio **"Edificio de Prueba"** en la cartera de MorinigoAdm.
       identificado por su CUIL, imputadas al consorcio del CUIT del encabezado. Número de
       comprobante `<libroId>-<CUIL>`, sin vencimiento. El falso positivo FATERYH quedó resuelto: el
       LSD se detecta ANTES que los sindicales en el router.
-      **Pendiente del owner y bloqueante:** dar de alta a los empleados en `_Proveedores` y crear su
-      gasto fijo en cada edificio — sin gasto fijo el sueldo no aparece en la hoja del edificio.
+      **Bloqueante:** dar de alta a los empleados en `_Proveedores` (todo CUIL del libro tiene que
+      existir como proveedor `EMPLEADO`, o el libro entero rebota).
+      **NO bloqueante:** el gasto fijo por edificio. Sin él la boleta se guarda y se escribe en
+      Sheets igual — lo que falta es que el sueldo figure como **obligación cumplida**, y la
+      segunda condición de `validateLsdRoster` (que el libro cubra el padrón), que sin padrón no
+      corre: ahí se pierde la red que detecta si la IA se salteó a un empleado.
 - [ ] **Mostrar `ProcessingLog` en la UI**: guarda el resumen de CADA ejecución desde siempre y
       ninguna pantalla lo muestra.
 - [ ] **Facturas con el membrete en imagen que el fallback visual no resuelve** (sistema GESTIONPRO):

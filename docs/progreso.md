@@ -7,9 +7,13 @@ VEP, y el LSD abierto en una boleta por empleado.
 
 > **Cómo leer los "Estado:" de este archivo.** Se escriben en el momento de terminar el trabajo, así
 > que un **"Sin commitear"** en una sección vieja significa *no estaba commiteado ese día*, no que
-> siga pendiente. **Todo lo anterior a `b77c07b` (2026-08-28) está commiteado y desplegado** — cada
+> siga pendiente. **Todo lo anterior a `add4e11` (2026-09-03) está commiteado y desplegado** — cada
 > commit a `master` es un deploy real. Los estados se corrigieron hasta la sesión 60 inclusive; de
 > ahí para abajo el archivo queda como registro histórico.
+>
+> Las secciones de la **sesión 61** (instrumentación de requests, triage de no-boletas, LSD) y la del
+> **VEP** (sesión 62) dicen "implementado": las primeras entraron en `ae31c15` y `e3551a7`, el VEP en
+> `add4e11`. Lo que sigue abierto en todas ellas es el **smoke en producción**, no el commit.
 
 ## ✅ Smokes pendientes en producción (al 2026-08-29)
 
@@ -112,8 +116,10 @@ Detalle y alternativas descartadas: `docs/decisiones.md` (2026-08-29).
 
 ## 📗 Liquidación de Sueldos: un archivo, N gastos (2026-09-01)
 
-**Estado: implementado y verificado (typecheck + lint 0 errores + 889 tests + build:jobs OK). Sin
-migración. Sin commitear al momento de escribir esto.**
+**Estado: implementado y COMMITEADO** (`e3551a7`). typecheck + lint 0 errores + 889 tests +
+build:jobs OK. Sin migración. **Requisito para producción: los empleados dados de alta en
+`_Proveedores`** — hecho el 2026-09-06 para los 5 edificios de la primera prueba. El gasto fijo
+**no** es requisito de entrada (ver abajo).
 
 Spec: `docs/superpowers/specs/2026-09-01-lsd-un-libro-n-empleados-design.md`
 Plan: `docs/superpowers/plans/2026-09-01-lsd-un-libro-n-empleados.md`
@@ -139,13 +145,53 @@ Hecho:
 **Dos gates hubo que exceptuar**, porque asumían un documento = un gasto: el de `SIN MONTO` (un libro
 no tiene monto único) y el de proveedor (los proveedores son los empleados).
 
-**⏳ Pendiente del owner, y es bloqueante:** dar de alta a los empleados en `_Proveedores` (CUIL en
-el campo CUIT, tipo `EMPLEADO`) y crear su **gasto fijo** en cada edificio. Sin el padrón cargado la
-validación de completitud no tiene contra qué comparar, y sin gasto fijo el sueldo **no aparece en la
-hoja** del edificio, que es la orden de pago.
+### Qué bloquea y qué no (verificado en el código el 2026-09-06)
 
-**⏳ Smoke:** procesar un LSD de 2 empleados y confirmar 2 gastos en la hoja, cada uno con su CBU, y
-el PDF una sola vez en Rendiciones.
+| | ¿Bloquea la entrada del libro? |
+|---|---|
+| **Empleados de alta en `_Proveedores`** (CUIL en el campo CUIT, tipo `EMPLEADO`) | **SÍ.** Un solo CUIL sin alta rebota el libro entero (`lsd_empleado_no_registrado`) |
+| **Gasto fijo del empleado en el edificio** | **NO.** La boleta se guarda y se escribe en Sheets igual |
+
+El gasto fijo aporta otras dos cosas, las dos importantes: que el sueldo figure como **obligación
+cumplida**, y la **segunda condición** de `validateLsdRoster` — que el libro cubra el padrón. Sin
+padrón esa condición no corre, así que **se pierde la red que detecta si la IA se salteó a un
+empleado**: un libro de 2 del que se extraiga 1 entra igual, con un sueldo de menos y sin aviso.
+
+### Preflight de la primera prueba real (2026-09-06, 5 libros de 2026-07)
+
+Verificado sin gastar tokens (`pdf-parse` + consulta de solo lectura a la base):
+
+- **5/5 rutean a `LSD`**; 5/5 consorcios matchean por el CUIT del encabezado; 5/5 con período
+  `ACTIVE 08/2026`; **10/10 empleados de alta** como `EMPLEADO`. Esperado: **9 boletas**.
+- **Los 5 edificios tienen 0 gastos fijos de empleado** → los libros entran con la red apagada.
+- ⚠️ **Los CUIL del papel NO son la lista de empleados.** El libro trae también las **cargas de
+  familia**: ALMIRANTE BROWN tiene 5 CUIL y 2 empleados (GONZALEZ DAIANA/YESICA/WALTER son hijos),
+  CALLAO 6 para 2, PUEYRREDON 6 para 2. Los empleados son los que tienen **`Total Neto` propio**.
+  Cargar los CUIL de familiares como gasto fijo dejaría obligaciones incumplidas para siempre.
+- ⚠️ **BUSTOS MUNIZAGA (ALMIRANTE BROWN)**: ingreso 23/07/2026, cese 25/07/2026, neto 125.235,84 —
+  es una **liquidación final de 3 días**, no un sueldo mensual. No corresponde crearle gasto fijo.
+- **Nombre fantasía**: el owner cargó el nombre del consorcio en `matchNames` de cada empleado
+  (BOEDO quedó distinto: "CRUZ RICARDO"). No afecta al LSD, que resuelve por CUIL, pero `matchNames`
+  es un campo de **matching**, no una etiqueta — tenerlo presente si se amplía el match por nombre.
+- Los libros son de `2026-07` y el período activo es `08/2026`: se imputan a **agosto**, con el
+  período del papel en el detalle.
+
+### ❌ Primera prueba real (2026-09-06): 5/5 a Sin Asignar — causa encontrada y corregida
+
+Se corrieron los 5 libros con el scheduler normal. **Los 5 rebotaron con `lsd_sin_empleados`.** No
+tuvo nada que ver con el alta de los empleados ni con los gastos fijos.
+
+`buildExtractionPrompt` corría `isReciboHaberes` **antes** del router, y su regla `SUELDO && CUIL`
+la cumple todo libro de sueldos → los 5 se llevaron el prompt del **recibo individual** y la IA
+devolvió una boleta con el primer empleado y `lsd: null`. El log lo mostraba de frente: detectaba
+`LSP — LSD` y respondía formato recibo. Ver `docs/decisiones.md` 2026-09-06.
+
+**Corregido y verificado sobre los 5 papeles reales** (sin gastar IA): los 5 rutean ahora al prompt
+del libro, con 2/1/2/2/2 CUIL de empleado y sus `Total Neto` dentro de la ventana del prompt.
+**Falta commitear y reprocesar.**
+
+**⏳ Smoke (pendiente de rehacer):** mover los 5 de Sin Asignar a Pendientes y confirmar **9 gastos**
+en la hoja, cada uno con su CBU, y cada PDF una sola vez en Rendiciones.
 
 > **Costo conocido, aceptado por el owner:** un **suplente** que cubre vacaciones aparece en el libro
 > sin alta previa y **frena el libro entero** hasta que se lo cargue y se reprocese (una request más).
@@ -153,8 +199,8 @@ el PDF una sola vez en Rendiciones.
 
 ## 🧾 El VEP de ARCA se registra como gasto (2026-09-03)
 
-**Estado: implementado. typecheck + lint (0 errores) + 899 tests + build:jobs OK. Sin migración.
-Sin commitear al momento de escribir esto.**
+**Estado: implementado y COMMITEADO** (`add4e11`, 2026-09-03 → deploy automático). typecheck + lint
+(0 errores) + 899 tests + build:jobs OK. Sin migración. **Falta el smoke en producción** (ver abajo).
 
 Spec: `docs/superpowers/specs/2026-09-03-vep-arca-como-gasto-design.md`
 Plan: `docs/superpowers/plans/2026-09-03-vep-arca-como-gasto.md`
@@ -194,8 +240,9 @@ al revertir el cambio, tres tests de integración fallan con el gasto en `admin`
 
 ### Pendiente del owner
 
-- [ ] **Gasto fijo con proveedor ARCA en cada consorcio con empleados.** Sin él, el VEP entra a la
-      base pero no aparece como obligación cumplida en la hoja del edificio.
+- [ ] **Gasto fijo con proveedor ARCA en cada consorcio con empleados.** **No bloquea la entrada**:
+      sin él el VEP se guarda y se escribe en Sheets igual. Lo que falta es que figure como
+      **obligación cumplida** en la vista de gastos fijos.
 - [ ] **Smoke**: procesar el VEP de ALMIRANTE BROWN y confirmar monto `1.123.728,00`, vencimiento
       `2026-02-08` y proveedor **ARCA** (no la administradora).
 
@@ -213,8 +260,8 @@ al revertir el cambio, tres tests de integración fallan con el gasto en `admin`
 
 ## 🚫 VEP y LSD dejan de gastar requests (2026-08-31)
 
-**Estado: implementado y verificado (typecheck + lint 0 errores + 857 tests + build:jobs OK). Sin
-migración. Sin commitear al momento de escribir esto.**
+**Estado: implementado y COMMITEADO** (`ae31c15`). typecheck + lint 0 errores + 857 tests +
+build:jobs OK. Sin migración.
 
 Spec: `docs/superpowers/specs/2026-08-31-triage-no-boletas-decisivo-design.md`
 
@@ -291,8 +338,8 @@ Cuánto rinde es medible antes de construirlo: consulta 2 de `scripts/metrics-cu
 
 **Estado: implementado y verificado (typecheck + lint 0 errores + 843 tests + build:jobs OK).
 Migración `20260831000000_processing_job_metrics` **YA APLICADA** por el owner (2026-08-31;
-verificado en la base: las 5 columnas existen, nullable, con los tipos esperados). Sin commitear al
-momento de escribir esto.**
+verificado en la base: las 5 columnas existen, nullable, con los tipos esperados). **COMMITEADO**
+(`ae31c15`).**
 
 Spec: `docs/superpowers/specs/2026-08-31-instrumentacion-requests-cuota-ia-design.md`
 Plan: `docs/superpowers/plans/2026-08-31-instrumentacion-requests-cuota-ia.md`
@@ -330,8 +377,8 @@ ahorro que el owner quiere sumar.
 
 ## 🥇 Gemini pasa a primero en la cadena (2026-08-30)
 
-**Estado: implementado y verificado (830 tests). Sin migración. Sin commitear al momento de escribir
-esto — va junto con la instrumentación.**
+**Estado: implementado y COMMITEADO** (`ae31c15`, junto con la instrumentación). 830 tests. Sin
+migración.
 
 `PROVIDER_ORDER` queda **Gemini → Cerebras → OpenAI → Claude**. Es la pieza 1 del spec del
 2026-08-24, que estaba diseñada y sin aplicar por depender de una key paga.

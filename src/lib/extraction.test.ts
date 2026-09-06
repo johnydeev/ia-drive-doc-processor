@@ -5,6 +5,7 @@ import {
   refineExtractionWithRawText,
   annotateSindicalProvider,
   usesConsortiumCuit,
+  isReciboHaberes,
 } from "@/lib/extraction";
 import type { ExtractedDocumentData } from "@/types/extractedDocument.types";
 
@@ -451,6 +452,9 @@ ACTIVIDAD PPAL
 202607 CIUDAD AUTONOMA BUENOS AIRES
 949920 - SERVICIOS DE CONSORCIOS DE EDIFICIOS
 LEGAJO CUIL APELLIDO Y NOMBRE FECHA INGRESO FECHA CESE DOCUMENTO
+1 27-18116846-9 BRITEZ, PAULA ADELA 02/02/2010 - DNI 18.116.846
+Sueldo Basico 202607 30,00 1.318.092,00
+Total Neto: 1.449.395,50
 IDENTIFICADOR ÚNICO DEL LIBRO 000000045900718 FECHA DE EMISIÓN DEL LIBRO 07/08/2026`;
 
   it("identifica un LSD por el encabezado del libro", () => {
@@ -478,6 +482,27 @@ IDENTIFICADOR ÚNICO DEL LIBRO 000000045900718 FECHA DE EMISIÓN DEL LIBRO 07/08
     const prompt = buildExtractionPrompt(LSD_TEXT);
     expect(prompt).toContain("LIQUIDACIÓN DE SUELDOS DIGITAL");
     expect(prompt).toContain("sueldoNeto");
+  });
+
+  // 2026-09-06, primera prueba real: los 5 libros fueron a Sin Asignar con
+  // `lsd_sin_empleados`. El router los detectaba bien, pero `buildExtractionPrompt`
+  // corría `isReciboHaberes` ANTES, y un libro de sueldos dice "SUELDO" y "CUIL"
+  // → se llevaba el prompt del recibo INDIVIDUAL y devolvía `lsd: null`.
+  // El fixture viejo no tenía la palabra "SUELDO", así que el test de arriba
+  // pasaba en verde mientras producción fallaba 5 de 5.
+  it("un LSD gana sobre el falso positivo de recibo de haberes", () => {
+    expect(isReciboHaberes(LSD_TEXT)).toBe(true);
+    expect(buildExtractionPrompt(LSD_TEXT)).not.toContain("recibo de haberes de un empleado");
+  });
+
+  it("un recibo de haberes INDIVIDUAL sigue yendo a su prompt", () => {
+    // No tiene el encabezado del libro, así que el router devuelve null.
+    const recibo = `RECIBO DE HABERES
+EMPLEADO: PEREZ, JUAN CUIL 20-12345678-9
+Sueldo básico 900.000,00
+NETO A COBRAR 780.000,00`;
+    expect(identifyLSPProvider(recibo)).not.toBe("LSD");
+    expect(buildExtractionPrompt(recibo)).toContain("recibo de haberes de un empleado");
   });
 });
 
