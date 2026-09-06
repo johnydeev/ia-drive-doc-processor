@@ -1,7 +1,9 @@
 # Progreso del proyecto — drive-doc-processor
 
-Actualizado al 29/08/2026 (sesión 61 — pasada de verificación contra la base de producción: se
-confirmó qué pendientes ya estaban hechos y se corrigieron los estados de commit).
+Actualizado al 03/09/2026 (sesión 62 — el VEP de ARCA pasa a registrarse como gasto).
+Sesión 61: verificación de pendientes contra producción, fix del vencimiento en Boletas entrantes,
+análisis de consumo de IA, Gemini a primero en la cadena, instrumentación de requests, triage del
+VEP, y el LSD abierto en una boleta por empleado.
 
 > **Cómo leer los "Estado:" de este archivo.** Se escriben en el momento de terminar el trabajo, así
 > que un **"Sin commitear"** en una sección vieja significa *no estaba commiteado ese día*, no que
@@ -149,6 +151,66 @@ el PDF una sola vez en Rendiciones.
 > sin alta previa y **frena el libro entero** hasta que se lo cargue y se reprocese (una request más).
 > Se evaluó darlo de alta automáticamente y se descartó: nada se crea solo en el directorio.
 
+## 🧾 El VEP de ARCA se registra como gasto (2026-09-03)
+
+**Estado: implementado. typecheck + lint (0 errores) + 899 tests + build:jobs OK. Sin migración.
+Sin commitear al momento de escribir esto.**
+
+Spec: `docs/superpowers/specs/2026-09-03-vep-arca-como-gasto-design.md`
+Plan: `docs/superpowers/plans/2026-09-03-vep-arca-como-gasto.md`
+
+Los VEP con los que cada consorcio paga las cargas sociales de su encargado se descartaban desde el
+2026-08-31. Ahora entran imputados al edificio del CUIT del contribuyente, con proveedor **ARCA**.
+
+### El spec estaba mal y se detectó antes de implementar
+
+La primera versión daba por hecho que meter `"VEP"` en `usesConsortiumCuit` neutralizaba el CUIT de
+la administradora que viaja en todos los VEP (`Generado por el Usuario`, un proveedor real del
+consorcio con 16 boletas de honorarios). **Es falso, y al revés: lo inyecta.**
+
+- `usesConsortiumCuit` habilita el match de proveedor **por nombre**; **no desactiva** el match por
+  CUIT, que corre **antes** (`matchProvider`, Intento 0).
+- La regla del prompt tampoco protege: `cuitSanitizeStep` vuelve a extraer ese CUIT del texto por
+  regex+checksum y lo suma a `allTaxIds` **después** de la IA.
+
+Sin el arreglo, **todos los VEP quedaban imputados a la administradora**. Verificado empíricamente:
+al revertir el cambio, tres tests de integración fallan con el gasto en `admin`.
+
+### Hecho
+
+- **`buildVepPrompt`** (`src/lib/vepExtraction.ts`): proveedor fijo `ARCA`, `providerTaxId` null,
+  `consortium` null, `clientNumber` null. No se reusó `buildArcaPrompt` (está escrito para la DJ
+  F931 de dos páginas; un VEP es un cupón simple).
+- **`"VEP"` en `LSPProvider` y en `usesConsortiumCuit`**, detectado por los marcadores del
+  encabezado en los **primeros 200 caracteres**, antes de la regla del `931`.
+- **Al VEP se le cortan `allTaxIds` y `providerTaxId`** en el matching de proveedor. Es lo que
+  realmente resuelve el problema. `allTaxIds` completo sigue yendo a `matchConsortium`.
+- **El consorcio del VEP se matchea sólo por CUIT**: el papel no imprime la dirección del inmueble.
+- **El guard de `clientNumber` se generalizó** al grupo `usesConsortiumCuit` (ninguno usa
+  `LspService`, y su fast-path es terminal).
+- **La capa 0 del triage quedó vacía**, con el mecanismo intacto.
+- **Test con el F931 real**: su texto trae "Volante Electrónico de Pago" en el carácter ~227, contra
+  la ventana de 200. **~25 caracteres de margen** — el test avisa si se achica.
+
+### Pendiente del owner
+
+- [ ] **Gasto fijo con proveedor ARCA en cada consorcio con empleados.** Sin él, el VEP entra a la
+      base pero no aparece como obligación cumplida en la hoja del edificio.
+- [ ] **Smoke**: procesar el VEP de ALMIRANTE BROWN y confirmar monto `1.123.728,00`, vencimiento
+      `2026-02-08` y proveedor **ARCA** (no la administradora).
+
+### Pendientes de la feature
+
+- [ ] **VEP de un tercero que paga el consorcio — PRIMARIO.** Ej. el de la empresa de seguridad: el
+      CUIT del contribuyente **no** es el del edificio, así que esos VEP van a Sin Asignar. Falta
+      definir cómo se decide a qué consorcio pertenecen. El owner todavía no tiene la regla.
+- [ ] **VEP escaneado.** El de ALMIRANTE BROWN es una foto: sin texto extraíble el router no se
+      entera y el documento va a Vision con el prompt genérico. Cubrirlo implica decidir el tipo de
+      documento **después** de Vision, que es un cambio de orden en el pipeline. Los VEP bajados de
+      ARCA son PDF digital y no tienen este problema.
+
+---
+
 ## 🚫 VEP y LSD dejan de gastar requests (2026-08-31)
 
 **Estado: implementado y verificado (typecheck + lint 0 errores + 857 tests + build:jobs OK). Sin
@@ -164,18 +226,27 @@ Hecho:
   boleta, y un VEP tiene `$`, `IMPORTE`, `VENCIMIENTO` y CUIT.
 - **Calibrado sobre 9 papeles reales** (4 VEP + 5 LSD) que pasó el owner. **9 de 9 detectados**, y la
   heurística vieja clasificaba a los 9 como `boleta` — o sea las 9 gastaban una request.
+  > **El LSD salió de acá el 2026-09-01 y el VEP el 2026-09-03**: los dos dejaron de ser no-boletas
+  > porque ahora se procesan. **La capa 0 quedó vacía** —viva, pero sin ningún tipo— y los marcadores
+  > de ambos se mudaron al router de prompts (`identifyLSPProvider`).
 - **El F931 de ARCA no se rompe**: su texto contiene "Volante Electrónico de Pago" (el importe está
   en el VEP de la página 2), así que el marcador de VEP sólo cuenta en los primeros 200 caracteres.
 - **Destino Sin Asignar** con etiqueta por tipo (`[NO BOLETA - VEP]`). El tipo queda en
   `ProcessingJob.reasonCategory` → se puede medir cuántas requests ahorró cada uno.
 - **`markNotBoleta` idempotente** (antes apilaba el prefijo al reprocesar).
 
-> **Lo que enseñó la calibración:** el spec proponía buscar `"LIQUIDACIÓN DE SUELDOS DIGITAL"` y **el texto
-> extraíble de un LSD no dice eso en ningún lado**. Escrito de memoria, el detector no habría
-> detectado nada y el trabajo habría parecido terminado. Los marcadores se sacan del papel, siempre.
+> **Lo que enseñó la calibración:** el spec proponía buscar el nombre del formulario de memoria, y
+> los marcadores que funcionan son otros — el encabezado de la planilla. Los marcadores se sacan del
+> papel, siempre.
+>
+> **Corrección del 2026-09-01:** acá se afirmó que el texto de un LSD "no dice el nombre del
+> formulario en ningún lado". **Es falso, y el error fue de método:** en el dump se imprimieron sólo
+> los primeros 1200 caracteres, y el título vive en la posición **2983** (medido). Lo mismo pasó con
+> el rótulo `Total Neto`, que está en la **1942** — ver la sección del LSD más arriba. Leer un
+> recorte del texto alcanza para reconocer un documento, **no** para decidir de dónde sale un dato.
 
-**Decisión del owner (2026-09-01):** por ahora **sólo VEP y LSD**. Presupuestos, estados de cuenta y
-pedidos **no** se implementan con marcadores propios — no hay papeles de muestra y no vale el
+**Decisión del owner (2026-09-01):** la capa 0 cubre **sólo el VEP**. Presupuestos, estados de cuenta
+y pedidos **no** se implementan con marcadores propios — no hay papeles de muestra y no vale el
 trabajo. La idea para cubrirlos de forma genérica es la regla de abajo.
 
 ### "Sin 2 CUITs válidos, se desestima" — ya es el comportamiento actual
@@ -296,6 +367,11 @@ Todo lo de acá lo hace el owner; nada requiere cambios de código.
 | 14 | Aplicar migración `20260831000000_processing_job_metrics` + `prisma generate` | ✅ hecho 2026-08-31 | — |
 | 14b | Dejar correr un día y validar el contador con `scripts/metrics-cuota.sql` | ❌ | Confirmar que no se pierden llamadas |
 | 15 | Resolver **Cerebras 402** | ❌ (lo toma el owner) | Con Gemini primero y sin Cerebras, no hay red bajo el free tier |
+| 16 | **Dar de alta los empleados** en `_Proveedores` (CUIL en el campo CUIT, tipo `EMPLEADO`) | ❌ | Todo el procesamiento de LSD |
+| 17 | **Crear el gasto fijo de cada empleado** en su edificio | ❌ | Sin él el sueldo no aparece en la hoja (la orden de pago), y la validación de completitud se queda sin padrón |
+| 18 | Revisar `scripts/metrics-cuota.sql` tras unos días de producción | ❌ | Decidir si vale adelantar el descarte por CUIT antes de la IA |
+| 19 | Smoke del **VEP**: confirmar `[NO BOLETA - VEP]` en Sin Asignar con `aiRequests = 0` | ❌ | Prueba de que el triage ahorra cuota |
+| 20 | Smoke del **LSD**: un libro de 2 empleados → 2 gastos en la hoja, montos contra el PDF | ❌ | Es donde se detectaría un `Total Neto` mal extraído |
 
 **Riesgo operativo abierto, sin dueño:** en la corrida real del 2026-08-28 **Cerebras devolvió 402 en
 las 4 boletas**. La cadena está colgada de Gemini free tier, cuya cuota es diaria **por modelo**; una
@@ -457,7 +533,9 @@ Detalle y alternativas descartadas: `docs/decisiones.md` (2026-08-25).
 
 > **Revisión del 2026-08-25 (sesión 60):** la entrega asumía una cuenta paga de Gemini que **no se
 > contrató**. El owner decidió no cargar crédito por ahora, así que se **revirtió la pieza 1**
-> (Gemini a primero): la cadena sigue **Cerebras → Gemini → OpenAI → Claude**. Con key free
+> (Gemini a primero): la cadena sigue **Cerebras → Gemini → OpenAI → Claude**. ⚠️ **Esto quedó
+> obsoleto el 2026-08-30**: Gemini pasó a primero igual, porque Cerebras devolvía 402 en todas las
+> boletas — ver la sección del reorden más arriba. Con key free
 > la cuota de Gemini es diaria **por modelo** (~20 requests), y ponerlo primero la quema en las
 > primeras boletas del día, dejando al resto pagando el barrido fallido antes de llegar a Cerebras.
 > El resto de las piezas se conserva: **mejoran o son neutrales en free tier**.

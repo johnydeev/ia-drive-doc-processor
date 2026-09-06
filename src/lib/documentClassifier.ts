@@ -41,47 +41,23 @@ const BOLETA_MARKERS = [
 ];
 
 /** Tipos de documento que NO son boletas y se identifican sin ambigüedad. */
-export type NotBoletaKind = "VEP";
-
-/** Normaliza para comparar: sin acentos, en mayúsculas, sin espacios repetidos. */
-function normalize(text: string): string {
-  return text
-    .normalize("NFD")
-    .replace(/[̀-ͯ]/g, "")
-    .toUpperCase()
-    .replace(/\s+/g, " ");
-}
-
-/**
- * Ventana del ENCABEZADO para el VEP. Es la clave del detector.
- *
- * El F931 de ARCA se extrae con 2 páginas porque el "Importe total a pagar" está
- * en el VEP de la página 2 — o sea su texto CONTIENE "Volante Electrónico de
- * Pago", y es un gasto real que se paga. Buscando sólo en el encabezado, un VEP
- * suelto (que lo trae en la línea 2) se detecta y el F931 no.
- */
-const VEP_HEADER_CHARS = 200;
-const VEP_HEADER_MARKERS = ["VOLANTE ELECTRONICO DE PAGO", "NRO. VEP:", "NRO VEP:"];
-
+export type NotBoletaKind = never;
 
 /**
  * Capa 0 del triage: tipos de documento **inequívocos**, que se descartan aunque
  * tengan todas las señales de una boleta.
  *
  * Existe porque `classifyDocumentType` no puede agarrarlos: exige que NO haya
- * señales de boleta, y un VEP tiene `$`, `IMPORTE`, `VENCIMIENTO` y CUIT; un LSD
- * tiene `$` y CUIT. Agregarlos a `NOT_BOLETA_MARKERS` no serviría de nada.
+ * señales de boleta, y tanto un VEP como un LSD tienen `$` y CUIT. Agregarlos a
+ * `NOT_BOLETA_MARKERS` no serviría de nada.
  *
- * Devuelve el tipo (para etiquetar el archivo) o `null` si no es ninguno.
- *
- * **El LSD salió de acá el 2026-09-01**: dejó de ser un no-boleta porque ahora se
- * procesa —un libro produce una boleta por empleado—, así que lo detecta el router
- * de prompts (`identifyLSPProvider`), no este triage.
+ * **Hoy está vacía.** Nació el 2026-08-31 con el VEP y el LSD; los dos salieron
+ * después porque pasaron a procesarse (el LSD el 2026-09-01, el VEP el
+ * 2026-09-03) y hoy los detecta el router de prompts (`identifyLSPProvider`). El
+ * mecanismo se conserva —la firma, el gate que la llama y su lugar en el
+ * pipeline— para el próximo formulario que haya que descartar.
  */
-export function detectDecisiveNotBoleta(text: string): NotBoletaKind | null {
-  const header = normalize(text.slice(0, VEP_HEADER_CHARS));
-  if (VEP_HEADER_MARKERS.some((marker) => header.includes(marker))) return "VEP";
-
+export function detectDecisiveNotBoleta(_text: string): NotBoletaKind | null {
   return null;
 }
 

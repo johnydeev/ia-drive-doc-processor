@@ -4,6 +4,7 @@ import { correctCaeDueDate } from "@/lib/caeDueDateGuard";
 import { correctVatContainedAmount } from "@/lib/vatContainedAmountGuard";
 import { ExtractedDocumentData } from "@/types/extractedDocument.types";
 import { buildLsdPrompt } from "@/lib/lsdExtraction";
+import { buildVepPrompt } from "@/lib/vepExtraction";
 
 /**
  * Normaliza un CUIT devuelto por la IA al formato canónico `XX-XXXXXXXX-X`
@@ -104,6 +105,7 @@ const OUTPUT_JSON_TEMPLATE = {
 
 export type LSPProvider =
   | "LSD"
+  | "VEP"
   | "EDESUR"
   | "EDENOR"
   | "AYSA"
@@ -186,6 +188,24 @@ function isLibroSueldos(upper: string): boolean {
   return hits >= 2;
 }
 
+/**
+ * Marcadores del encabezado de un VEP. Vienen del triage de no-boletas
+ * (2026-08-31), calibrados sobre 5 papeles reales; el VEP dejó de descartarse y
+ * pasó a procesarse (2026-09-03), así que los marcadores se mudaron acá.
+ *
+ * La ventana de 200 caracteres es lo que separa un VEP suelto de un F931: la
+ * declaración jurada trae su VEP en la página 2, o sea su texto CONTIENE
+ * "Volante Electrónico de Pago" pero mucho más abajo. El margen es de ~25
+ * caracteres sobre el papel real — hay un test que lo fija.
+ */
+const VEP_HEADER_CHARS = 200;
+const VEP_HEADER_MARKERS = ["VOLANTE ELECTRONICO DE PAGO", "NRO. VEP:", "NRO VEP:"];
+
+function isVep(upper: string): boolean {
+  const header = upper.slice(0, VEP_HEADER_CHARS).normalize("NFD").replace(/[̀-ͯ]/g, "");
+  return VEP_HEADER_MARKERS.some((marker) => header.includes(marker));
+}
+
 export function identifyLSPProvider(text: string): LSPProvider | null {
   const upper = text.slice(0, 4000).toUpperCase();
 
@@ -198,6 +218,13 @@ export function identifyLSPProvider(text: string): LSPProvider | null {
   // No es una boleta: es un documento con VARIOS gastos, uno por empleado. El
   // pipeline lo abre en N boletas (spec 2026-09-01).
   if (isLibroSueldos(upper)) return "LSD";
+
+  // ── VEP (Volante Electrónico de Pago) de ARCA ─────────────────────────────
+  // Es el CUPÓN DE PAGO de una declaración jurada, no la declaración. Va ANTES de
+  // la regla del 931 porque un VEP de SICOSS no imprime ese número (diría ARCA
+  // sólo por "Organismo Recaudador"), y antes de los sindicales por el mismo
+  // criterio de especificidad. El CUIT del papel es el del CONTRIBUYENTE.
+  if (isVep(upper)) return "VEP";
 
   // ── Boletas sindicales (SUTERH / FATERYH / SERACARH) ─────────────────────
   // No son servicios públicos (van ANTES del gate isUtilityBill) pero usan el
@@ -303,7 +330,15 @@ export function usesConsortiumCuit(lspProvider: LSPProvider | null | undefined):
     lspProvider === "SUTERH" ||
     lspProvider === "FATERYH" ||
     lspProvider === "SERACARH" ||
-    lspProvider === "ARCA"
+    lspProvider === "ARCA" ||
+    // El CUIT del VEP es el del CONTRIBUYENTE (el consorcio) y el proveedor es ARCA.
+    //
+    // OJO: esto habilita el match por NOMBRE, pero NO desactiva el match por CUIT,
+    // que corre antes. En un VEP el segundo CUIT del papel es el de la administradora
+    // —un proveedor real del consorcio— así que hace falta ADEMÁS cortarle `allTaxIds`
+    // al matching de proveedor. Ver `resolveAssignment` y la enmienda §3.2 del spec
+    // `2026-09-03-vep-arca-como-gasto-design.md`.
+    lspProvider === "VEP"
   );
 }
 
@@ -387,6 +422,8 @@ export function buildExtractionPrompt(text: string): string {
 
   // Route to specific prompt per LSP provider
   switch (lspProvider) {
+    case "VEP":
+      return buildVepPrompt(relevantText);
     case "LSD":
       return buildLsdPrompt(relevantText);
     case "EDESUR":

@@ -4,6 +4,87 @@ Registro de decisiones tomadas ante problemas reales encontrados en producción.
 
 ---
 
+## 2026-09-03 — El VEP de ARCA pasa a ser un gasto, y `usesConsortiumCuit` no alcanzaba
+
+### Problema
+
+Los VEP (Volante Electrónico de Pago) con los que cada consorcio paga las cargas sociales de su
+encargado se descartaban: desde el 2026-08-31 el triage capa 0 los mandaba a Sin Asignar sin gastar
+tokens. El owner los quiere registrados como gasto.
+
+El obstáculo real apareció al revisar el diseño contra el código, **antes de implementar**. El papel
+trae **dos** números que pasan el checksum de CUIT:
+
+```
+CUIT: 30-52063978-7                    ← el consorcio (contribuyente)
+Generado por el Usuario: 27324998573   ← MORINIGO RAMONA NATALIA, la administradora
+```
+
+La administradora es **un proveedor real** del consorcio —cobra honorarios, tiene 16 boletas— y firma
+**todos** los VEP de **todos** los edificios. Si el VEP se procesaba como una factura común, cada VEP
+quedaba imputado a ella: una boleta más a su nombre, con monto plausible, mezclada entre sus
+honorarios reales. Es el bug del 2026-07-02 (ASCENSORES POTENZA) otra vez.
+
+**El primer diseño daba por resuelto ese riesgo con `usesConsortiumCuit`, y era falso.** Esa función
+hace **una** cosa: habilitar el match de proveedor **por nombre**. No desactiva el match por CUIT,
+que corre **antes** (`matchProvider`, Intento 0). Y la regla del prompt —"ignorá `Generado por el
+Usuario`"— tampoco protegía, porque `cuitSanitizeStep` vuelve a extraer ese CUIT del texto por
+regex+checksum y lo suma a `allTaxIds` **después** de la IA. El comentario de ese bloque dice que
+sumar todos los CUITs del papel "es seguro" porque el matching excluye el del consorcio: vale para
+los sindicales, donde el otro CUIT es el del recaudador —que **es** el proveedor correcto—, y no
+vale para el VEP, donde el otro CUIT es el de un proveedor **distinto**. Misma línea de código,
+resultado opuesto. Verificado empíricamente: los tests de integración fallan sin el arreglo, con el
+gasto imputado a `admin`.
+
+### Decisión
+
+**Tres piezas, no una.**
+
+1. `"VEP"` entra en `LSPProvider` y en `usesConsortiumCuit` (el CUIT del papel identifica al
+   consorcio; el proveedor, ARCA, se resuelve por nombre). Es necesario y **no suficiente**.
+2. **Al VEP se le corta `allTaxIds` y `providerTaxId` en el matching de proveedor.** Es lo que
+   realmente neutraliza el CUIT de la administradora. `allTaxIds` completo sigue yendo a
+   `matchConsortium`: de ahí sale el edificio.
+3. **El consorcio del VEP se matchea sólo por CUIT** (`cuitOnly`). Un VEP no imprime la dirección del
+   inmueble, así que dejar viva la vía por nombre sólo abre la puerta a que un `consortium` mal
+   extraído impute el gasto a otro edificio.
+
+Como robustez, el guard que limpia `clientNumber` se generalizó al grupo `usesConsortiumCuit`:
+ninguno de sus cinco miembros usa `LspService`, y el fast-path de `LspService` es terminal — un
+`Nro. VEP` colado ahí por el modelo rebotaría el documento entero.
+
+**Prompt propio** (`buildVepPrompt`) y no `buildArcaPrompt`: ese está escrito para la declaración
+jurada F931 de dos páginas, donde el importe vive en la página 2. Un VEP es un cupón simple.
+
+**El VEP sale de la capa 0 del triage, que queda vacía** pero viva: nació con VEP y LSD, los dos
+salieron al pasar a procesarse. Se conserva la firma, el gate y su lugar en el pipeline para el
+próximo formulario que haya que descartar.
+
+### Alternativas descartadas
+
+- **Reusar `buildArcaPrompt`**: sus reglas hablan de la DJ (montos desglosados, "MONTOS QUE SE
+  INGRESAN", `Mes - Año`) que un cupón no tiene.
+- **Ampliar la regla del `931`** para que atrape también al VEP: un VEP de SICOSS no imprime ese
+  número, y ampliar la regla la volvía tan laxa que se comía otros formularios de ARCA.
+- **Confiar sólo en la regla del prompt** para el CUIT de la administradora: es la capa blanda. El
+  pipeline reinyecta ese CUIT por regex, así que la defensa tiene que estar en el matching.
+
+### Impacto
+
+`src/lib/vepExtraction.ts` (nuevo) · `src/lib/extraction.ts` (tipo, `isVep`, router,
+`usesConsortiumCuit`, case del prompt) · `src/lib/documentClassifier.ts` (capa 0 vacía) ·
+`src/jobs/processPendingDocuments.job.ts` (los tres cambios de matching). Suite 899 tests.
+
+**Detección**: `isVep` reusa los marcadores calibrados para el triage, con la misma ventana de 200
+caracteres — es lo único que separa un VEP suelto de un F931, que trae su propio VEP en la página 2.
+El margen sobre el papel real es de ~25 caracteres, y hay un test con el F931 completo que lo fija.
+
+**Pendiente primario**: el VEP de un **tercero** que paga el consorcio (ej. la empresa de seguridad).
+Ahí el CUIT del contribuyente no es el del edificio, así que esos VEP van a Sin Asignar. El owner
+todavía no tiene la regla de a qué consorcio pertenecen.
+
+---
+
 ## 2026-09-01 — Una Liquidación de Sueldos no es un gasto: son varios
 
 ### Problema

@@ -23,6 +23,27 @@
   no hay que corregir boletas. Suite 822 → 829.
 
 ### Added
+- **El VEP de ARCA se registra como gasto (2026-09-03)**. Los VEP con los que cada consorcio paga
+  las cargas sociales de su encargado se descartaban desde el 2026-08-31 (triage capa 0). Ahora
+  entran imputados al edificio del CUIT del contribuyente, con proveedor **ARCA**.
+  - **`buildVepPrompt`** propio (`src/lib/vepExtraction.ts`): un VEP es un cupón simple, mientras
+    que `buildArcaPrompt` está escrito para la declaración jurada F931 de dos páginas.
+  - **`"VEP"` en `usesConsortiumCuit`** — necesario y **no suficiente**: esa función habilita el
+    match de proveedor por nombre pero NO desactiva el match por CUIT, que corre antes. El papel
+    trae el CUIT de la administradora ("Generado por el Usuario"), que es un proveedor real con
+    boletas propias, y `cuitSanitizeStep` lo reinyecta en `allTaxIds` por regex después de la IA.
+    **Sin el arreglo, todos los VEP quedaban imputados a ella.**
+  - **Al VEP se le corta `allTaxIds`/`providerTaxId` en el matching de proveedor**, y el consorcio
+    se matchea **sólo por CUIT** (el VEP no imprime la dirección del inmueble). `allTaxIds` completo
+    sigue yendo a `matchConsortium`.
+  - El guard de `clientNumber` se generalizó al grupo `usesConsortiumCuit`: ninguno usa `LspService`
+    y su fast-path es terminal — un `Nro. VEP` colado ahí rebotaría el documento entero.
+  - **La capa 0 del triage queda vacía** pero viva: nació con VEP y LSD, y los dos salieron al pasar
+    a procesarse. Se conservan la firma, el gate y su lugar en el pipeline.
+  - Detección por los marcadores ya calibrados, con la ventana de 200 caracteres que separa un VEP
+    suelto de un F931 (que trae su propio VEP en la página 2). Test con el F931 real. Suite 899.
+  - **Pendiente primario**: el VEP de un tercero que paga el consorcio (ej. la empresa de
+    seguridad) va a Sin Asignar — su CUIT no es el del edificio.
 - **Una Liquidación de Sueldos genera una boleta por empleado (2026-09-01)**. Los LSD llegan todos los meses
   y no se procesaban: el pipeline producía como máximo una `Invoice` por archivo, y un libro contiene
   el sueldo de varios empleados, cada uno un gasto distinto del edificio.
@@ -47,7 +68,8 @@
   empleado, que era el falso positivo FATERYH detectado el 2026-08-17.
 
 ### Added
-- **Triage decisivo de no-boletas: VEP y LSD dejan de gastar requests (2026-08-31)**. Cada VEP y cada
+- **Triage decisivo de no-boletas: VEP y LSD dejan de gastar requests (2026-08-31)**. *(El LSD salió
+  de esta capa el 2026-09-01: ahora se procesa y produce una boleta por empleado. Queda sólo el VEP.)* Cada VEP y cada
   LSD gastaba una request de la cuota de Gemini para terminar rebotando, y cada reproceso la volvía a
   gastar. El triage de capa 1 no podía agarrarlos, y **no por falta de patrones**:
   `classifyDocumentType` exige marcador negativo **y ninguna señal de boleta**, y un VEP tiene `$`,

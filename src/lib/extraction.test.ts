@@ -480,3 +480,50 @@ IDENTIFICADOR ÚNICO DEL LIBRO 000000045900718 FECHA DE EMISIÓN DEL LIBRO 07/08
     expect(prompt).toContain("sueldoNeto");
   });
 });
+
+describe("identifyLSPProvider — VEP de ARCA", () => {
+  /** Texto real del VEP de ALMIRANTE BROWN 706, recortado. */
+  const VEP_TEXT = `VEP
+Volante Electrónico de Pago
+Atención: este VEP esta pendiente de pago y expira en 30 día/s
+Nro. VEP: 1570130517
+Organismo Recaudador: ARCA
+Tipo de Pago: Empleadores SICOSS - Saldo DJ
+CUIT: 30-52063978-7
+Período: 2025-12
+Generado por el Usuario: 27324998573
+Día de Expiración: 2026-02-08
+Importe total a pagar $1.123.728,00`;
+
+  it("identifica un VEP", () => {
+    expect(identifyLSPProvider(VEP_TEXT)).toBe("VEP");
+  });
+
+  it("un F931 (la declaración jurada) sigue siendo ARCA, no VEP", () => {
+    const f931 = "ARCA F. 931 S.U.S.S. DECLARACION JURADA CUIT 30-52063978-7 Total $ 1.200.000";
+    expect(identifyLSPProvider(f931)).toBe("ARCA");
+  });
+
+  // El caso que de verdad importa: un F931 real TRAE un VEP en su página 2, o sea su
+  // texto contiene los marcadores. Lo único que lo distingue es la POSICIÓN. `ARCA_TEXT`
+  // ya existe en este archivo y deja "Volante Electrónico de Pago" en el carácter ~227,
+  // contra una ventana de 200: 23 de margen. Este test es el que avisa si se achica.
+  it("un F931 REAL, con su VEP en la página 2, sigue siendo ARCA", () => {
+    expect(ARCA_TEXT).toContain("Volante Electrónico de Pago");
+    expect(identifyLSPProvider(ARCA_TEXT)).toBe("ARCA");
+  });
+
+  it("una factura común no se identifica como VEP", () => {
+    expect(identifyLSPProvider("FACTURA B 0001 CUIT 30-12345678-9 TOTAL $ 1000 CAE 123")).toBeNull();
+  });
+
+  it("el VEP usa el CUIT del papel como consorcio y matchea proveedor por nombre", () => {
+    expect(usesConsortiumCuit("VEP")).toBe(true);
+  });
+
+  it("buildExtractionPrompt rutea un VEP a su prompt propio", () => {
+    const prompt = buildExtractionPrompt(VEP_TEXT);
+    expect(prompt).toContain("Volante Electrónico de Pago");
+    expect(prompt).toContain('"provider": "ARCA"');
+  });
+});

@@ -266,8 +266,8 @@ Siempre usar `resolveGoogleConfig(client)` para construir el `GoogleSheetsServic
 
 1. **Download** PDF desde Drive
 2. **Dedup hash** → SHA256 del binario
-3. **Extracción texto** (`textExtractStep`, sin tokens) → pdf-parse → fallback OCR (tesseract). El texto del OCR se conserva si es más largo **o si aporta un CUIT que el texto directo no tiene** (`lib/ocrMerge.ts`, 2026-08-18): antes se descartaba por longitud y con él se iba el CUIT del membrete. Si pdf-parse no saca texto propio, el PDF es un **escaneo** (`isLastPdfScanned()`). Luego **triage capa 1** (`documentTriageGate`): heurística `classifyDocumentType` sobre el texto ANTES de la IA → si es claramente no-boleta (oblea, certificado de fumigación, plano…) se renombra `[NO BOLETA]` y va a Revisión **sin gastar tokens** (sesgo conservador: ante la duda, es boleta).
-4. **Extracción IA** (`aiExtractStep`) → **PDF escaneado**: la página 1 que rindió el OCR va a **Gemini Vision** (2026-08-18); si falla sigue la cadena, si da 429/503 vuelve a Pendientes. Resto: cadena Gemini → Cerebras → OpenAI → Claude (fallback final OCR_ONLY). El barrido de modelos de Gemini son 3 (`gemini-2.5-flash-lite` → `2.5-flash` → `flash-latest`; se podaron los dos `2.0-*` que devolvían 404); un 503 reintenta el MISMO modelo una vez antes de saltar, y si los 3 caen por 429/503 la boleta vuelve a Pendientes, no a Revisión (2026-08-24). Luego **triage capa 2** (`isBoletaGate`): si la IA devolvió `isBoleta=false` → `[NO BOLETA]` + Revisión.
+3. **Extracción texto** (`textExtractStep`, sin tokens) → pdf-parse → fallback OCR (tesseract). El texto del OCR se conserva si es más largo **o si aporta un CUIT que el texto directo no tiene** (`lib/ocrMerge.ts`, 2026-08-18): antes se descartaba por longitud y con él se iba el CUIT del membrete. Si pdf-parse no saca texto propio, el PDF es un **escaneo** (`isLastPdfScanned()`). Luego el **triage**, ANTES de la IA y sin gastar tokens: **capa 0** (`detectDecisiveNotBoleta`, 2026-08-31) para los formularios inequívocos, **hoy vacía** — nació con el VEP y el LSD y los dos salieron al pasar a procesarse (LSD 2026-09-01, VEP 2026-09-03); se conserva el mecanismo para el próximo formulario a descartar; y **capa 1** (`classifyDocumentType`), heurística conservadora para oblea, certificado de fumigación, plano… Ambas renombran `[NO BOLETA - <TIPO>]` y mueven a **Sin Asignar** (antes iban a Revisión; cambió el 2026-08-31 para que la limpieza manual se haga en un solo lugar).
+4. **Extracción IA** (`aiExtractStep`) → **PDF escaneado**: la página 1 que rindió el OCR va a **Gemini Vision** (2026-08-18); si falla sigue la cadena, si da 429/503 vuelve a Pendientes. Resto: cadena Gemini → Cerebras → OpenAI → Claude (fallback final OCR_ONLY). El barrido de modelos de Gemini son 3 (`gemini-2.5-flash-lite` → `2.5-flash` → `flash-latest`; se podaron los dos `2.0-*` que devolvían 404); un 503 reintenta el MISMO modelo una vez antes de saltar, y si los 3 caen por 429/503 la boleta vuelve a Pendientes, no a Revisión (2026-08-24). Luego **triage capa 2** (`isBoletaGate`): si la IA devolvió `isBoleta=false` → `[NO BOLETA]` + Sin Asignar.
 5. **Dedup business key** → boletaNumber + providerTaxId + dueDate + amount
 6. **Resolve assignment** → match consorcio + proveedor + período activo del consorcio
 7. **Canonización** → reemplazar datos OCR por datos canónicos de DB
@@ -278,7 +278,7 @@ Siempre usar `resolveGoogleConfig(client)` para construir el `GoogleSheetsServic
     - **Sin Asignar** → carpeta Sin Asignar (no matcheó). El PDF se renombra con la etiqueta del motivo. En facturas comunes las 4 etiquetas son por CUIT (2026-08-26):
       `CUIT DE CONSORCIO INEXISTENTE EN BOLETA` (el papel no lo trae) · `CUIT DE CONSORCIO NO REGISTRADO EN DB` (lo trae, falta el alta) · `CUIT DE PROVEEDOR INEXISTENTE EN BOLETA` · `CUIT DE PROVEEDOR NO REGISTRADO EN DB`.
       Las viejas (`SIN CONSORCIO`, `CONSORCIO SIN REGISTRAR`, `SIN PROVEEDOR`, `PROVEEDOR SIN REGISTRAR`) quedan para las boletas LSP. Sólo las `*_INEXISTENTE` disparan los fallbacks de código de barras y visión: si el CUIT se leyó bien y falta el alta, ningún reintento lo arregla.
-    - **No es boleta** → **Revisión** (`failed`) renombrado `[NO BOLETA]` (triage capa 1/2). NO Sheets ni DB. Contador `summary.notBoleta`, `m.result="not_boleta"`.
+    - **No es boleta** → **Sin Asignar** renombrado `[NO BOLETA - <TIPO>]` (triage capa 0/1/2). NO Sheets ni DB. Contador `summary.notBoleta`, `m.result="not_boleta"`, y el tipo queda en `ProcessingJob.reasonCategory` para poder medir cuántas requests ahorró cada uno.
     - **Duplicado** → carpeta **Duplicados** (si `driveFoldersJson.duplicates`; sino Escaneados). NO va a Rendiciones.
     - **Consorcio sin período activo** → **Revisión** (`failed`) + aviso (caso puntual; el peor caso —cliente sin ningún período— lo corta la llave del scheduler).
 11. **Guardar Invoice** + métricas (con lspServiceId y paymentMethod si aplica). **Solo si NO es duplicado** (los duplicados no se persisten en DB — lo impide el unique `uq_invoice_business_key`).
@@ -318,7 +318,9 @@ El sistema detecta automáticamente el tipo de documento con `identifyLSPProvide
 ### Router LSP: `identifyLSPProvider(text)`
 Analiza los primeros 4000 caracteres y retorna:
 - `"EDESUR"` / `"EDENOR"` / `"AYSA"` / `"METROGAS"` / `"NATURGY"` / `"CAMUZZI"` / `"LITORAL_GAS"` / `"ABSA"` / `"PERSONAL"` → prompt específico
-- `"SUTERH"` / `"FATERYH"` / `"SERACARH"` / `"ARCA"` → prompt específico del grupo "CUIT del papel = consorcio" (proveedor por NOMBRE, sin CUIT propio; ver helper `usesConsortiumCuit`)
+- `"SUTERH"` / `"FATERYH"` / `"SERACARH"` / `"ARCA"` / `"VEP"` → prompt específico del grupo "CUIT del papel = consorcio" (proveedor por NOMBRE, sin CUIT propio; ver helper `usesConsortiumCuit`)
+- `"VEP"` → **Volante Electrónico de Pago de ARCA** (2026-09-03): el cupón con el que el consorcio paga las cargas sociales de su encargado. Se detecta por los marcadores del encabezado en los **primeros 200 caracteres** — es lo único que lo separa de un F931, que trae su propio VEP en la página 2. Va ANTES de la regla del `931` (un VEP de SICOSS no imprime ese número).
+  > **`usesConsortiumCuit` NO alcanza para el VEP.** Ese helper habilita el match por nombre pero **no desactiva el match por CUIT**, que corre antes; y `cuitSanitizeStep` reinyecta por regex el CUIT de `Generado por el Usuario` —la administradora, que es un proveedor real con boletas propias— **después** de la IA. Por eso al VEP se le pasan `allTaxIds: []` y `providerTaxId: null` al `matchProvider`, y su consorcio se matchea **sólo por CUIT** (no imprime dirección del inmueble). Ver `docs/decisiones.md` 2026-09-03.
 - `"ABL"` → Impuesto Inmobiliario / ABL de **AGIP** (CABA). Se detecta ANTES del gate `isUtilityBill` (el papel no dice "servicio" ni trae distribuidora), por `Ley 23.514` o por el par `ALUMBRADO` + `BARRIDO`. **No** entra en `usesConsortiumCuit`: sí usa el fast-path de `LspService`
 - `"GENERIC_LSP"` → prompt genérico LSP (fallback)
 - `null` → no es LSP → usa `buildInvoicePrompt` (facturas normales)
@@ -342,6 +344,7 @@ Analiza los primeros 4000 caracteres y retorna:
 | Sindicales (SUTERH/FATERYH/SERACARH) | `buildSindicalPrompt()` |
 | ABL / Inmobiliario (AGIP) | `buildAblPrompt()` |
 | ARCA F931 (SUSS) | `buildArcaPrompt()` |
+| VEP de ARCA (cupón de pago) | `buildVepPrompt()` — proveedor fijo `ARCA`, `providerTaxId` null |
 | Liquidación de Sueldos Digital (LSD) | `buildLsdPrompt()` — **un archivo produce N boletas**, una por empleado |
 | Genérico LSP | `buildGenericUtilityBillPrompt()` |
 | Facturas normales | `buildInvoicePrompt()` |
@@ -615,11 +618,13 @@ ficticio **"Edificio de Prueba"** en la cartera de MorinigoAdm.
       factura otro de la familia, la obligación queda PENDING aunque el trabajo llegó y se pagó.
       Tampoco alcanza con cargar los tres como gastos fijos del mismo edificio: serían 3 obligaciones
       por mes con 2 siempre incumplidas. Decisión del owner el 2026-08-18: se trata en otra sesión.
-- [ ] **Spec de liquidación de sueldos (LSD)**: registrar el gasto por **sueldo neto de cada
-      empleado**, con el empleado como persona física identificada por su **CUIL**, desglosado uno
-      por empleado, imputado al consorcio del encabezado. Falta definir vencimiento y número de
-      comprobante. Hoy los LSD caen en Sin Asignar y 2 de 5 dan falso positivo FATERYH en el router
-      (el texto trae el nombre del convenio colectivo).
+- [x] **Liquidación de Sueldos Digital (LSD)** — **implementado el 2026-09-01**. Un archivo produce
+      una boleta por empleado (sueldo neto), con el empleado como `Provider` tipo `EMPLEADO`
+      identificado por su CUIL, imputadas al consorcio del CUIT del encabezado. Número de
+      comprobante `<libroId>-<CUIL>`, sin vencimiento. El falso positivo FATERYH quedó resuelto: el
+      LSD se detecta ANTES que los sindicales en el router.
+      **Pendiente del owner y bloqueante:** dar de alta a los empleados en `_Proveedores` y crear su
+      gasto fijo en cada edificio — sin gasto fijo el sueldo no aparece en la hoja del edificio.
 - [ ] **Mostrar `ProcessingLog` en la UI**: guarda el resumen de CADA ejecución desde siempre y
       ninguna pantalla lo muestra.
 - [ ] **Facturas con el membrete en imagen que el fallback visual no resuelve** (sistema GESTIONPRO):

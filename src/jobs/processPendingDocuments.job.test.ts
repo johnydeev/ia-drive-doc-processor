@@ -517,31 +517,126 @@ describe("processDriveFile — caracterización de los 7 caminos de salida", () 
     expect(metricsCore().result).toBe("not_boleta");
   });
 
-  it("not_boleta (VEP): corta ANTES de la IA y etiqueta el tipo", async () => {
-    const ctx = makeContext();
-    // Texto real de un VEP de ARCA (recortado). Tiene $, IMPORTE, VENCIMIENTO y
-    // CUIT, así que la heurística vieja lo dejaba pasar y gastaba una request.
-    ctx.pdfExtractor.extractTextFromPdf.mockResolvedValue(
-      `VEP
+  // ── VEP de ARCA ──────────────────────────────────────────────────────────
+  // Hasta el 2026-09-02 el VEP era un no-boleta y se descartaba antes de la IA.
+  // Desde el 2026-09-03 se procesa como un gasto del consorcio contribuyente.
+  describe("VEP de ARCA", () => {
+    /** El CUIT del consorcio sembrado en makeContext + el real de la administradora. */
+    const VEP_TEXT = `VEP
 Volante Electrónico de Pago
-Nro. VEP: 1647417780
+Nro. VEP: 1570130517
 Organismo Recaudador: ARCA
-CUIT: 30-71717054-3
-Día de Expiración: 2026-08-01
-Importe total a pagar $4.267.254,03`
-    );
-    const summary = createBaseSummary(1);
+Tipo de Pago: Empleadores SICOSS - Saldo DJ
+CUIT: 30-11111111-1
+Período: 2025-12
+Generado por el Usuario: 27324998573
+Día de Expiración: 2026-02-08
+Importe total a pagar $1.123.728,00`;
 
-    await processDriveFile(makeFile(), asContext(ctx), summary);
+    function vepExtraction(over: Partial<ExtractedDocumentData> = {}): ExtractedDocumentData {
+      return emptyExtraction({
+        boletaNumber: "1570130517",
+        provider: "ARCA",
+        providerTaxId: null,
+        amount: 1123728,
+        dueDate: "2026-02-08",
+        allTaxIds: ["30-11111111-1"],
+        ...over,
+      });
+    }
 
-    expect(ctx.aiChain.run).not.toHaveBeenCalled();
-    expect(ctx.driveService.renameFile.mock.calls[0][1]).toMatch(/\[NO BOLETA - VEP\]/);
-    expect(ctx.driveService.moveFileToUnassigned).toHaveBeenCalledWith("file-1", "pending", "unassigned");
-    expect(ctx.sheetsService.insertRow).not.toHaveBeenCalled();
-    expect(summary.notBoleta).toBe(1);
-    expect(metricsCore().result).toBe("not_boleta");
-    // El tipo queda en `reason` → lo persiste ProcessingJob.reasonCategory.
-    expect(metricsCore().reason).toBe("VEP");
+    function vepContext(extraction: ExtractedDocumentData = vepExtraction()) {
+      const ctx = makeContext();
+      ctx.pdfExtractor.extractTextFromPdf.mockResolvedValue(VEP_TEXT);
+      // ARCA sin CUIT + la administradora, que es un proveedor real CON CUIT.
+      ctx.providerRepository.findAllForMatching.mockResolvedValue([
+        { id: "arca", canonicalName: "ARCA", cuit: null, matchNames: null, paymentAlias: null },
+        { id: "admin", canonicalName: "MORINIGO RAMONA NATALIA", cuit: "27-32499857-3", matchNames: null, paymentAlias: null },
+      ]);
+      ctx.aiChain.run.mockImplementation(async (_t: string, cb?: AiAttemptCallback) => {
+        cb?.("gemini", true);
+        return { data: extraction, usage: null, provider: "gemini" as const };
+      });
+      return ctx;
+    }
+
+    it("imputa el gasto al consorcio del CUIT y el proveedor es ARCA", async () => {
+      const ctx = vepContext();
+
+      await processDriveFile(makeFile(), asContext(ctx), createBaseSummary(1));
+
+      const guardada = ctx.invoiceRepository.saveProcessedInvoice.mock.calls[0][0];
+      expect(guardada.consortiumId).toBe("c1");
+      expect(guardada.providerId).toBe("arca");
+    });
+
+    it("NO usa a la administradora, cuyo CUIT viaja en TODOS los VEP", async () => {
+      // `cuitSanitizeStep` extrae por regex TODOS los CUITs del papel y los suma a
+      // `allTaxIds`, así que el de la administradora llega al matching aunque la IA
+      // lo omita. Sin el corte de `allTaxIds`, `matchProvider` devuelve `admin` por
+      // su Intento 0 (CUIT), que corre ANTES del match por nombre.
+      const ctx = vepContext(vepExtraction({ allTaxIds: ["30-11111111-1", "27-32499857-3"] }));
+
+      await processDriveFile(makeFile(), asContext(ctx), createBaseSummary(1));
+
+      const guardada = ctx.invoiceRepository.saveProcessedInvoice.mock.calls[0][0];
+      expect(guardada.providerId).toBe("arca");
+      expect(guardada.providerId).not.toBe("admin");
+    });
+
+    it("guarda el número, el monto y el vencimiento del cupón", async () => {
+      const ctx = vepContext();
+
+      await processDriveFile(makeFile(), asContext(ctx), createBaseSummary(1));
+
+      const guardada = ctx.invoiceRepository.saveProcessedInvoice.mock.calls[0][0];
+      expect(guardada.extraction.boletaNumber).toBe("1570130517");
+      expect(guardada.extraction.amount).toBe(1123728);
+      expect(guardada.extraction.dueDate).toBe("2026-02-08");
+    });
+
+    it("un consortium mal extraído no arrastra el VEP a otro edificio", async () => {
+      // El VEP no imprime la dirección del inmueble: lo que venga en `consortium` no
+      // es una pista, es ruido. Acá el CUIT del papel NO está en la base (el edificio
+      // no tiene el alta) pero el texto basura SÍ coincide con el nombre de otro
+      // edificio. Con el match por nombre vivo, el gasto se iba a "SICOSS 123".
+      const ctx = vepContext(vepExtraction({ consortium: "SICOSS 123" }));
+      ctx.consortiumRepository.findAllForMatching.mockResolvedValue([
+        { id: "c2", canonicalName: "SICOSS 123", rawName: null, cuit: "30-22222222-2", matchNames: null },
+      ]);
+      const summary = createBaseSummary(1);
+
+      await processDriveFile(makeFile(), asContext(ctx), summary);
+
+      expect(ctx.invoiceRepository.saveProcessedInvoice).not.toHaveBeenCalled();
+      expect(summary.unassigned).toBe(1);
+    });
+
+    it("un clientNumber colado por la IA no rebota el VEP al fast-path de LspService", async () => {
+      // El fast-path de LspService es TERMINAL: si hay clientNumber y no aparece el
+      // servicio, la boleta sale a Sin Asignar sin apelación. Ningún miembro de
+      // `usesConsortiumCuit` usa LspService, así que el campo se limpia antes.
+      const ctx = vepContext(vepExtraction({ clientNumber: "1570130517" }));
+
+      await processDriveFile(makeFile(), asContext(ctx), createBaseSummary(1));
+
+      expect(ctx.invoiceRepository.saveProcessedInvoice).toHaveBeenCalled();
+      expect(ctx.driveService.moveFileToUnassigned).not.toHaveBeenCalled();
+    });
+
+    it("un VEP cuyo CUIT no es de ningún consorcio va a Sin Asignar", async () => {
+      // El VEP de un tercero o el de los autónomos de la administradora: su CUIT no
+      // es de un edificio. Rebota, y está bien — queda visible en la carpeta.
+      const ctx = vepContext();
+      ctx.consortiumRepository.findAllForMatching.mockResolvedValue([]);
+      const summary = createBaseSummary(1);
+
+      await processDriveFile(makeFile(), asContext(ctx), summary);
+
+      expect(ctx.invoiceRepository.saveProcessedInvoice).not.toHaveBeenCalled();
+      expect(ctx.driveService.moveFileToUnassigned).toHaveBeenCalled();
+      expect(summary.unassigned).toBe(1);
+    });
   });
 
   it("not_boleta (IA): aiChain devuelve isBoleta:false → [NO BOLETA] a Sin Asignar", async () => {

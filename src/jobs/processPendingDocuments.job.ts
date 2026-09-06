@@ -447,7 +447,11 @@ async function resolveAssignment(
   // nombre: ahí la dirección impresa es la única pista y `matchNames` existe para
   // reconciliar variantes. Ver lib/assignmentMatching.
   const isPlainInvoice = !lspProvider;
-  const consortiumMatch = matchConsortium(allConsortiums, rawConsortium, allTaxIds, isPlainInvoice);
+  // El VEP tampoco ofrece nombre: no imprime la dirección del inmueble, así que su
+  // único identificador es el CUIT del contribuyente. Dejar viva la vía por nombre
+  // sólo abre la puerta a que un `consortium` mal extraído lo impute a otro edificio.
+  const consortiumCuitOnly = isPlainInvoice || lspProvider === "VEP";
+  const consortiumMatch = matchConsortium(allConsortiums, rawConsortium, allTaxIds, consortiumCuitOnly);
 
   if (!consortiumMatch) {
     if (isPlainInvoice) {
@@ -548,7 +552,21 @@ async function resolveAssignment(
   // nombre queda habilitado únicamente para sindicales/ARCA (CUIT del papel =
   // consorcio, sin CUIT propio) vía `isSindicalLsp`. Facturas normales sin CUIT de
   // proveedor en DB → null → Sin Asignar. Ver lib/assignmentMatching + decisiones.md.
-  const providerMatch = matchProvider(allProviders, rawCuit, rawName, allTaxIds, consortiumCuitNorm, isSindicalLsp);
+  // VEP: el papel trae el CUIT de "Generado por el Usuario" — la administradora, que es
+  // un proveedor real del consorcio con boletas propias de honorarios. Cualquier match
+  // por CUIT le imputa el gasto, y `cuitSanitizeStep` ya lo sumó a `allTaxIds` leyéndolo
+  // del texto, así que la regla del prompt no alcanza: `usesConsortiumCuit` habilita el
+  // match por nombre pero NO desactiva el match por CUIT, que corre antes. El proveedor
+  // de un VEP es ARCA, siempre, y se resuelve por nombre.
+  const isVepInvoice = lspProvider === "VEP";
+  const providerMatch = matchProvider(
+    allProviders,
+    isVepInvoice ? null : rawCuit,
+    rawName,
+    isVepInvoice ? [] : allTaxIds,
+    consortiumCuitNorm,
+    isSindicalLsp
+  );
 
   // Log informativo: el CUIT del OCR coincide con el del consorcio (no se usa como
   // proveedor). Se emite salvo que el proveedor se haya resuelto por allTaxIds.
@@ -1173,7 +1191,10 @@ async function cleanClientNumberStep(ctx: PipelineContext): Promise<StepResult> 
 
   // Guard: clientNumber es exclusivo de boletas LSP.
   // Si la IA alucinó un valor para una boleta normal, limpiarlo.
-  if (!ctx.lspProvider && extracted.clientNumber) {
+  // Ninguna boleta del grupo `usesConsortiumCuit` (sindicales, ARCA, VEP) usa
+  // LspService. Un `Nro. VEP` colado acá por el modelo entraría al fast-path, que es
+  // terminal, y rebotaría el documento entero a Sin Asignar.
+  if ((!ctx.lspProvider || usesConsortiumCuit(ctx.lspProvider)) && extracted.clientNumber) {
     pipelineLog.stepStart(cid,
       `⚠️  clientNumber limpiado para boleta no-LSP (era "${extracted.clientNumber}")`
     );

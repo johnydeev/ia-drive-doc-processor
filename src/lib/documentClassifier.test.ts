@@ -63,60 +63,16 @@ Importe total a pagar $4.267.254,03`;
 
 
 describe("detectDecisiveNotBoleta", () => {
-  it("VEP real → VEP (pese a tener $, IMPORTE, VENCIMIENTO y CUIT)", () => {
-    expect(detectDecisiveNotBoleta(VEP_REAL)).toBe("VEP");
-  });
-
-  it("una factura común no dispara ningún tipo", () => {
+  // La capa 0 quedó VACÍA el 2026-09-03. Nació con el VEP y el LSD, y los dos
+  // salieron al pasar a procesarse: hoy los detecta `identifyLSPProvider`, y su
+  // cobertura vive en `extraction.test.ts`. El mecanismo se conserva para el
+  // próximo formulario que haya que descartar, así que este test fija que sigue
+  // existiendo y que no descarta nada.
+  it("hoy no descarta ningún tipo: el VEP y el LSD pasaron a procesarse", () => {
+    expect(detectDecisiveNotBoleta(VEP_REAL)).toBeNull();
     expect(
       detectDecisiveNotBoleta("FACTURA B N° 0001 CUIT 30-12345678-9 TOTAL A PAGAR $ 12.500,00 CAE 7412")
     ).toBeNull();
-  });
-
-  it("una boleta de servicio no dispara ningún tipo", () => {
-    expect(
-      detectDecisiveNotBoleta("EDESUR S.A. LIQUIDACION DE SERVICIOS PUBLICOS TOTAL $ 8.000 VENCIMIENTO 10/05")
-    ).toBeNull();
-  });
-
-  // ── El falso positivo que hay que evitar sí o sí ──────────────────────────
-  // El F931 de ARCA se extrae con 2 páginas porque el "Importe total a pagar"
-  // está en el VEP de la página 2. O sea su texto CONTIENE "Volante Electrónico
-  // de Pago", pero es un gasto real que se paga y tiene prompt propio.
-  // La regla: el marcador de VEP sólo cuenta en el ENCABEZADO del documento.
-  it("F931 de ARCA con el VEP en la página 2 → NO es un VEP", () => {
-    const f931 = `ARCA - DECLARACIÓN JURADA
-F. 931 - SEGURIDAD SOCIAL
-CUIT: 30-52063978-7 CONSORCIO DE PROPIETARIOS
-Período: 07/2026
-Total de contribuciones de seguridad social $ 1.200.000,00
-Cantidad de empleados: 2
-Remuneración imponible 1 $ 3.000.000,00
-${"Detalle de la declaración jurada. ".repeat(20)}
--- 2 of 2 --
-VEP
-Volante Electrónico de Pago
-Nro. VEP: 1654020372
-Importe total a pagar $1.200.000,00`;
-
-    expect(detectDecisiveNotBoleta(f931)).toBeNull();
-  });
-
-  it("un LSD ya NO es un no-boleta: lo procesa el router de prompts", () => {
-    const lsd = `EMPRESA DOMICILIO FISCAL
-NRO.LIQUIDACIÓN
-ACTIVIDAD PPAL
-IDENTIFICADOR ÚNICO DEL LIBRO 000000045900718`;
-    expect(detectDecisiveNotBoleta(lsd)).toBeNull();
-  });
-
-  it("no se confunde por la palabra 'sueldos' suelta en una factura", () => {
-    expect(
-      detectDecisiveNotBoleta("FACTURA C 0001-00000045 Servicio de liquidación de sueldos $ 90.000 CAE 123")
-    ).toBeNull();
-  });
-
-  it("tolera el texto sin acentos (OCR)", () => {
-    expect(detectDecisiveNotBoleta("VEP\nVolante Electronico de Pago\nNro. VEP: 1")).toBe("VEP");
+    expect(detectDecisiveNotBoleta("")).toBeNull();
   });
 });
