@@ -1073,8 +1073,14 @@ IDENTIFICADOR ÚNICO DEL LIBRO 000000045900718`;
     ctx.aiChain.run.mockImplementation(async (_t: string, cb?: AiAttemptCallback) => {
       cb?.("gemini", true);
       return {
+        // Lo que devuelve Gemini DE VERDAD con el prompt del libro (medido en
+        // producción el 2026-09-06): `allTaxIds` y `consortium` vienen NULL — el
+        // prompt del LSD no los pide — y el CUIT del edificio viaja SÓLO dentro
+        // de `lsd.consortiumTaxId`. El fixture viejo sembraba `allTaxIds` y por
+        // eso los tests no vieron que el matching del consorcio quedaba a suerte.
         data: emptyExtraction({
-          allTaxIds: ["30-11111111-1"],
+          allTaxIds: [],
+          consortium: null,
           lsd: {
             consortiumTaxId: "30-11111111-1",
             libroId: "000000045900718",
@@ -1121,6 +1127,26 @@ IDENTIFICADOR ÚNICO DEL LIBRO 000000045900718`;
     expect(new Set(guardadas.map((g) => g.documentHash)).size).toBe(2);
     // Sin vencimiento: un libro no tiene fecha de pago impresa.
     expect(guardadas.every((g) => g.extraction.dueDate === null)).toBe(true);
+  });
+
+  // Regresión del 2026-09-06: ALMIRANTE BROWN rebotó con `consortium_not_found`
+  // pese a que la IA había extraído los 2 empleados y el CUIT del edificio
+  // PERFECTOS. El CUIT vivía en `lsd.consortiumTaxId` y el matching sólo miraba
+  // `allTaxIds`/`consortium`, así que el libro entraba únicamente si el modelo
+  // rellenaba `consortium` por su cuenta. En 5 libros lo hizo en 4.
+  it("resuelve el edificio con lsd.consortiumTaxId aunque la IA no mande allTaxIds ni consortium", async () => {
+    const ctx = lsdContext(["e1", "e2"]);
+    const extraccion = await ctx.aiChain.run("");
+    // El fixture ya replica la salida real; esto lo deja explícito.
+    expect(extraccion!.data.allTaxIds).toEqual([]);
+    expect(extraccion!.data.consortium).toBeNull();
+    expect(extraccion!.data.lsd?.consortiumTaxId).toBe("30-11111111-1");
+
+    await processDriveFile(makeFile(), asContext(ctx), createBaseSummary(1));
+
+    const guardadas = ctx.invoiceRepository.saveProcessedInvoice.mock.calls.map((c) => c[0]);
+    expect(guardadas).toHaveLength(2);
+    expect(guardadas.every((g) => g.consortiumId === "c1")).toBe(true);
   });
 
   it("el archivo se mueve UNA sola vez", async () => {

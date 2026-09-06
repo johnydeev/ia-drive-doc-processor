@@ -190,8 +190,29 @@ devolvió una boleta con el primer empleado y `lsd: null`. El log lo mostraba de
 del libro, con 2/1/2/2/2 CUIL de empleado y sus `Total Neto` dentro de la ventana del prompt.
 **Falta commitear y reprocesar.**
 
-**⏳ Smoke (pendiente de rehacer):** mover los 5 de Sin Asignar a Pendientes y confirmar **9 gastos**
-en la hoja, cada uno con su CBU, y cada PDF una sola vez en Rendiciones.
+### ✅ Segunda corrida (2026-09-06): 4 de 5 — segundo bug encontrado y corregido
+
+| Libro | Resultado |
+|---|---|
+| RIOBAMBA 1261 | ✅ 2 empleados → 2 gastos |
+| BOEDO 414 | ✅ 1 → 1 |
+| CALLAO 1441 | ✅ 2 → 2 |
+| PUEYRREDON 2418 | ✅ 2 → 2 |
+| ALMIRANTE BROWN 706 | ❌ `consortium_not_found` |
+
+**7 de los 9 gastos entraron.** El fan-out, los netos y el archivo movido una sola vez quedaron
+verificados en producción.
+
+ALMIRANTE BROWN rebotó con la extracción **perfecta**: el CUIT del edificio viaja en
+`lsd.consortiumTaxId` y `matchConsortium` sólo mira `allTaxIds`/`consortium`, que el prompt del
+libro no pide. El edificio se resolvía sólo cuando el modelo rellenaba `consortium` por su cuenta —
+4 de 5. Corregido en `cuitSanitizeStep`. Ver `docs/decisiones.md` 2026-09-06 (2).
+
+**⏳ Pendiente:** commitear el fix y reprocesar **sólo ALMIRANTE BROWN** (los otros 4 ya están).
+Esperado: 2 gastos, netos `1.449.395,50` y `125.235,84`.
+
+**⏳ A revisar en la hoja** (no lo valida el sistema): que los montos sean los netos y no el Sueldo
+Básico, y que ningún **hijo** haya entrado como empleado.
 
 > **Costo conocido, aceptado por el owner:** un **suplente** que cubre vacaciones aparece en el libro
 > sin alta previa y **frena el libro entero** hasta que se lo cargue y se reprocese (una request más).

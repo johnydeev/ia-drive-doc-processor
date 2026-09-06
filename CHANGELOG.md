@@ -11,6 +11,16 @@
   hermanas con el mismo monto y el mismo edificio **no se deduplican** entre sí.
 
 ### Fixed
+- **El LSD matcheaba el edificio por casualidad (2026-09-06)**. Con el prompt ya corregido, la
+  segunda corrida dio 4 de 5: ALMIRANTE BROWN rebotó con `consortium_not_found` pese a tener la
+  extracción perfecta (2 empleados, netos exactos, CUIT del edificio). `matchConsortium` mira
+  `allTaxIds`/`consortium` y el prompt del libro no pide ninguno de los dos — el CUIT viaja en
+  `lsd.consortiumTaxId`. El edificio se resolvía sólo si el modelo rellenaba `consortium` por su
+  cuenta (4 de 5 libros). Ahora `cuitSanitizeStep` inyecta ese CUIT en `allTaxIds`.
+  - Se prefirió eso a extender el barrido de CUITs del texto al LSD, que sumaría los CUIL de los
+    empleados y de sus cargas de familia.
+  - El fixture de `lsdContext` sembraba `allTaxIds`, un campo que el modelo real devuelve `null`;
+    alineado con la salida medida, los 5 tests de LSD fallaban. Suite 901 → 902.
 - **El LSD nunca recibía su prompt (2026-09-06)**. Primera prueba real: los 5 libros fueron a Sin
   Asignar con `lsd_sin_empleados`. El router los detectaba bien (`Tipo documento: LSP — LSD`) pero
   `buildExtractionPrompt` corría `isReciboHaberes` **antes** de `identifyLSPProvider`, y su regla

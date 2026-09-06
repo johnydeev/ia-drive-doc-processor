@@ -4,6 +4,61 @@ Registro de decisiones tomadas ante problemas reales encontrados en producción.
 
 ---
 
+## 2026-09-06 (2) — El LSD matcheaba el edificio por casualidad
+
+### Problema
+
+Resuelto el prompt (entrada anterior), la segunda corrida dio **4 de 5**. ALMIRANTE BROWN rebotó con
+`consortium_not_found` — y su extracción era **perfecta**:
+
+```json
+"lsd":{"consortiumTaxId":"[CUIT]","libroId":"000000045900718","periodo":"202607",
+ "empleados":[{"apellidoNombre":"BRITEZ, PAULA ADELA","sueldoNeto":1449395.5},
+              {"apellidoNombre":"BUSTOS MUNIZAGA, ANDREA MALVINA","sueldoNeto":125235.84}]}
+```
+
+Los 2 empleados, los netos exactos y el CUIT del edificio. **El dato estaba bien; nadie lo miraba.**
+
+`matchConsortium` mira `allTaxIds` y `consortium`. El prompt del libro **no pide ninguno de los dos**:
+pide el CUIT dentro de `lsd.consortiumTaxId`. Así que el edificio se resolvía sólo cuando el modelo
+decidía rellenar `consortium` por su cuenta — lo hizo en 4 de 5 libros. El LSD venía matcheando el
+edificio **por casualidad** desde que se implementó.
+
+`cuitSanitizeStep` tampoco lo cubría: agrega los CUIT del texto sólo para `lspProvider === null` o
+para el grupo `usesConsortiumCuit`, y el LSD no es ninguno.
+
+**Por qué los tests no lo agarraron:** igual que con el prompt, el fixture era **más generoso que la
+realidad**. `lsdContext` sembraba `allTaxIds: ["30-11111111-1"]`, un campo que el prompt no pide y
+que el modelo real devuelve `null`. Al alinearlo con la salida medida en producción, los 5 tests de
+LSD fallaron de una.
+
+### Decisión
+
+En `cuitSanitizeStep`, el CUIT del libro entra a `allTaxIds`:
+
+```ts
+if (lspProvider === "LSD" && extracted.lsd?.consortiumTaxId) {
+  const cuit = formatCuit(extracted.lsd.consortiumTaxId) ?? extracted.lsd.consortiumTaxId;
+  extracted.allTaxIds = [...new Set([...(extracted.allTaxIds ?? []), cuit])];
+}
+```
+
+Se eligió esto sobre extender el barrido de CUITs del texto al LSD: el barrido sumaría también los
+**CUIL de los empleados y de sus cargas de familia**, y esto usa el dato que la IA ya extrae bien y
+que el prompt sí pide.
+
+### Impacto
+
+`src/jobs/processPendingDocuments.job.ts`. El fixture de `lsdContext` ahora replica la salida real
+del modelo (`allTaxIds: []`, `consortium: null`), y hay un test con nombre propio que fija la
+regresión. Suite 901 → 902.
+
+**Lección repetida en el día:** los dos bugs del LSD —el prompt y el CUIT— estaban tapados por
+fixtures recortados que omitían justo el dato que rompe. Un fixture de un papel real tiene que
+conservar lo que hace ruido, no sólo lo que se está probando.
+
+---
+
 ## 2026-09-06 — El LSD nunca recibía su prompt: `isReciboHaberes` corría antes del router
 
 ### Problema

@@ -1136,6 +1136,19 @@ async function cuitSanitizeStep(ctx: PipelineContext): Promise<StepResult> {
     }
   }
 
+  // ── LSD: el CUIT del edificio viaja DENTRO de `lsd` ───────────────────────
+  // El prompt del libro pide el CUIT del consorcio en `lsd.consortiumTaxId` y no
+  // pide `allTaxIds` — que es, junto con `consortium`, lo único que mira
+  // `matchConsortium`. Sin esto el edificio se resuelve sólo cuando el modelo
+  // decide rellenar `consortium` por su cuenta: el 2026-09-06 lo hizo en 4 de 5
+  // libros y ALMIRANTE BROWN, con la extracción PERFECTA, rebotó por
+  // `consortium_not_found`. El dato estaba bien extraído; nadie lo miraba.
+  if (lspProvider === "LSD" && extracted.lsd?.consortiumTaxId) {
+    const cuit = formatCuit(extracted.lsd.consortiumTaxId) ?? extracted.lsd.consortiumTaxId;
+    extracted.allTaxIds = [...new Set([...(extracted.allTaxIds ?? []), cuit])];
+    pipelineLog.stepStart(cid, `→ LSD: CUIT del consorcio tomado de lsd.consortiumTaxId`);
+  }
+
   // ── CUITs reales del texto por regex + checksum (NO-LSP y sindicales) ──────
   // Refuerzo determinístico: la IA puede omitir/malformatear el CUIT. En
   // sindicales es el del CONSORCIO y es crítico para imputar el gasto al
