@@ -29,7 +29,15 @@ Registro cronológico de cambios por fecha. Incluir highlights de lo que se hizo
 ## Descripción del proyecto
 Sistema multi-tenant en **Next.js + TypeScript + Prisma + PostgreSQL (Supabase)** para administración de consorcios de propiedad horizontal en Argentina.
 Procesa automáticamente PDFs de facturas/boletas desde Google Drive usando IA (cadena de fallback **Gemini → Cerebras → OpenAI → Claude**, orden declarado en `PROVIDER_ORDER` de `aiExtraction.ts`; **Groq se eliminó del proyecto el 2026-08-25** — estaba fuera de producción desde 2026-06-25), extrae datos estructurados, los guarda en la DB y los envía a Google Sheets.
-> **Gemini pasó a primero el 2026-08-30** (pieza 1 del spec `2026-08-24-gemini-tier-pago-cadena-y-modelos`), por decisión del owner: Cerebras devolvía 402 en todas las boletas, así que la cadena ya dependía de Gemini pero pagaba un intento fallido antes. **El riesgo del free tier sigue**: la cuota es diaria por modelo (~20 requests), así que en un día de volumen alto las primeras boletas queman el balde y el resto paga el barrido de los 3 modelos. Con Cerebras sano detrás eso se absorbe; sin Cerebras, no hay red.
+> **Gemini pasó a primero el 2026-08-30** (pieza 1 del spec `2026-08-24-gemini-tier-pago-cadena-y-modelos`), por decisión del owner: Cerebras devolvía 402 en todas las boletas, así que la cadena ya dependía de Gemini pero pagaba un intento fallido antes. **El riesgo del free tier sigue**: en un día de volumen alto las primeras boletas queman el balde y el resto paga el barrido de los 3 modelos. Con Cerebras sano detrás eso se absorbe; sin Cerebras, no hay red.
+
+> **Techo de cuota de Gemini, MEDIDO en producción (2026-09-08 y 09 — reemplaza el "~20 requests/día por modelo" que decía esta doc):**
+> - **~34-40 requests/día por modelo**, ~91-107 en total sumando los 3 del barrido.
+> - **~35 boletas/día entran limpias.** Pasada esa, cada una cuesta 5-6 requests y termina en Revisión.
+> - Las cuotas **RPD se reinician a medianoche del Pacífico** = **04:00 en Argentina** (verificado en `ai.google.dev/gemini-api/docs/rate-limits`).
+> - Los límites son **por proyecto, no por API key**: una segunda key del mismo proyecto de Google Cloud **no agrega cuota**.
+>
+> Desde el 2026-09-10 existe un **corta-corriente** (`src/lib/aiCircuitBreaker.ts`): al primer fallo total por infraestructura corta la cadena 30 min por cliente y las boletas vuelven a Pendientes sin gastar. No reemplaza a un segundo proveedor sano.
 ---
 
 ## Arquitectura del sistema
@@ -266,6 +274,7 @@ Siempre usar `resolveGoogleConfig(client)` para construir el `GoogleSheetsServic
 
 1. **Download** PDF desde Drive
 2. **Dedup hash** → SHA256 del binario
+2b. **Corta-corriente** (`circuitBreakerGate`, 2026-09-10) → si la cadena de IA está cortada para el cliente, la boleta vuelve a **Pendientes** con 0 requests y **sin extraer texto** (se ahorra el OCR). Los **duplicados están exceptuados**: no llaman a la IA (reusan la extracción guardada), así que siguen su camino a Duplicados. `reasonCategory = "circuit_open"`.
 3. **Extracción texto** (`textExtractStep`, sin tokens) → pdf-parse → fallback OCR (tesseract). El texto del OCR se conserva si es más largo **o si aporta un CUIT que el texto directo no tiene** (`lib/ocrMerge.ts`, 2026-08-18): antes se descartaba por longitud y con él se iba el CUIT del membrete. Si pdf-parse no saca texto propio, el PDF es un **escaneo** (`isLastPdfScanned()`). Luego el **triage**, ANTES de la IA y sin gastar tokens: **capa 0** (`detectDecisiveNotBoleta`, 2026-08-31) para los formularios inequívocos, **hoy vacía** — nació con el VEP y el LSD y los dos salieron al pasar a procesarse (LSD 2026-09-01, VEP 2026-09-03); se conserva el mecanismo para el próximo formulario a descartar; y **capa 1** (`classifyDocumentType`), heurística conservadora para oblea, certificado de fumigación, plano… Ambas renombran `[NO BOLETA - <TIPO>]` y mueven a **Sin Asignar** (antes iban a Revisión; cambió el 2026-08-31 para que la limpieza manual se haga en un solo lugar).
 4. **Extracción IA** (`aiExtractStep`) → **PDF escaneado**: la página 1 que rindió el OCR va a **Gemini Vision** (2026-08-18); si falla sigue la cadena, si da 429/503 vuelve a Pendientes. Resto: cadena Gemini → Cerebras → OpenAI → Claude (fallback final OCR_ONLY). El barrido de modelos de Gemini son 3 (`gemini-2.5-flash-lite` → `2.5-flash` → `flash-latest`; se podaron los dos `2.0-*` que devolvían 404); un 503 reintenta el MISMO modelo una vez antes de saltar, y si los 3 caen por 429/503 la boleta vuelve a Pendientes, no a Revisión (2026-08-24). Luego **triage capa 2** (`isBoletaGate`): si la IA devolvió `isBoleta=false` → `[NO BOLETA]` + Sin Asignar.
 5. **Dedup business key** → boletaNumber + providerTaxId + dueDate + amount

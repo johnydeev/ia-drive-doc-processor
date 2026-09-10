@@ -4,6 +4,151 @@ Registro de decisiones tomadas ante problemas reales encontrados en producción.
 
 ---
 
+## 2026-09-10 — El cartel SIN MONTO no describía la boleta: describía que nadie la leyó
+
+### Problema
+
+Dos jornadas completas (2026-09-08 y 09) con la cadena de IA caída mandaron **24 archivos a Revisión
+con el cartel `SIN MONTO`** y quemaron **135 de los 263 requests del período (51 %)** para lograrlo.
+
+Desglose de esas 24: **una sola** gastó 1 request y era legítima (una captura de pantalla `.png`, que
+la IA leyó y devolvió sin monto, correctamente). Las otras **23 gastaron entre 5 y 7 requests cada
+una** barriendo la cadena entera con los tres proveedores caídos, y terminaron en `OCR_ONLY`, que
+devuelve `amount: null` por construcción.
+
+**El experimento que lo probó.** El owner movió 4 de esos archivos de Revisión a Pendientes **sin dar
+de alta nada**. Los cuatro entraron. Mismo `driveFileId`, mismos bytes, misma base:
+
+| Archivo | 09/09 | 10/09 |
+|---|---|---|
+| `FA-B 00005-00053690` | `no_amount` — 6 requests | `ok` — 1 request |
+| `FA-B 00005-00052999` | `no_amount` — 5 requests | `ok` — 1 request |
+| `FC. ABONO SEPTIEMBRE 2026.` | `no_amount` — 5 requests | `ok` — 3 requests |
+| `1702.Garay 350` | `no_amount` — 6 requests | `ok` — 1 request |
+
+Dos causas encadenadas:
+
+**1. No había estado entre archivos.** Cada boleta redescubría desde cero que los proveedores estaban
+caídos y pagaba el barrido completo para averiguarlo. 23 archivos pagaron 134 requests para
+establecer 23 veces el mismo hecho.
+
+**2. La red existía pero no se activaba.** El guard de `aiExtractStep` exigía
+`aiRateLimited === aiFailures`, y en la caída real:
+
+| Proveedor | Error | `isRateLimitError` |
+|---|---|---|
+| Gemini | 429/503 en los 3 modelos | true |
+| Cerebras | `402 status code (no body)` | **false** |
+| OpenAI | `429 You have no credits remaining` | true |
+
+`isRateLimitError` mira `status === 429`, los códigos `rate_limit_exceeded`/`insufficient_quota` y el
+texto. **Un 402 no matchea ninguno.** Con 2 de 3 la condición fallaba y la boleta degradaba.
+
+**El 402 de Cerebras fue la única razón por la que 23 boletas sanas fueron a Revisión.** La prueba
+está en la excepción: `CERRAR.jpg` es una imagen, va por la rama de Vision que sólo intenta Gemini —
+una sola falla, transitoria, condición cumplida, y **sí volvió a Pendientes**.
+
+### Decisión
+
+Un **corta-corriente** (`src/lib/aiCircuitBreaker.ts`): al primer fallo total por infraestructura se
+abre el corte **por cliente** durante **30 minutos** y las boletas siguientes vuelven a Pendientes sin
+gastar nada.
+
+- **Gatillo: sólo fallas de infraestructura.** Se agregó `isProviderDownError` (402, "no credits",
+  "payment required") e `isInfrastructureFailure` (429 ∨ 503 ∨ 402) en `aiErrors.ts`. El guard pasó a
+  `aiInfraFailures === aiFailures`. Una boleta que la IA rechaza **por contenido** no abre el corte:
+  degrada sola a OCR_ONLY y la siguiente se intenta normal.
+- **La clasificación la calcula la cadena**, sobre el objeto del error, y la propaga por el 5º
+  parámetro `infrastructure` de `AiAttemptCallback`. El pipeline nunca parsea mensajes — la misma
+  razón por la que ya existía `rateLimited`.
+- **El chequeo va entre `dedupHash` y `textExtract`** (`circuitBreakerGate`), no dentro de
+  `aiExtractStep`: así ahorra también el OCR con tesseract, lo más caro en CPU del pipeline.
+- **El duplicado es la excepción explícita.** No llama a la cadena: `aiExtractStep` reusa
+  `existingByHash.extraction`, por eso registra `aiRequests = 0` aunque recorra todos los pasos.
+  Frenarlo en el gate lo mandaría a Pendientes en vez de a Duplicados.
+- **`CircuitOpenError extends RateLimitError`**: mismo camino (vuelve a Pendientes, no consume
+  reintentos), categoría distinta — `reasonCategory = "circuit_open"` — para poder medir cuántas
+  boletas frenó el corte sin gastar una request.
+
+**Riesgo descartado con evidencia:** devolver la boleta a Pendientes **no consume reintentos**. El
+runner atrapa el `RateLimitError` y hace `return` sin relanzar, el job cierra `COMPLETED`, y el
+incremento `attempts + 1` queda después de ese camino (`jobWorkerMain.ts:108`). Una caída larga no
+puede agotar `maxAttempts` ni mandar boletas sanas a `FAILED`.
+
+### Apartamiento de un precedente, a propósito
+
+El spec `2026-08-24-gemini-tier-pago-cadena-y-modelos-design.md` había descartado por escrito "hacer
+que el modelo pegado expire a los N minutos… introduce tiempo en el estado —y por lo tanto un test que
+depende del reloj—".
+
+Acá se hace igual, y la diferencia es concreta: en el modelo pegajoso el reloj era **redundante**
+(el próximo 429 o 503 reevaluaba solo); en el corta-corriente **no existe ninguna otra señal de
+reset**. Sin reloj, las opciones son "hasta que se vacíe la cola" (~18 requests/hora de sondeo contra
+~6, medido sobre las tandas reales) o "hasta reiniciar el worker" (ciego si Gemini se recupera). El
+reloj se inyecta, así que el test no espera tiempo real.
+
+### Alternativas descartadas
+
+- **Corte hasta vaciar la cola** y **hasta reiniciar el worker**: ver arriba.
+- **Estado del breaker en la base**: lo verían worker, web y scheduler, pero agrega migración y una
+  escritura por boleta para un estado que vive 30 minutos.
+- **El breaker adentro de `AiExtractionChain`**: la cadena se construye por archivo, así que el
+  estado tendría que ser `static` igual, y mezcla política con mecanismo.
+- **El chequeo de CUIT previo a la IA.** Se diseñó, se midió y se descartó — ver la entrada siguiente.
+
+### Impacto
+
+Archivos: `src/lib/aiErrors.ts`, `src/lib/aiCircuitBreaker.ts` (nuevo), `src/services/aiExtraction.ts`,
+`src/jobs/processPendingDocuments.job.ts`, `src/jobs/pipeline/runner.ts`. Sin migración.
+Suite 902 → 928 tests.
+
+Sobre las dos jornadas medidas: **128 de 263 requests** dejarían de gastarse, y las 23 boletas habrían
+vuelto solas a Pendientes en vez de necesitar rescate manual.
+
+**Un hallazgo de los tests que vale anotar:** el singleton de módulo del breaker **se filtra entre
+tests** — el primero que abre el corte se lo deja abierto a los 34 siguientes, que usan el mismo
+`clientId`. En producción ese estado compartido es exactamente lo que se busca; en los tests hay que
+resetearlo. Por eso `AiCircuitBreaker` expone `reset()` y el `beforeEach` del pipeline lo llama.
+
+---
+
+## 2026-09-10 (2) — El chequeo de CUIT antes de la IA: medido y descartado
+
+### Problema
+
+El owner preguntó por qué se siguen gastando requests en boletas que rebotan por CUIT, si existía un
+spec de triage. **El spec era otro**: `2026-08-31-triage-no-boletas-decisivo-design.md` cubría
+**no-boletas** (VEP, LSD) y dejó el censo de CUITs fuera de alcance explícitamente, "hasta que la
+instrumentación diga cuánto pesa esa clase".
+
+### Decisión: no implementarlo. La instrumentación ya lo dijo.
+
+**Pesa 13 requests en dos días (5 %)**, contra 135 del `SIN MONTO`. Y cada regla que se evaluó para
+hacerlo seguro bajó ese número:
+
+| Regla | Ahorro medido | Por qué se cayó |
+|---|---|---|
+| "Menos de 2 CUITs válidos → descartar" (la documentada) | 2 requests | Casi ninguna boleta real cae ahí |
+| Cortar todas las categorías por CUIT | 9 requests | Mata el rescate por Vision: un PDF puede tener texto propio y el **membrete en imagen** (caso GESTIONPRO) |
+| Cortar sólo `*_cuit_not_registered` | 7 requests | `hasProviderCuit` es `true` con **cualquier** CUIT que no sea el del consorcio — uno de retención o de un tercero alcanza. No prueba que se haya leído el del emisor |
+| Cortar sólo si ningún CUIT extraído matchea la base | **~2, posiblemente 0** | La única segura, y no ahorra |
+
+**La razón es estructural**: `provider_cuit_not_registered` **sólo existe si el consorcio ya
+matcheó** — la rama del proveedor corre después de que la del consorcio tuvo éxito. En esas boletas
+siempre hay un CUIT que matchea la base, así que la regla segura nunca corta.
+
+Dicho de otro modo: **las categorías por CUIT están nombradas según qué lado falló, lo que implica
+que el otro lado matcheó.** La clase de boletas que se puede cortar sin riesgo casi no existe.
+
+Se conserva el sesgo del spec de triage §5: *un falso negativo cuesta una request; un falso positivo
+cuesta una boleta no procesada.*
+
+### Impacto
+
+Ninguno en código. Queda esta entrada para que no se vuelva a proponer sin el número a la vista.
+
+---
+
 ## 2026-09-06 (2) — El LSD matcheaba el edificio por casualidad
 
 ### Problema

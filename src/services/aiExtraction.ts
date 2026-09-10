@@ -1,4 +1,4 @@
-import { isRateLimitError } from "@/lib/aiErrors";
+import { isRateLimitError, isInfrastructureFailure } from "@/lib/aiErrors";
 import { AiProvider, AiUsageMetrics } from "@/types/aiUsage.types";
 import type { AiRequestCounter } from "@/lib/aiRequestCounter";
 import { ExtractedDocumentData } from "@/types/extractedDocument.types";
@@ -60,7 +60,18 @@ export type AiAttemptCallback = (
   provider: AiProvider,
   ok: boolean,
   error?: string,
-  rateLimited?: boolean
+  rateLimited?: boolean,
+  /**
+   * La falla es de INFRAESTRUCTURA (429 cuota / 503 saturación / 402 proveedor
+   * sin crédito), no de contenido. Se calcula acá, sobre el OBJETO del error, por
+   * el mismo motivo que `rateLimited`: los callers no deben re-clasificar
+   * parseando el mensaje.
+   *
+   * Es más ancho que `rateLimited`: el 402 de Cerebras no es un rate-limit, pero
+   * tampoco es culpa del documento. Distinguirlo es lo que permite devolver la
+   * boleta a Pendientes en vez de degradarla a OCR_ONLY (2026-09-10).
+   */
+  infrastructure?: boolean
 ) => void;
 
 /**
@@ -99,7 +110,8 @@ export class AiExtractionChain {
           extractor.provider,
           false,
           error instanceof Error ? error.message : "Unknown error",
-          isRateLimitError(error)
+          isRateLimitError(error),
+          isInfrastructureFailure(error)
         );
       }
     }

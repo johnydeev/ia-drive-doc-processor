@@ -2,7 +2,45 @@
 
 ## [Unreleased]
 
+### Added
+- **Corta-corriente de la cadena de IA (2026-09-10)**. Cuando los tres proveedores fallan por
+  infraestructura, el corte se abre **por cliente** durante 30 minutos y las boletas siguientes
+  vuelven a Pendientes sin gastar nada, en vez de que cada archivo redescubra la caída pagando el
+  barrido completo. Medido sobre 2026-09-08/09: **128 de 263 requests** dejarían de gastarse.
+  - `AiCircuitBreaker` (`src/lib/aiCircuitBreaker.ts`) con reloj y cooldown inyectables. El estado
+    vive en memoria del proceso y muere con el reinicio, igual que el modelo pegajoso de Gemini.
+  - `circuitBreakerGate` se ubica **entre `dedupHash` y `textExtract`**, no dentro de `aiExtractStep`:
+    así ahorra también el OCR con tesseract, lo más caro en CPU del pipeline. El **duplicado** está
+    exceptuado — no llama a la cadena (reusa la extracción guardada), así que frenarlo lo mandaría a
+    Pendientes en vez de a Duplicados.
+  - `CircuitOpenError extends RateLimitError`: mismo camino, `reasonCategory = "circuit_open"` para
+    poder medir cuántas boletas frenó el corte sin gastar una request.
+  - **Se apartó a propósito de un precedente**: el spec del 2026-08-24 había descartado meter tiempo
+    en el estado. Acá el reloj es la única señal de reset que existe; sin él las opciones eran 3×
+    más caras o dejaban el worker ciego. Ver `docs/decisiones.md`.
+
+### Fixed
+- **El 402 de Cerebras mandaba boletas sanas a Revisión (2026-09-10)**. El guard que devuelve la
+  boleta a Pendientes exigía que **todas** las fallas de la cadena fueran transitorias, y
+  `isRateLimitError` no reconoce un 402 (`402 status code (no body)`): mira 429, los códigos de
+  cuota y el texto. Con Gemini en 429 y OpenAI sin crédito, 2 de 3 no alcanzaba, así que la boleta
+  degradaba a `OCR_ONLY` → `amount: null` → **`SIN MONTO` → Revisión**. Fueron **23 boletas sanas en
+  dos días**.
+  - Nuevas `isProviderDownError` (402) e `isInfrastructureFailure` (429 ∨ 503 ∨ 402) en `aiErrors.ts`;
+    el guard pasa a `aiInfraFailures === aiFailures`.
+  - La clasificación la calcula **la cadena**, sobre el objeto del error, y la propaga por el 5º
+    parámetro `infrastructure` de `AiAttemptCallback`. El pipeline nunca parsea mensajes.
+  - **Verificado con la variable controlada**: el owner movió 4 archivos `SIN MONTO` a Pendientes sin
+    dar de alta nada y los cuatro entraron, con 1 request cada uno. Mismo `driveFileId`, mismos bytes.
+  - Una falla de **contenido** sigue degradando a OCR_ONLY: el corte no se abre por un PDF roto.
+  - Suite 902 → 928.
+
 ### Verified
+- **LSD verificado punta a punta en producción (2026-09-06)**. Los 5 libros de 2026-07 dieron sus
+  **9 boletas**, una por empleado, con montos idénticos al `Total Neto` de cada papel, todos
+  `EMPLEADO`, período 08/2026, sin vencimiento y con número `libroId-CUIL` único; cada PDF se movió
+  una sola vez. Confirmado contra la base que ningún familiar entró como empleado y que ningún monto
+  es el Sueldo Básico. Hicieron falta 3 corridas y dos fixes (prompt y CUIT del consorcio).
 - **Guard del vencimiento del CAE, primera verificación en producción (2026-08-30)**. Se reprocesaron
   `00002-00208625` y `00002-00208626` (ROMERO MIGUEL A → EVA PERON 1761, período 08/2026, mismo monto
   y números consecutivos): las dos entraron con `dueDate = null`, o sea el guard descarta la "Fecha de

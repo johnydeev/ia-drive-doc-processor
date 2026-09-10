@@ -6,7 +6,9 @@
       "Bash(node -e \":*)",
       "Bash(npx tsx -e \":*)",
       "Bash(SKIP_ENV_VALIDATION=1 npm run build)",
-      "mcp__c73694b2-6762-4495-be7a-d6abb68d52ac__list_projects"
+      "mcp__c73694b2-6762-4495-be7a-d6abb68d52ac__list_projects",
+      "Bash(cd \"C:\\\\Users\\\\jony\\\\Desktop\\\\Proyectos Para vender\\\\pdf-drive-procesor\\\\ia-drive-doc-processor\" && sed -n '/model FixedExpense/,/^}/p;/model ExpenseObligation/,/^}/p;/model Provider /,/^}/p;/model LspService/,/^}/p' prisma/schema.prisma)",
+      "Bash(python -c ' *)"
     ]
   }
 }

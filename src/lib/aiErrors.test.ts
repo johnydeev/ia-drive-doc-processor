@@ -1,5 +1,12 @@
 import { describe, it, expect, vi } from "vitest";
-import { isRateLimitError, isTransientServerError, RateLimitError, callWithRetry } from "@/lib/aiErrors";
+import {
+  isRateLimitError,
+  isTransientServerError,
+  isProviderDownError,
+  isInfrastructureFailure,
+  RateLimitError,
+  callWithRetry,
+} from "@/lib/aiErrors";
 
 describe("isRateLimitError", () => {
   it("detecta el HTTP 429 de Gemini", () => {
@@ -161,5 +168,62 @@ describe("isTransientServerError", () => {
   it("tolera null y undefined", () => {
     expect(isTransientServerError(null)).toBe(false);
     expect(isTransientServerError(undefined)).toBe(false);
+  });
+});
+
+describe("isProviderDownError", () => {
+  it("reconoce el 402 de Cerebras por texto", () => {
+    expect(isProviderDownError(new Error("402 status code (no body)"))).toBe(true);
+  });
+
+  it("reconoce el 402 por status del SDK", () => {
+    expect(isProviderDownError({ status: 402 })).toBe(true);
+  });
+
+  it("reconoce 'no credits remaining' de OpenAI", () => {
+    expect(
+      isProviderDownError(new Error("429 You have no credits remaining. Add credits to continue"))
+    ).toBe(true);
+  });
+
+  it("no confunde un 4020 con el codigo 402", () => {
+    expect(isProviderDownError(new Error("importe 4020 pesos"))).toBe(false);
+  });
+
+  it("no marca un error de contenido", () => {
+    expect(isProviderDownError(new Error("Unexpected token in JSON at position 0"))).toBe(false);
+  });
+
+  it("tolera null y undefined", () => {
+    expect(isProviderDownError(null)).toBe(false);
+    expect(isProviderDownError(undefined)).toBe(false);
+  });
+});
+
+describe("las tres clasificaciones no se pisan", () => {
+  it("el 429 sigue siendo rate limit", () => {
+    expect(isRateLimitError(new Error("429 Too Many Requests"))).toBe(true);
+  });
+
+  it("el 503 sigue siendo transitorio", () => {
+    expect(isTransientServerError(new Error("503 Service Unavailable"))).toBe(true);
+  });
+
+  it("el 402 de Cerebras no es rate limit ni transitorio", () => {
+    const err = new Error("402 status code (no body)");
+    expect(isRateLimitError(err)).toBe(false);
+    expect(isTransientServerError(err)).toBe(false);
+  });
+});
+
+describe("isInfrastructureFailure", () => {
+  it("agrupa 429, 503 y 402", () => {
+    expect(isInfrastructureFailure(new Error("429 Too Many Requests"))).toBe(true);
+    expect(isInfrastructureFailure(new Error("503 Service Unavailable"))).toBe(true);
+    expect(isInfrastructureFailure(new Error("402 status code (no body)"))).toBe(true);
+  });
+
+  it("una falla de CONTENIDO no es de infraestructura", () => {
+    expect(isInfrastructureFailure(new Error("Unexpected token in JSON at position 0"))).toBe(false);
   });
 });

@@ -1,4 +1,4 @@
-import { RateLimitError } from "@/lib/aiErrors";
+import { RateLimitError, CircuitOpenError } from "@/lib/aiErrors";
 import { pipelineLog } from "@/lib/logger";
 import type { PipelineContext, PipelineStep } from "./context";
 
@@ -36,7 +36,10 @@ export async function runPipeline(steps: PipelineStep[], ctx: PipelineContext): 
     // se evita el loop de reintentos inmediatos que quemaba cuota.
     if (error instanceof RateLimitError) {
       m.result = "rate_limited";
-      m.reason = "rate_limit";
+      // `CircuitOpenError` ES un RateLimitError: mismo camino (la boleta vuelve
+      // a Pendientes), categoria distinta para poder medir en la base cuantas
+      // freno el corta-corriente sin gastar una sola request.
+      m.reason = error instanceof CircuitOpenError ? "circuit_open" : "rate_limit";
       m.reasonText = error.message;
       summary.skipped += 1;
       summary.rateLimited = (summary.rateLimited ?? 0) + 1;

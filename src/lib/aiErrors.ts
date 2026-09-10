@@ -114,3 +114,61 @@ export async function callWithRetry<T>(fn: () => Promise<T>, options: RetryOptio
 
   throw new RateLimitError(lastError instanceof Error ? lastError.message : String(lastError));
 }
+
+/**
+ * Devuelve true si el proveedor **no está disponible para nosotros**: sin
+ * crédito, sin plan, pago requerido (HTTP 402). Es distinto de la cuota agotada
+ * (429, `isRateLimitError`) y de la caída transitoria (503,
+ * `isTransientServerError`), y la diferencia importa:
+ *
+ * El guard de `aiExtractStep` exige que TODAS las fallas de la cadena sean de
+ * infraestructura para devolver la boleta a Pendientes. Cerebras devolviendo
+ * `402 status code (no body)` no matcheaba ninguna de las dos clasificaciones
+ * anteriores, así que la condición nunca se cumplía y 23 boletas sanas fueron a
+ * Revisión con el cartel SIN MONTO (medido en producción, 2026-09-08/09).
+ *
+ * Se usa `\b402\b` por el mismo motivo que el 429 y el 503: no confundir un "4020".
+ */
+export function isProviderDownError(error: unknown): boolean {
+  if (error === null || error === undefined) return false;
+
+  if (typeof error === "object") {
+    const e = error as { status?: unknown };
+    if (e.status === 402) return true;
+  }
+
+  const text = (error instanceof Error ? error.message : String(error)).toLowerCase();
+
+  return (
+    /\b402\b/.test(text) ||
+    text.includes("no credits") ||
+    text.includes("payment required")
+  );
+}
+
+/**
+ * ¿La falla es de INFRAESTRUCTURA (el proveedor no pudo atender) y no de
+ * contenido (el documento rompió la extracción)?
+ *
+ * Es la unión de las tres clasificaciones, y es lo que decide si la boleta
+ * vuelve a Pendientes o degrada a OCR_ONLY. Fuente única: la cadena de IA y el
+ * pipeline la comparten para no reimplementar el criterio en dos lugares.
+ */
+export function isInfrastructureFailure(error: unknown): boolean {
+  return isRateLimitError(error) || isTransientServerError(error) || isProviderDownError(error);
+}
+
+/**
+ * El corta-corriente frenó la boleta ANTES de intentar la IA.
+ *
+ * Hereda de `RateLimitError` para reusar su camino en el pipeline —la boleta
+ * vuelve a Pendientes y el job cierra OK, sin consumir reintentos— pero se
+ * distingue para poder medirlo aparte en `ProcessingJob.reasonCategory`: son las
+ * boletas que el corte salvó sin gastar una sola request.
+ */
+export class CircuitOpenError extends RateLimitError {
+  constructor(message: string) {
+    super(message);
+    this.name = "CircuitOpenError";
+  }
+}

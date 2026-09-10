@@ -8,6 +8,7 @@ import {
 import type { ProcessJobConfig, ProcessDriveFileInput } from "@/jobs/processPendingDocuments.job";
 import type { AiAttemptCallback, AiExtractionResult } from "@/services/aiExtraction";
 import { pipelineLog } from "@/lib/logger";
+import { AiCircuitBreaker, aiCircuitBreaker } from "@/lib/aiCircuitBreaker";
 import { ExtractedDocumentData } from "@/types/extractedDocument.types";
 
 /**
@@ -199,6 +200,9 @@ describe("processDriveFile — caracterización de los 7 caminos de salida", () 
     vi.spyOn(console, "warn").mockImplementation(() => {});
     vi.spyOn(console, "error").mockImplementation(() => {});
     metricsSpy = vi.spyOn(pipelineLog, "metrics").mockImplementation(() => {});
+    // El corta-corriente es un singleton de proceso: sin este reset, un test que
+    // lo abre se lo deja abierto a todos los que corren despues.
+    aiCircuitBreaker.reset();
   });
 
   afterEach(() => {
@@ -976,6 +980,144 @@ ${BARCODE_TIGRE}`
 
       expect(spy).not.toHaveBeenCalled();
       expect(ctx.aiChain.run).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("corta-corriente de IA", () => {
+    it("cadena caida por INFRAESTRUCTURA: la primera boleta va a Pendientes, no a Revision", async () => {
+      const breaker = new AiCircuitBreaker(() => 1_000_000, 30 * 60 * 1000);
+      const ctx = makeContext({ driveProcessingFolderId: "processing" });
+      // Reproduce la caida real del 2026-09-08/09: Gemini 429, Cerebras 402,
+      // OpenAI sin credito. El 402 es el que antes rompia el guard.
+      ctx.aiChain.run.mockImplementation(async (_t, cb) => {
+        cb?.("gemini", false, "429 quota exceeded", true, true);
+        cb?.("cerebras", false, "402 status code (no body)", false, true);
+        cb?.("openai", false, "429 You have no credits remaining", true, true);
+        return null;
+      });
+      const summary = createBaseSummary(1);
+
+      await processDriveFile(
+        makeFile(),
+        { ...ctx, aiCircuitBreaker: breaker } as unknown as ProcessingContext,
+        summary
+      );
+
+      expect(ctx.driveService.moveFileToFolder).toHaveBeenCalledWith("file-1", "processing", "pending");
+      expect(summary.rateLimited).toBe(1);
+      expect(summary.failed).toBe(0);
+      expect(ctx.driveService.moveFileToFailed).not.toHaveBeenCalled();
+      expect(metricsCore().result).toBe("rate_limited");
+      // Lo que evita que las 22 boletas siguientes vuelvan a pagar el barrido.
+      expect(breaker.isOpen("client-1")).toBe(true);
+    });
+
+    it("falla de CONTENIDO: NO abre el corte para las boletas siguientes", async () => {
+      const breaker = new AiCircuitBreaker(() => 1_000_000, 30 * 60 * 1000);
+      const ctx = makeContext();
+      ctx.aiChain.run.mockImplementation(async (_t, cb) => {
+        cb?.("gemini", false, "Unexpected token in JSON", false, false);
+        return null;
+      });
+
+      await processDriveFile(
+        makeFile(),
+        { ...ctx, aiCircuitBreaker: breaker } as unknown as ProcessingContext,
+        createBaseSummary(1)
+      );
+
+      expect(breaker.isOpen("client-1")).toBe(false);
+    });
+
+    it("breaker abierto: la metrica queda etiquetada circuit_open", async () => {
+      const breaker = new AiCircuitBreaker(() => 1_000_000, 30 * 60 * 1000);
+      breaker.trip("client-1", "caida previa");
+
+      const ctx = makeContext();
+
+      await processDriveFile(
+        makeFile(),
+        { ...ctx, aiCircuitBreaker: breaker } as unknown as ProcessingContext,
+        createBaseSummary(1)
+      );
+
+      expect(metricsCore().result).toBe("rate_limited");
+      expect(metricsCore().reason).toBe("circuit_open");
+    });
+
+    it("falla de CONTENIDO en todos los proveedores: sigue degradando a OCR_ONLY", async () => {
+      const ctx = makeContext();
+      ctx.aiChain.run.mockImplementation(async (_t, cb) => {
+        cb?.("gemini", false, "Unexpected token in JSON", false, false);
+        return null;
+      });
+      const summary = createBaseSummary(1);
+
+      await processDriveFile(makeFile(), asContext(ctx), summary);
+
+      // OCR_ONLY -> sin monto -> Revision. Comportamiento intencionalmente intacto.
+      expect(metricsCore().result).toBe("no_amount");
+    });
+
+    it("breaker abierto: vuelve a Pendientes sin IA y sin extraer texto", async () => {
+      const breaker = new AiCircuitBreaker(() => 1_000_000, 30 * 60 * 1000);
+      breaker.trip("client-1", "caida previa");
+
+      const ctx = makeContext({ driveProcessingFolderId: "processing" });
+      const summary = createBaseSummary(1);
+
+      await processDriveFile(
+        makeFile(),
+        { ...ctx, aiCircuitBreaker: breaker } as unknown as ProcessingContext,
+        summary
+      );
+
+      expect(ctx.aiChain.run).not.toHaveBeenCalled();
+      // El ahorro que motiva la ubicacion del gate: no se paga el OCR.
+      expect(ctx.pdfExtractor.extractTextFromPdf).not.toHaveBeenCalled();
+      expect(ctx.driveService.moveFileToFolder).toHaveBeenCalledWith("file-1", "processing", "pending");
+      expect(summary.rateLimited).toBe(1);
+      expect(metricsCore().result).toBe("rate_limited");
+    });
+
+    it("breaker abierto: un DUPLICADO igual se resuelve, sin llamar a la IA", async () => {
+      const breaker = new AiCircuitBreaker(() => 1_000_000, 30 * 60 * 1000);
+      breaker.trip("client-1", "caida previa");
+
+      const ctx = makeContext();
+      // Duplicado por hash: aiExtractStep reusa la extraccion guardada, no llama
+      // a la cadena. Frenarlo en el gate lo mandaria a Pendientes en vez de a
+      // Duplicados, que es una regresion.
+      ctx.invoiceRepository.findDuplicateByHash.mockResolvedValue({
+        id: "inv-old",
+        extraction: okExtraction(),
+      });
+      const summary = createBaseSummary(1);
+
+      await processDriveFile(
+        makeFile(),
+        { ...ctx, aiCircuitBreaker: breaker } as unknown as ProcessingContext,
+        summary
+      );
+
+      expect(ctx.aiChain.run).not.toHaveBeenCalled();
+      expect(metricsCore().result).toBe("duplicate");
+    });
+
+    it("breaker cerrado: el pipeline corre normal", async () => {
+      const breaker = new AiCircuitBreaker(() => 1_000_000, 30 * 60 * 1000);
+
+      const ctx = makeContext();
+      const summary = createBaseSummary(1);
+
+      await processDriveFile(
+        makeFile(),
+        { ...ctx, aiCircuitBreaker: breaker } as unknown as ProcessingContext,
+        summary
+      );
+
+      expect(ctx.aiChain.run).toHaveBeenCalledTimes(1);
+      expect(metricsCore().result).toBe("ok");
     });
   });
 });

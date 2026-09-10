@@ -5,7 +5,16 @@
 -- única tabla que también cubre las boletas que NO entraron. `TokenUsage` guarda
 -- una fila por corrida y `Invoice` sólo las que entraron.
 --
--- Contexto del techo: el free tier de Gemini da ~20 requests/día POR MODELO y el
+-- ⚠️ TECHO CORREGIDO CON DATOS REALES (2026-09-10). El comentario de abajo decía
+-- "~20 requests/día por modelo → piso de referencia ~60/día". Medido sobre dos
+-- jornadas completas (2026-09-08 y 09) el techo real es MÁS DEL DOBLE:
+--   · ~34-40 requests/día POR MODELO  ·  ~91-107/día en total
+--   · ~35 boletas/día entran limpias; pasada esa, cada una cuesta 5-6 requests
+--   · las cuotas RPD se reinician a MEDIANOCHE DEL PACÍFICO = 04:00 en Argentina
+--   · los límites son POR PROYECTO, no por API key (otra key del mismo proyecto
+--     NO agrega cuota)
+--
+-- Contexto del techo (histórico): el free tier de Gemini daba ~20 requests/día POR MODELO y el
 -- barrido usa 3 modelos, así que el piso de referencia son ~60 requests/día.
 -- Volumen medido: 17,7 boletas/día promedio, p95 53,8, pico 72.
 
@@ -83,6 +92,36 @@ WHERE outcome IS NOT NULL
 GROUP BY 1
 HAVING count(*) > 1
 ORDER BY 4 DESC NULLS LAST;
+
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 5) CORTA-CORRIENTE (2026-09-10): cuántas boletas frenó el corte y qué gastaron.
+--    CONTROL: `requests` tiene que dar 0 — el corte va ANTES de llamar a la IA.
+--    Si da más que 0, el gate se está evaluando tarde y no ahorra nada.
+-- ─────────────────────────────────────────────────────────────────────────────
+SELECT "createdAt"::date AS dia,
+       count(*)          AS boletas_frenadas,
+       sum("aiRequests") AS requests
+FROM "ProcessingJob"
+WHERE "reasonCategory" = 'circuit_open'
+GROUP BY 1
+ORDER BY 1 DESC;
+
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 5b) ¿Se resolvió el problema del SIN MONTO falso? Tras el corta-corriente,
+--     `no_amount` tiene que bajar de ~12/día a los casos legítimos (documentos
+--     que la IA SÍ leyó y no tenían monto: capturas de pantalla, etc.).
+--     Un `no_amount` con 5-7 requests es la firma de la cadena caída.
+-- ─────────────────────────────────────────────────────────────────────────────
+SELECT "createdAt"::date           AS dia,
+       count(*)                    AS sin_monto,
+       sum("aiRequests")           AS requests,
+       round(avg("aiRequests"), 2) AS req_prom
+FROM "ProcessingJob"
+WHERE outcome = 'no_amount'
+GROUP BY 1
+ORDER BY 1 DESC;
 
 
 -- ─────────────────────────────────────────────────────────────────────────────

@@ -1,6 +1,7 @@
 # Progreso del proyecto — drive-doc-processor
 
-Actualizado al 03/09/2026 (sesión 62 — el VEP de ARCA pasa a registrarse como gasto).
+Actualizado al 10/09/2026 (sesión 63 — corta-corriente de IA).
+Sesión 62: el VEP de ARCA pasa a registrarse como gasto.
 Sesión 61: verificación de pendientes contra producción, fix del vencimiento en Boletas entrantes,
 análisis de consumo de IA, Gemini a primero en la cadena, instrumentación de requests, triage del
 VEP, y el LSD abierto en una boleta por empleado.
@@ -14,6 +15,60 @@ VEP, y el LSD abierto en una boleta por empleado.
 > Las secciones de la **sesión 61** (instrumentación de requests, triage de no-boletas, LSD) y la del
 > **VEP** (sesión 62) dicen "implementado": las primeras entraron en `ae31c15` y `e3551a7`, el VEP en
 > `add4e11`. Lo que sigue abierto en todas ellas es el **smoke en producción**, no el commit.
+
+## 🔌 Corta-corriente de IA (2026-09-10)
+
+**Estado: implementado y verificado (typecheck + lint 0 errores + 928 tests + build:jobs OK).
+SIN COMMITEAR. Sin migración.**
+
+Spec: `docs/superpowers/specs/2026-09-10-corta-corriente-ia-design.md`
+Plan: `docs/superpowers/plans/2026-09-10-corta-corriente-ia.md`
+
+Origen: dos jornadas (08 y 09/09) con la cadena caída mandaron **24 archivos a Revisión con `SIN
+MONTO`** y quemaron **135 de 263 requests (51 %)**. De esas 24, **una sola** era legítima (una captura
+de pantalla). Las otras 23 gastaron 5-7 requests cada una barriendo la cadena con los tres
+proveedores caídos, y cayeron a `OCR_ONLY`, que devuelve `amount: null` por construcción.
+
+**El experimento del owner lo probó con la variable controlada:** movió 4 de esos archivos a
+Pendientes **sin dar de alta nada** y los cuatro entraron — mismo `driveFileId`, 1 request cada uno.
+
+Hecho:
+- **`AiCircuitBreaker`** (`src/lib/aiCircuitBreaker.ts`): `Map<clientId, {until, reason}>`, cooldown
+  de 30 min, reloj inyectable. **Por cliente**, porque las API keys viven en el `googleConfigJson` de
+  cada uno.
+- **`isProviderDownError` + `isInfrastructureFailure`** en `aiErrors.ts`. El guard de `aiExtractStep`
+  pasó de `aiRateLimited === aiFailures` a `aiInfraFailures === aiFailures`. **Esto es el arreglo del
+  402 de Cerebras**, que era la única razón por la que las 23 boletas iban a Revisión en vez de volver
+  a Pendientes.
+- **La cadena clasifica, el pipeline no parsea**: `AiAttemptCallback` estrena un 5º parámetro
+  `infrastructure`, calculado sobre el objeto del error.
+- **`circuitBreakerGate`** entre `dedupHash` y `textExtract` — ahí ahorra también el OCR con
+  tesseract. **El duplicado está exceptuado explícitamente**: no llama a la cadena (reusa
+  `existingByHash.extraction`), así que frenarlo lo mandaría a Pendientes en vez de a Duplicados.
+- **`CircuitOpenError extends RateLimitError`** → `reasonCategory = "circuit_open"`, para medir
+  cuántas boletas frenó el corte sin gastar una request.
+
+**Riesgo descartado con evidencia:** volver a Pendientes **no consume reintentos** — el runner hace
+`return` sin relanzar y el `attempts + 1` queda después de ese camino. Una caída larga no puede
+mandar boletas sanas a `FAILED`.
+
+**Efecto medido sobre esas dos jornadas:** 128 de 263 requests dejarían de gastarse y las 23 boletas
+volverían solas.
+
+### ⏳ Pendiente de verificación en producción
+
+Después del deploy, con la consulta 5 nueva de `scripts/metrics-cuota.sql`:
+
+- [ ] `sum("aiRequests")` de `reasonCategory = 'circuit_open'` tiene que dar **0**. Si da más, el
+      corte se está haciendo después de llamar a la IA.
+- [ ] Los `no_amount` tienen que bajar de ~12/día a los casos legítimos (documentos que la IA leyó y
+      no tenían monto).
+- [ ] **Las 12 boletas de Revisión del 09/09 y las 8 del 08/09 hay que moverlas a Pendientes a mano**,
+      una única vez. De Revisión no salen solas.
+
+> **Lo que el corta-corriente NO resuelve:** Cerebras (402) y OpenAI (sin crédito) siguen muertos.
+> El breaker reduce el desperdicio; **no reemplaza al segundo proveedor**. Con Gemini agotado y sin
+> red, las boletas van a Pendientes y se quedan ahí hasta el reset de las 04:00.
 
 ## ✅ Smokes pendientes en producción (al 2026-08-29)
 
@@ -208,11 +263,34 @@ ALMIRANTE BROWN rebotó con la extracción **perfecta**: el CUIT del edificio vi
 libro no pide. El edificio se resolvía sólo cuando el modelo rellenaba `consortium` por su cuenta —
 4 de 5. Corregido en `cuitSanitizeStep`. Ver `docs/decisiones.md` 2026-09-06 (2).
 
-**⏳ Pendiente:** commitear el fix y reprocesar **sólo ALMIRANTE BROWN** (los otros 4 ya están).
-Esperado: 2 gastos, netos `1.449.395,50` y `125.235,84`.
+### ✅ VERIFICADO EN PRODUCCIÓN (2026-09-06) — 9/9
 
-**⏳ A revisar en la hoja** (no lo valida el sistema): que los montos sean los netos y no el Sueldo
-Básico, y que ningún **hijo** haya entrado como empleado.
+Reprocesado ALMIRANTE BROWN con el fix (`d888b89`): entró con sus 2 gastos. **Los 5 libros dieron
+las 9 boletas**, confirmadas contra la base:
+
+| Edificio | Empleado | Neto |
+|---|---|---|
+| ALMIRANTE BROWN 706 | BRITEZ, PAULA ADELA | 1.449.395,50 |
+| | BUSTOS MUNIZAGA, ANDREA MALVINA | 125.235,84 |
+| BOEDO 414 | CRUZ, RICARDO | 1.748.534,83 |
+| CALLAO 1441 | SCHUCHARA, LUIS MARTIN | 1.386.846,04 |
+| | POSTA, OSVALDO MARTIN | 1.184.301,32 |
+| PUEYRREDON 2418 | MORENO VIVIANA NOEMI | 1.381.281,00 |
+| | LOPEZ PUENTE, JOSE MANUEL | 1.080.360,73 |
+| RIOBAMBA 1261 | BAEZ ROMAN, MARCIAL | 2.226.369,00 |
+| | VILLALBA, SERGIO RAMON | 1.485.180,22 |
+
+Los 9 montos coinciden con el `Total Neto` del papel. Todos `EMPLEADO`, período 08/2026 (el activo),
+sin vencimiento, número `libroId-CUIL` único, y los 5 archivos produjeron 2/1/2/2/2 boletas.
+**Ningún hijo entró como empleado y ningún monto es el Sueldo Básico** — las dos cosas que el sistema
+no valida y hubo que revisar a mano.
+
+**Costo de la verificación:** 3 corridas × 5 libros ≈ 15 requests de Gemini, por dos bugs que los
+tests no vieron (ver `docs/decisiones.md`, las dos entradas del 2026-09-06).
+
+**⏳ Sigue pendiente:** los **gastos fijos de empleado** por edificio. Sin ellos las 9 boletas no
+figuran como obligación cumplida y la validación de completitud del libro no corre. Ojo al cargarlos:
+**no** incluir a las cargas de familia ni a BUSTOS MUNIZAGA (liquidación final de 3 días).
 
 > **Costo conocido, aceptado por el owner:** un **suplente** que cubre vacaciones aparece en el libro
 > sin alta previa y **frena el libro entero** hasta que se lo cargue y se reprocese (una request más).
@@ -338,19 +416,30 @@ en los servicios, **partida** en AGIP, **clave** en SUTERH.
 > `_LspServices` — tarea 7 del tablero). **SUTERH no**: hoy matchea por nombre del proveedor, porque
 > el CUIT impreso es el del consorcio. Pasarlo a identificarse por clave es trabajo nuevo.
 
-### ⏳ Lo único que quedaría: adelantar la regla antes de la IA
+### ❌ Adelantar la regla antes de la IA — MEDIDO Y DESCARTADO (2026-09-10)
 
-Hoy la boleta se desestima **después** de llamar a la IA, así que la request ya se gastó. Cortarla
-antes sólo es seguro en un caso acotado:
+Esta sección proponía cortar la boleta antes de llamar a la IA con la regla "menos de 2 CUITs válidos
+→ desestimar". **Se midió y no paga.** Ver `docs/decisiones.md` 2026-09-10 (2) y §7.1 del spec
+`2026-09-10-corta-corriente-ia-design.md`.
 
-1. No es LSP (`identifyLSPProvider(text) === null`) — se calcula gratis sobre el texto.
-2. El PDF tiene **texto propio** (`isLastPdfScanned() === false`): con texto, Vision no aportaría, así
-   que no se pierde ningún rescate.
-3. Corre **primero** el código de barras AFIP (0 tokens) y suma ese CUIT.
-4. Recién entonces: menos de 2 CUITs válidos → desestimar sin llamar a la IA.
+La clase entera pesa **13 requests en dos días (5 %)**, contra 135 del `SIN MONTO`. Y las cuatro
+reglas evaluadas para hacerlo seguro se cayeron una tras otra:
 
-Cuánto rinde es medible antes de construirlo: consulta 2 de `scripts/metrics-cuota.sql` filtrando
-`reasonCategory` en `consortium_cuit_missing` y `provider_cuit_missing`.
+| Regla | Ahorro | Por qué se cayó |
+|---|---|---|
+| Menos de 2 CUITs válidos (la de acá) | 2 requests | Casi ninguna boleta real cae ahí |
+| Cortar todas las categorías por CUIT | 9 | Mata el rescate por Vision |
+| Cortar sólo `*_cuit_not_registered` | 7 | `hasProviderCuit` es true con **cualquier** CUIT que no sea el del consorcio |
+| Cortar si ningún CUIT matchea la base | **~2, quizá 0** | La única segura, y no ahorra |
+
+> **La condición 2 de la regla vieja era falsa.** Decía que con texto propio "Vision no aportaría".
+> Un PDF puede tener texto propio en el cuerpo y el **membrete en imagen**, con el CUIT del emisor
+> sólo en el logo — es el caso GESTIONPRO de los pendientes de `CLAUDE.md`, y es exactamente cuando
+> el fallback visual sirve.
+
+**La razón de fondo es estructural:** `provider_cuit_not_registered` sólo existe si el consorcio ya
+matcheó. Las categorías por CUIT están nombradas según qué lado falló, lo que implica que el otro
+lado matcheó — así que siempre hay un CUIT que matchea la base y la regla segura nunca corta.
 
 **⏳ Smoke:** después de desplegar, reprocesar un VEP y confirmar que entra a Sin Asignar como
 `[NO BOLETA - VEP]` con `aiRequests = 0` en `ProcessingJob`.

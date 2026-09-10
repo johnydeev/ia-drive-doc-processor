@@ -24,7 +24,8 @@ import { LspServiceRepository } from "@/repositories/lspService.repository";
 import { GoogleDriveService } from "@/services/googleDrive.service";
 import { GoogleSheetsService, SheetsRowMapping } from "@/services/googleSheets.service";
 import { AiExtractionChain, createAiExtractionChain } from "@/services/aiExtraction";
-import { isRateLimitError, RateLimitError } from "@/lib/aiErrors";
+import { isRateLimitError, RateLimitError, CircuitOpenError } from "@/lib/aiErrors";
+import { AiCircuitBreaker, aiCircuitBreaker as defaultAiCircuitBreaker } from "@/lib/aiCircuitBreaker";
 import { PdfTextExtractorService } from "@/services/pdfTextExtractor.service";
 import { isMissingAmount, cuitAppearsInText, appendNoAmountTag, appendTag, markNotBoleta } from "@/lib/documentValidation";
 import { reflowAfipTotals } from "@/lib/afipTotalsReflow";
@@ -115,6 +116,12 @@ export type ProcessingContext = {
    * de tipo EMPLEADO. Contra esto se valida que una Liquidación de Sueldos venga completo.
    */
   findEmployeeFixedExpenses?: (consortiumId: string) => Promise<string[]>;
+  /**
+   * Corta-corriente de la cadena de IA. Si no se inyecta se usa el singleton del
+   * proceso, que es lo que corresponde en producción: el estado tiene que
+   * sobrevivir de un archivo al siguiente dentro del ciclo del worker.
+   */
+  aiCircuitBreaker?: AiCircuitBreaker;
 };
 
 /**
@@ -785,6 +792,36 @@ async function documentTriageGate(ctx: PipelineContext): Promise<StepResult> {
   return { kind: "continue" };
 }
 
+/**
+ * 2b. CORTA-CORRIENTE: si la cadena de IA está cortada para este cliente, la
+ * boleta vuelve a Pendientes sin gastar nada.
+ *
+ * Va **entre `dedupHash` y `textExtract`** a propósito: chequear acá ahorra
+ * además la extracción de texto, que en PDFs escaneados hace OCR con tesseract
+ * —lo más caro en CPU del pipeline—. La descarga no se puede evitar: el hash del
+ * dedup se calcula sobre el binario.
+ *
+ * **El duplicado es la excepción y no puede cortarse.** No llama a la cadena:
+ * `aiExtractStep` reusa la extracción guardada (`existingByHash.extraction`) y
+ * por eso registra `aiRequests = 0` aunque recorra todos los pasos. Frenarlo acá
+ * lo mandaría a Pendientes en vez de a Duplicados.
+ *
+ * Costo aceptado: con el corte abierto tampoco corre `documentTriageGate`, así
+ * que una no-boleta rebota a Pendientes en vez de ir a Sin Asignar etiquetada.
+ * Se corrige solo en el reintento, cuando el corte vuelve a cerrar.
+ */
+async function circuitBreakerGate(ctx: PipelineContext): Promise<StepResult> {
+  if (ctx.isDuplicate) return { kind: "continue" };
+
+  const breaker = ctx.deps.aiCircuitBreaker ?? defaultAiCircuitBreaker;
+  const cid = ctx.deps.resolvedConfig.clientId;
+  if (!breaker.isOpen(cid)) return { kind: "continue" };
+
+  const reason = breaker.reasonFor(cid) ?? "cadena de IA no disponible";
+  pipelineLog.stepStart(cid, `🔌 Corta-corriente ABIERTO — se saltea la IA: ${reason}`);
+  throw new CircuitOpenError(`Corta-corriente abierto — ${reason}`);
+}
+
 /** 3a. Extracción de TEXTO (pdf-parse + detección LSP). Sin tokens de IA. */
 async function textExtractStep(ctx: PipelineContext): Promise<StepResult> {
   const { file } = ctx;
@@ -979,17 +1016,21 @@ async function aiExtractStep(ctx: PipelineContext): Promise<StepResult> {
     // el mensaje en español "sin cuota" no matcheaba "quota" y las boletas
     // caían a OCR_ONLY → "SIN MONTO" → Revisión en vez de Pendientes).
     let aiFailures = 0;
-    let aiRateLimited = 0;
+    let aiInfraFailures = 0;
     const aiResult = await runStep(
       "Extracción IA",
       () =>
         aiChain.run(
           docText,
-          (provider, ok, errorMsg, rateLimited) => {
+          (provider, ok, errorMsg, rateLimited, infrastructure) => {
             pipelineLog.aiExtraction(cid, provider, ok, errorMsg);
             if (!ok) {
               aiFailures += 1;
-              if (rateLimited) aiRateLimited += 1;
+              // `infrastructure` es más ancho que `rateLimited`: incluye el 402
+              // (proveedor sin crédito), que es lo que rompía el guard. El
+              // fallback a `rateLimited` cubre a los callers que todavía no lo
+              // mandan.
+              if (infrastructure ?? rateLimited) aiInfraFailures += 1;
             }
           },
           ctx.aiRequests
@@ -1001,12 +1042,21 @@ async function aiExtractStep(ctx: PipelineContext): Promise<StepResult> {
       extracted = aiResult.data;
       fileAiUsage = aiResult.usage;
       accumulateTokenUsage(summary.tokenUsage, fileAiUsage);
-    } else if (aiFailures > 0 && aiRateLimited === aiFailures) {
-      // Todos los proveedores de IA caídos por algo transitorio — cuota agotada
-      // (429) o servicio saturado (503, sumado el 2026-08-24): NO degradar a
-      // OCR_ONLY (terminaría en Revisión). Se propaga como RateLimitError para
+    } else if (aiFailures > 0 && aiInfraFailures === aiFailures) {
+      // Todos los proveedores caídos por INFRAESTRUCTURA — cuota agotada (429),
+      // servicio saturado (503, sumado el 2026-08-24) o proveedor sin crédito
+      // (402, sumado el 2026-09-10): NO degradar a OCR_ONLY (terminaría en
+      // Revisión con el cartel SIN MONTO). Se propaga como RateLimitError para
       // dejar la boleta en Pendientes y reintentarla en un ciclo posterior.
-      throw new RateLimitError(`IA no disponible — ${aiFailures} proveedor(es) en 429/503`);
+      //
+      // Además se abre el CORTA-CORRIENTE: las boletas siguientes del ciclo ni
+      // siquiera van a intentarlo. Sin esto cada archivo vuelve a pagar el
+      // barrido completo para redescubrir lo mismo — medido en producción:
+      // 23 archivos, 134 requests, 2026-09-08/09.
+      const reason = `${aiFailures} proveedor(es) caídos por 429/503/402`;
+      (ctx.deps.aiCircuitBreaker ?? defaultAiCircuitBreaker).trip(cid, reason);
+      pipelineLog.stepStart(cid, `🔌 Corta-corriente ABIERTO — ${reason}`);
+      throw new RateLimitError(`IA no disponible — ${reason}`);
     } else {
       pipelineLog.aiOcrFallback(cid);
       extracted = buildOcrOnlyPayload();
@@ -1743,6 +1793,7 @@ export async function processDriveFile(
     [
       downloadAndLockStep,
       dedupHashStep,
+      circuitBreakerGate,
       textExtractStep,
       documentTriageGate,
       aiExtractStep,
