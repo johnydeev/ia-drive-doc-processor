@@ -8,6 +8,8 @@
  *
  * Ver `docs/superpowers/specs/2026-09-03-vep-arca-como-gasto-design.md`.
  */
+import { extractCuitsFromText } from "@/lib/cuit";
+
 export function buildVepPrompt(text: string): string {
   return [
     "Sos un extractor de datos de un VEP (Volante Electrónico de Pago) de ARCA, Argentina.",
@@ -39,4 +41,56 @@ export function buildVepPrompt(text: string): string {
     "Texto del VEP:",
     text,
   ].join("\n");
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Clasificación por códigos de renglón (spec 2026-09-11)
+// ═══════════════════════════════════════════════════════════════════════════
+
+/** Palabra fija de la columna PROVEEDOR de `_LspServices` para la fila de retención. */
+export const VEP_RETENCION_KEYWORD = "VEP RETENCION";
+
+/** Códigos de impuesto ARCA del encargado: SICOSS, obra social, ART, seguro de vida. */
+export const VEP_EMPLEADO_CODES = new Set(["351", "301", "352", "302", "312", "28"]);
+/** Retenciones a terceros: SICORE Ganancias, SICORE/SIRE IVA, contrib. seg. social (seguridad/limpieza). */
+export const VEP_RETENCION_CODES = new Set(["217", "767", "353"]);
+
+export type VepKind = "EMPLEADO" | "RETENCION" | "MIXTO" | "DESCONOCIDO" | "SIN_CODIGOS";
+
+const CODE_RE = /\((\d{2,3})\)/g;
+
+function rawCodes(text: string): string[] {
+  return [...text.matchAll(CODE_RE)].map((m) => m[1]);
+}
+
+/** Códigos de impuesto conocidos, en orden de aparición: `... (351)  $896.406,81`. */
+export function extractVepConceptCodes(text: string): string[] {
+  return rawCodes(text).filter((c) => VEP_EMPLEADO_CODES.has(c) || VEP_RETENCION_CODES.has(c));
+}
+
+/**
+ * Qué paga el cupón, leído de los códigos de los renglones (0 tokens). Los campos
+ * "Tipo de Pago" / "Descripción Reducida" / "Concepto" NO sirven: un "Vep
+ * Consolidado" puede ser retenciones o la ART del encargado con los tres iguales.
+ */
+export function classifyVep(text: string): VepKind {
+  const codes = rawCodes(text);
+  if (codes.length === 0) return "SIN_CODIGOS";
+  const empleado = codes.some((c) => VEP_EMPLEADO_CODES.has(c));
+  const retencion = codes.some((c) => VEP_RETENCION_CODES.has(c));
+  if (empleado && retencion) return "MIXTO";
+  if (retencion) return "RETENCION";
+  if (empleado) return "EMPLEADO";
+  return "DESCONOCIDO";
+}
+
+/**
+ * CUIT del contribuyente: el rotulado `CUIT:`. El de la administradora viaja en
+ * "Generado por el Usuario" sin la palabra CUIT, así que no lo pisa. Devuelve
+ * dígitos, validado por checksum; null si no está o no valida.
+ */
+export function extractVepContribuyenteCuit(text: string): string | null {
+  const m = /CUIT:\s*(\d{2}-?\d{8}-?\d)/i.exec(text);
+  if (!m) return null;
+  return extractCuitsFromText(m[1])[0] ?? null;
 }

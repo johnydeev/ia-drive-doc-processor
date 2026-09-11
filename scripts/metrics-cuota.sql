@@ -125,6 +125,38 @@ ORDER BY 1 DESC;
 
 
 -- ─────────────────────────────────────────────────────────────────────────────
+-- 6) VEP POR TIPO (2026-09-11). Los cupones que no se pudieron clasificar van a
+--    Revisión con 0 requests (`vep_mixto` / `vep_desconocido`); los de retención
+--    sin fila en el ALTA van a Sin Asignar (`vep_retencion_not_registered`).
+--    CONTROL: los dos primeros tienen que dar `requests = 0` — el gate corre
+--    ANTES de la IA.
+-- ─────────────────────────────────────────────────────────────────────────────
+SELECT "reasonCategory",
+       count(*)          AS cupones,
+       sum("aiRequests") AS requests
+FROM "ProcessingJob"
+WHERE "reasonCategory" IN ('vep_mixto', 'vep_desconocido', 'vep_retencion_not_registered')
+GROUP BY 1
+ORDER BY 2 DESC;
+
+
+-- 6b) VEP de retención que SÍ entraron: boletas colgadas de una fila `VEP RETENCION`.
+--     Tienen que salir con el proveedor = la empresa retenida (Libres, Dogo…), no ARCA.
+SELECT c."canonicalName" AS consorcio,
+       p."canonicalName" AS empresa_retenida,
+       i."boletaNumber"  AS nro_vep,
+       i.amount,
+       i.detail,
+       i."createdAt"::date AS dia
+FROM "Invoice" i
+JOIN "LspService" l ON l.id = i."lspServiceId"
+JOIN "Consortium" c ON c.id = i."consortiumId"
+LEFT JOIN "Provider" p ON p.id = i."providerId"
+WHERE l."providerName" = 'VEP RETENCION'
+ORDER BY i."createdAt" DESC;
+
+
+-- ─────────────────────────────────────────────────────────────────────────────
 -- CONTROL DE SANIDAD: los duplicados por hash tienen que dar `aiRequests = 0`,
 -- porque `dedupHashStep` corre ANTES de la IA. Si dan más que 0, el contador
 -- está registrando llamadas que no existen.

@@ -254,6 +254,11 @@ Client          → Tenant. Roles: ADMIN / CLIENT / VIEWER. consortiumsEnabled (
   columnas comparables — emitir sólo las modificadas escribiría `null` sobre el dato bueno de otra
   fila del lote.
 - **LspService**: resuelve `consortiumId` por `canonicalName` dentro del `clientId`. Si no encuentra → warning.
+- **Fila `VEP RETENCION`** (2026-09-11): en `_LspServices`, PROVEEDOR = la palabra fija `VEP RETENCION`,
+  NRO CLIENTE = **CUIT del consorcio en dígitos**, DESCRIPCIÓN = **razón social exacta** de la empresa
+  retenida (de `_Proveedores`). Sólo para ese tipo la DESCRIPCIÓN se resuelve a `providerId`; para
+  el resto sigue siendo texto libre. Si la empresa no existe, la fila se crea sin `providerId` y el
+  reporte avisa. Es la regla "en este edificio las retenciones son a esta empresa" (una por consorcio).
 ### Archivos clave
 - `src/lib/directorySyncPlan.ts` → **tier 0 puro**: hoja + foto de la base → plan (creates / updates /
   renames / orphans / ambiguous). Acá va toda la decisión; es lo que hace testeable al sync.
@@ -276,6 +281,7 @@ Siempre usar `resolveGoogleConfig(client)` para construir el `GoogleSheetsServic
 2. **Dedup hash** → SHA256 del binario
 2b. **Corta-corriente** (`circuitBreakerGate`, 2026-09-10) → si la cadena de IA está cortada para el cliente, la boleta vuelve a **Pendientes** con 0 requests y **sin extraer texto** (se ahorra el OCR). Los **duplicados están exceptuados**: no llaman a la IA (reusan la extracción guardada), así que siguen su camino a Duplicados. `reasonCategory = "circuit_open"`.
 3. **Extracción texto** (`textExtractStep`, sin tokens) → pdf-parse → fallback OCR (tesseract). El texto del OCR se conserva si es más largo **o si aporta un CUIT que el texto directo no tiene** (`lib/ocrMerge.ts`, 2026-08-18): antes se descartaba por longitud y con él se iba el CUIT del membrete. Si pdf-parse no saca texto propio, el PDF es un **escaneo** (`isLastPdfScanned()`). Luego el **triage**, ANTES de la IA y sin gastar tokens: **capa 0** (`detectDecisiveNotBoleta`, 2026-08-31) para los formularios inequívocos, **hoy vacía** — nació con el VEP y el LSD y los dos salieron al pasar a procesarse (LSD 2026-09-01, VEP 2026-09-03); se conserva el mecanismo para el próximo formulario a descartar; y **capa 1** (`classifyDocumentType`), heurística conservadora para oblea, certificado de fumigación, plano… Ambas renombran `[NO BOLETA - <TIPO>]` y mueven a **Sin Asignar** (antes iban a Revisión; cambió el 2026-08-31 para que la limpieza manual se haga en un solo lugar).
+3b. **VEP mixto / sin clasificar** (`vepMixtoGate`, 2026-09-11) → si el router dio `VEP_MIXTO`, el cupón va a **Revisión** renombrado `[VEP MIXTO]` o `[VEP SIN CLASIFICAR]` sin llamar a la IA (`reasonCategory = vep_mixto` / `vep_desconocido`).
 4. **Extracción IA** (`aiExtractStep`) → **PDF escaneado**: la página 1 que rindió el OCR va a **Gemini Vision** (2026-08-18); si falla sigue la cadena, si da 429/503 vuelve a Pendientes. Resto: cadena Gemini → Cerebras → OpenAI → Claude (fallback final OCR_ONLY). El barrido de modelos de Gemini son 3 (`gemini-2.5-flash-lite` → `2.5-flash` → `flash-latest`; se podaron los dos `2.0-*` que devolvían 404); un 503 reintenta el MISMO modelo una vez antes de saltar, y si los 3 caen por 429/503 la boleta vuelve a Pendientes, no a Revisión (2026-08-24). Luego **triage capa 2** (`isBoletaGate`): si la IA devolvió `isBoleta=false` → `[NO BOLETA]` + Sin Asignar.
 5. **Dedup business key** → boletaNumber + providerTaxId + dueDate + amount
 6. **Resolve assignment** → match consorcio + proveedor + período activo del consorcio
@@ -286,7 +292,7 @@ Siempre usar `resolveGoogleConfig(client)` para construir el `GoogleSheetsServic
     - **Boleta OK** → se **renombra** y se mueve a **`Rendiciones/[Edificio]/[Período]`** (`driveFoldersJson.statements`). La carpeta del edificio se crea y comparte pública la 1ª vez (link en `Consortium.statementsFolderUrl`). Reemplaza el viejo destino "Escaneados".
     - **Sin Asignar** → carpeta Sin Asignar (no matcheó). El PDF se renombra con la etiqueta del motivo. En facturas comunes las 4 etiquetas son por CUIT (2026-08-26):
       `CUIT DE CONSORCIO INEXISTENTE EN BOLETA` (el papel no lo trae) · `CUIT DE CONSORCIO NO REGISTRADO EN DB` (lo trae, falta el alta) · `CUIT DE PROVEEDOR INEXISTENTE EN BOLETA` · `CUIT DE PROVEEDOR NO REGISTRADO EN DB`.
-      Las viejas (`SIN CONSORCIO`, `CONSORCIO SIN REGISTRAR`, `SIN PROVEEDOR`, `PROVEEDOR SIN REGISTRAR`) quedan para las boletas LSP. Sólo las `*_INEXISTENTE` disparan los fallbacks de código de barras y visión: si el CUIT se leyó bien y falta el alta, ningún reintento lo arregla.
+      Las viejas (`SIN CONSORCIO`, `CONSORCIO SIN REGISTRAR`, `SIN PROVEEDOR`, `PROVEEDOR SIN REGISTRAR`) quedan para las boletas LSP. `VEP RETENCION SIN EMPRESA REGISTRADA` (2026-09-11): el consorcio del VEP no tiene fila `VEP RETENCION` en el ALTA. Sólo las `*_INEXISTENTE` disparan los fallbacks de código de barras y visión: si el CUIT se leyó bien y falta el alta, ningún reintento lo arregla.
     - **No es boleta** → **Sin Asignar** renombrado `[NO BOLETA - <TIPO>]` (triage capa 0/1/2). NO Sheets ni DB. Contador `summary.notBoleta`, `m.result="not_boleta"`, y el tipo queda en `ProcessingJob.reasonCategory` para poder medir cuántas requests ahorró cada uno.
     - **Duplicado** → carpeta **Duplicados** (si `driveFoldersJson.duplicates`; sino Escaneados). NO va a Rendiciones.
     - **Consorcio sin período activo** → **Revisión** (`failed`) + aviso (caso puntual; el peor caso —cliente sin ningún período— lo corta la llave del scheduler).
@@ -328,7 +334,8 @@ El sistema detecta automáticamente el tipo de documento con `identifyLSPProvide
 Analiza los primeros 4000 caracteres y retorna:
 - `"EDESUR"` / `"EDENOR"` / `"AYSA"` / `"METROGAS"` / `"NATURGY"` / `"CAMUZZI"` / `"LITORAL_GAS"` / `"ABSA"` / `"PERSONAL"` → prompt específico
 - `"SUTERH"` / `"FATERYH"` / `"SERACARH"` / `"ARCA"` / `"VEP"` → prompt específico del grupo "CUIT del papel = consorcio" (proveedor por NOMBRE, sin CUIT propio; ver helper `usesConsortiumCuit`)
-- `"VEP"` → **Volante Electrónico de Pago de ARCA** (2026-09-03): el cupón con el que el consorcio paga las cargas sociales de su encargado. Se detecta por los marcadores del encabezado en los **primeros 200 caracteres** — es lo único que lo separa de un F931, que trae su propio VEP en la página 2. Va ANTES de la regla del `931` (un VEP de SICOSS no imprime ese número).
+- `"VEP"` / `"VEP_RETENCION"` / `"VEP_MIXTO"` → **Volante Electrónico de Pago de ARCA** (2026-09-03, tipos 2026-09-11): el cupón con el que el consorcio paga las cargas sociales de su encargado **o ingresa retenciones a un tercero**. Se detecta por los marcadores del encabezado en los **primeros 200 caracteres** — es lo único que lo separa de un F931, que trae su propio VEP en la página 2. Va ANTES de la regla del `931` (un VEP de SICOSS no imprime ese número).
+  > **Tipos de VEP (2026-09-11).** Los renglones traen códigos de impuesto ARCA y son lo ÚNICO que dice qué paga el cupón (`Tipo de Pago` / `Descripción Reducida` / `Concepto` son idénticos entre un VEP de retenciones y la ART del encargado). `classifyVep` en `lib/vepExtraction.ts`, regex, 0 tokens: **351/301/352/302/312/28 = encargado → `VEP`** (proveedor `ARCA EMPLEADO` por nombre); **217/767/353 = retención → `VEP_RETENCION`**, que es el **único VEP que usa `LspService`**: `clientNumber` = CUIT rotulado `CUIT:` del contribuyente (**pisado desde el texto, nunca del modelo**), fila `VEP RETENCION` del ALTA, consorcio y empresa salen de la fila, y **se saltea la resolución de proveedor por CUIT** (ahí está la administradora). Mixto o códigos desconocidos → `VEP_MIXTO` → `vepMixtoGate` lo manda a **Revisión** `[VEP MIXTO]` / `[VEP SIN CLASIFICAR]` antes de la IA. Sin códigos legibles → `VEP`. `VEP_RETENCION` **NO** está en `usesConsortiumCuit`.
   > **`usesConsortiumCuit` NO alcanza para el VEP.** Ese helper habilita el match por nombre pero **no desactiva el match por CUIT**, que corre antes; y `cuitSanitizeStep` reinyecta por regex el CUIT de `Generado por el Usuario` —la administradora, que es un proveedor real con boletas propias— **después** de la IA. Por eso al VEP se le pasan `allTaxIds: []` y `providerTaxId: null` al `matchProvider`, y su consorcio se matchea **sólo por CUIT** (no imprime dirección del inmueble). Ver `docs/decisiones.md` 2026-09-03.
 - `"ABL"` → Impuesto Inmobiliario / ABL de **AGIP** (CABA). Se detecta ANTES del gate `isUtilityBill` (el papel no dice "servicio" ni trae distribuidora), por `Ley 23.514` o por el par `ALUMBRADO` + `BARRIDO`. **No** entra en `usesConsortiumCuit`: sí usa el fast-path de `LspService`
 - `"GENERIC_LSP"` → prompt genérico LSP (fallback)
@@ -353,7 +360,7 @@ Analiza los primeros 4000 caracteres y retorna:
 | Sindicales (SUTERH/FATERYH/SERACARH) | `buildSindicalPrompt()` |
 | ABL / Inmobiliario (AGIP) | `buildAblPrompt()` |
 | ARCA F931 (SUSS) | `buildArcaPrompt()` |
-| VEP de ARCA (cupón de pago) | `buildVepPrompt()` — proveedor fijo `ARCA`, `providerTaxId` null |
+| VEP de ARCA (cupón de pago) | `buildVepPrompt()` — proveedor fijo `ARCA`, `providerTaxId` null. Mismo prompt para `VEP_RETENCION` (el proveedor real lo pone la fila `LspService`) |
 | Liquidación de Sueldos Digital (LSD) | `buildLsdPrompt()` — **un archivo produce N boletas**, una por empleado |
 | Genérico LSP | `buildGenericUtilityBillPrompt()` |
 | Facturas normales | `buildInvoicePrompt()` |

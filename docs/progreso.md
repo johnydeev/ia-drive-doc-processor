@@ -1,6 +1,7 @@
 # Progreso del proyecto — drive-doc-processor
 
-Actualizado al 10/09/2026 (sesión 63 — corta-corriente de IA).
+Actualizado al 11/09/2026 (sesión 64 — VEP de retención a nombre de la empresa retenida).
+Sesión 63: corta-corriente de IA (commiteado en `9896b6e`).
 Sesión 62: el VEP de ARCA pasa a registrarse como gasto.
 Sesión 61: verificación de pendientes contra producción, fix del vencimiento en Boletas entrantes,
 análisis de consumo de IA, Gemini a primero en la cadena, instrumentación de requests, triage del
@@ -15,6 +16,58 @@ VEP, y el LSD abierto en una boleta por empleado.
 > Las secciones de la **sesión 61** (instrumentación de requests, triage de no-boletas, LSD) y la del
 > **VEP** (sesión 62) dicen "implementado": las primeras entraron en `ae31c15` y `e3551a7`, el VEP en
 > `add4e11`. Lo que sigue abierto en todas ellas es el **smoke en producción**, no el commit.
+
+## 🧾 VEP de retención → empresa retenida (2026-09-11)
+
+**Estado: implementado y verificado (typecheck + lint 0 errores + 954 tests + build:jobs OK).
+SIN COMMITEAR. Sin migración.**
+
+Spec: `docs/superpowers/specs/2026-09-11-vep-retencion-design.md`
+Plan: `docs/superpowers/plans/2026-09-11-vep-retencion.md`
+
+Origen: la administración pidió ver los VEP con los que el consorcio ingresa **retenciones a su
+empresa de seguridad/limpieza** a nombre de esa empresa (Libres Seguridad en Callao 1441, Dogo en
+Pueyrredón 2418), no de ARCA. Se leyeron página por página las rendiciones de julio de Callao,
+Pueyrredón y Carabobo (este último como control: sin empleado, sin VEP).
+
+Lo que dice el papel, y que **contradice** lo que dijo la administración:
+- **Todo VEP imprime el CUIT del consorcio**, también los de retención. La empresa retenida no
+  figura en el VEP; sólo en el F.2004 (certificado de retención), otro papel.
+- `Tipo de Pago` / `Descripción Reducida` / `Concepto` no distinguen nada: un "Vep Consolidado" puede
+  ser retenciones (Callao) o la ART del encargado (Pueyrredón) con los tres campos iguales.
+- Lo único consistente son los **códigos de impuesto de los renglones**: 351/301/352/302/312/28 =
+  encargado; 217/767/353 = retención.
+
+Qué se hizo:
+- `lib/vepExtraction.ts`: `classifyVep` (EMPLEADO / RETENCION / MIXTO / DESCONOCIDO / SIN_CODIGOS) por
+  regex de los códigos, 0 tokens; `extractVepContribuyenteCuit` (el rotulado `CUIT:`).
+- Router: `VEP_RETENCION` y `VEP_MIXTO`. Sin códigos legibles sigue como `VEP` (encargado).
+- `vepMixtoGate` (antes de la IA): mixto → Revisión `[VEP MIXTO]`; códigos desconocidos (hubo un
+  `VEP IIBB` en Pendientes) → Revisión `[VEP SIN CLASIFICAR]`. 0 requests.
+- `VEP_RETENCION` usa el fast-path de `LspService` con `providerName = "VEP RETENCION"` y
+  `clientNumber` = CUIT del consorcio (dígitos), **pisado siempre desde el texto**, nunca del modelo.
+  Consorcio y empresa salen de la fila. Sin fila → Sin Asignar `VEP RETENCION SIN EMPRESA REGISTRADA`.
+- Sync del ALTA: en `_LspServices`, fila `<consorcio> | VEP RETENCION | <CUIT dígitos> | <razón social>`;
+  para ese tipo la columna DESCRIPCIÓN es la empresa y se resuelve a `providerId`.
+- Modal "Agregar gastos fijos": la fila se muestra `VEP RETENCION · <empresa>`.
+
+**Pendiente del owner (alta, en este orden):**
+1. Renombrar el proveedor `ARCA` → `ARCA EMPLEADO`. El panel no edita proveedores y el sync renombra
+   sólo por CUIT (ARCA no tiene): Claude corre un `UPDATE "Provider" SET "canonicalName" = 'ARCA
+   EMPLEADO'` sobre la fila (conserva `id`, gastos fijos y boletas), y **después** el owner cambia la
+   fila del ALTA a `ARCA EMPLEADO | (sin CUIT) | ARCA|AGENCIA DE RECAUDACION Y CONTROL ADUANERO`.
+2. Dos filas en `_LspServices`: `CALLAO 1441 | VEP RETENCION | 30702002415 | LIBRES SEGURIDAD S.R.L.` y
+   `PUEYRREDON 2418 | VEP RETENCION | 30710015607 | COOPERATIVA DE TRABAJO DE SEGURIDAD Y VIGILANCIA
+   DOGO ARGENTINO LTDA`. Sincronizar directorio.
+3. Tildar el gasto fijo `VEP RETENCION · …` en esos dos edificios.
+4. Avisar a la administración que el VEP de retención lleva el CUIT del consorcio (agente de
+   retención), no el de la empresa.
+
+**Verificación en producción** (consulta 6 de `scripts/metrics-cuota.sql`): el próximo VEP
+consolidado de Callao tiene que entrar con `providerId` = Libres y `lspServiceId` seteado.
+
+Fuera de alcance, documentado en el spec §7: más de una empresa retenida por consorcio (mismo
+régimen: el VEP no las separa), leer el F.2004, UI de edición de proveedores.
 
 ## 🔌 Corta-corriente de IA (2026-09-10)
 

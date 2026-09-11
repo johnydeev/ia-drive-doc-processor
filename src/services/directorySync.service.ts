@@ -11,6 +11,7 @@ import {
   type EntityDuplicate,
 } from "@/lib/directorySyncPlan";
 import type { ProviderTypeValue } from "@/lib/providerType";
+import { VEP_RETENCION_KEYWORD } from "@/lib/vepExtraction";
 import type { DirectoryData } from "./googleSheets.service";
 
 export type EntityReport = {
@@ -284,12 +285,26 @@ export async function syncDirectory(
       );
       continue;
     }
-    const provider = providerByName.get(ls.provider.toUpperCase()) ?? null;
+    // VEP RETENCION (spec 2026-09-11): PROVEEDOR es una palabra fija y la EMPRESA
+    // retenida viene en DESCRIPCIÓN (razón social exacta de _Proveedores). Para el
+    // resto de los tipos, DESCRIPCIÓN sigue siendo texto libre.
+    const isVepRetencion = ls.provider.trim().toUpperCase() === VEP_RETENCION_KEYWORD;
+    const providerName = isVepRetencion ? VEP_RETENCION_KEYWORD : ls.provider;
+    const provider = isVepRetencion
+      ? providerByName.get((ls.description ?? "").trim().toUpperCase()) ?? null
+      : providerByName.get(ls.provider.toUpperCase()) ?? null;
+
+    if (isVepRetencion && !provider) {
+      warnings.push(
+        `VEP RETENCION de "${ls.consortiumName}": la empresa "${ls.description ?? ""}" no está en _Proveedores (columna RAZÓN SOCIAL).`
+      );
+    }
 
     // El tipo no condiciona el vínculo con la boleta (eso lo resuelve el pipeline
     // por número de cliente), así que esto avisa y sigue: bloquear dejaría
-    // servicios sin cargar por un dato de catalogación.
-    if (provider && provider.providerType !== "SERVICIO") {
+    // servicios sin cargar por un dato de catalogación. La empresa de un VEP
+    // RETENCION es un PROVEEDOR común: ahí el aviso no aplica.
+    if (provider && !isVepRetencion && provider.providerType !== "SERVICIO") {
       warnings.push(
         `El proveedor "${ls.provider}" tiene servicios cargados pero no está marcado como SERVICIO en el ALTA (columna TIPO).`
       );
@@ -297,7 +312,7 @@ export async function syncDirectory(
 
     lspSheetRows.push({
       consortiumId,
-      providerName: ls.provider,
+      providerName,
       clientNumber: normalizeLspClientNumber(ls.clientNumber),
       description: ls.description,
       providerId: provider?.id ?? null,

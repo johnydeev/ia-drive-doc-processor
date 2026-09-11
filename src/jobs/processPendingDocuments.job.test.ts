@@ -643,6 +643,126 @@ Importe total a pagar $1.123.728,00`;
     });
   });
 
+  // ── VEP de retención (spec 2026-09-11) ────────────────────────────────────
+  // El consorcio es agente de retención de su empresa de seguridad/limpieza y le
+  // ingresa la retención a ARCA con un VEP. El papel trae el CUIT del CONSORCIO;
+  // la empresa sale de una fila `LspService` de tipo VEP RETENCION.
+  describe("VEP de retención", () => {
+    const VEP_RET_TEXT = `VEP
+Volante Electrónico de Pago
+Nro. VEP Consolidado: 1651867802
+Organismo Recaudador: ARCA
+Tipo de Pago: Vep Consolidado ARCA
+CUIT: 30-70200241-5
+Generado por el Usuario: 27324998573
+Día de Expiración: 2026-08-12
+SICORE-IMPTO.A LAS GANANCIAS (217) $272.940,60
+SICORE - RETENCIONES Y PERCEPC (767) $1.439.990,90
+RETENCIONES CONTRIB.SEG.SOCIAL (353) $822.851,94
+Importe total a pagar $2.535.783,44`;
+
+    // CUIT real (el 30-11111111-1 sembrado en makeContext es placeholder y
+    // `extractCuitsFromText` lo descarta por diseño). El edificio sale de la fila.
+    const LIBRES = { id: "libres", canonicalName: "LIBRES SEGURIDAD S.R.L.", cuit: "30-71144782-9", paymentAlias: null };
+
+    function retContext(text = VEP_RET_TEXT, over: Partial<ExtractedDocumentData> = {}) {
+      const ctx = makeContext();
+      ctx.pdfExtractor.extractTextFromPdf.mockResolvedValue(text);
+      ctx.providerRepository.findAllForMatching.mockResolvedValue([
+        { id: "arca", canonicalName: "ARCA EMPLEADO", cuit: null, matchNames: "ARCA", paymentAlias: null },
+        { id: "admin", canonicalName: "MORINIGO RAMONA NATALIA", cuit: "27-32499857-3", matchNames: null, paymentAlias: null },
+        { ...LIBRES, matchNames: null },
+      ]);
+      ctx.aiChain.run.mockImplementation(async (_t: string, cb?: AiAttemptCallback) => {
+        cb?.("gemini", true);
+        return {
+          data: emptyExtraction({
+            boletaNumber: "1651867802", provider: "ARCA", providerTaxId: null, amount: 2535783.44,
+            dueDate: "2026-08-12", allTaxIds: ["30-70200241-5", "27-32499857-3"], ...over,
+          }),
+          usage: null, provider: "gemini" as const,
+        };
+      });
+      return ctx;
+    }
+
+    it("VEP mixto (encargado + retención) → Revisión [VEP MIXTO] sin llamar a la IA", async () => {
+      const ctx = retContext(`${VEP_RET_TEXT}
+CONTRIBUCIONES SEG. SOCIAL (351) $1`);
+      const summary = createBaseSummary(1);
+
+      await processDriveFile(makeFile(), asContext(ctx), summary);
+
+      expect(ctx.aiChain.run).not.toHaveBeenCalled();
+      expect(ctx.driveService.renameFile).toHaveBeenCalledWith("file-1", expect.stringContaining("VEP MIXTO"));
+      expect(ctx.driveService.moveFileToFolder).toHaveBeenCalledWith("file-1", "pending", "failed");
+      expect(ctx.invoiceRepository.saveProcessedInvoice).not.toHaveBeenCalled();
+      expect(summary.failed).toBe(1);
+      expect(metricsCore().reason).toBe("vep_mixto");
+    });
+
+    it("VEP de códigos desconocidos → Revisión [VEP SIN CLASIFICAR]", async () => {
+      // Caso real en Pendientes: "VEP IIBB 08-26 BROWN" (ingresos brutos). Ni
+      // encargado ni retención: imputarlo a ARCA EMPLEADO sería un error silencioso.
+      const ctx = retContext(`VEP
+Volante Electrónico de Pago
+Nro. VEP: 9
+CUIT: 30-70200241-5
+INGRESOS BRUTOS (999) $84.861,28`);
+
+      await processDriveFile(makeFile(), asContext(ctx), createBaseSummary(1));
+
+      expect(ctx.aiChain.run).not.toHaveBeenCalled();
+      expect(ctx.driveService.renameFile).toHaveBeenCalledWith("file-1", expect.stringContaining("VEP SIN CLASIFICAR"));
+      expect(ctx.driveService.moveFileToFolder).toHaveBeenCalledWith("file-1", "pending", "failed");
+      expect(metricsCore().reason).toBe("vep_desconocido");
+    });
+
+    it("con fila LspService: consorcio y proveedor salen de la fila, no de la administradora", async () => {
+      // La IA coló el Nro. VEP en clientNumber: se pisa con el CUIT rotulado. Y el
+      // CUIT de la administradora está en allTaxIds: NO puede resolver el proveedor.
+      const ctx = retContext(VEP_RET_TEXT, { clientNumber: "1651867802" });
+      ctx.lspServiceRepository.findByProviderName.mockImplementation(async (_c: string, name: string, num: string) =>
+        name === "VEP RETENCION" && num === "30702002415"
+          ? {
+              id: "lsp-ret", consortiumId: "c1", clientNumber: num, providerId: "libres", providerRef: LIBRES,
+              consortium: { id: "c1", canonicalName: "THAMES 647", rawName: "CONSORCIO THAMES 647", bank: null, statementsFolderId: null },
+            }
+          : null
+      );
+
+      await processDriveFile(makeFile(), asContext(ctx), createBaseSummary(1));
+
+      expect(ctx.lspServiceRepository.findByProviderName).toHaveBeenCalledWith("client-1", "VEP RETENCION", "30702002415");
+      const guardada = ctx.invoiceRepository.saveProcessedInvoice.mock.calls[0][0];
+      expect(guardada.consortiumId).toBe("c1");
+      expect(guardada.providerId).toBe("libres");
+      expect(guardada.lspServiceId).toBe("lsp-ret");
+      expect(guardada.extraction.detail).toContain("217");
+    });
+
+    it("sin fila LspService → Sin Asignar VEP RETENCION SIN EMPRESA REGISTRADA", async () => {
+      const ctx = retContext();
+
+      await processDriveFile(makeFile(), asContext(ctx), createBaseSummary(1));
+
+      expect(ctx.driveService.renameFile).toHaveBeenCalledWith("file-1", expect.stringContaining("VEP RETENCION SIN EMPRESA REGISTRADA"));
+      expect(ctx.driveService.moveFileToUnassigned).toHaveBeenCalledWith("file-1", "pending", "unassigned");
+      expect(ctx.invoiceRepository.saveProcessedInvoice).not.toHaveBeenCalled();
+      expect(metricsCore().reason).toBe("vep_retencion_not_registered");
+    });
+
+    it("sin CUIT rotulado no entra al fast-path y termina en Sin Asignar", async () => {
+      const ctx = retContext(VEP_RET_TEXT.replace("CUIT: 30-70200241-5", ""), { allTaxIds: [] });
+
+      await processDriveFile(makeFile(), asContext(ctx), createBaseSummary(1));
+
+      expect(ctx.lspServiceRepository.findByProviderName).not.toHaveBeenCalled();
+      expect(ctx.driveService.moveFileToUnassigned).toHaveBeenCalledWith("file-1", "pending", "unassigned");
+      expect(ctx.invoiceRepository.saveProcessedInvoice).not.toHaveBeenCalled();
+    });
+  });
+
   it("not_boleta (IA): aiChain devuelve isBoleta:false → [NO BOLETA] a Sin Asignar", async () => {
     const ctx = makeContext();
     ctx.aiChain.run.mockImplementation(async (_t, cb) => {

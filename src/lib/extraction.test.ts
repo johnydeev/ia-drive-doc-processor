@@ -552,3 +552,27 @@ Importe total a pagar $1.123.728,00`;
     expect(prompt).toContain('"provider": "ARCA"');
   });
 });
+
+describe("identifyLSPProvider — tipos de VEP (spec 2026-09-11)", () => {
+  const head = "VEP\nVolante Electrónico de Pago\nNro. VEP: 1\nOrganismo Recaudador: ARCA\n";
+
+  it("VEP con códigos SICOSS → VEP", () => {
+    expect(identifyLSPProvider(head + "CONTRIBUCIONES SEG. SOCIAL (351) $1")).toBe("VEP");
+  });
+
+  it("VEP con 217/767/353 → VEP_RETENCION", () => {
+    expect(identifyLSPProvider(head + "SICORE - RETENCIONES Y PERCEPC (767) $1")).toBe("VEP_RETENCION");
+  });
+
+  it("VEP con SICOSS y 353 → VEP_MIXTO", () => {
+    expect(identifyLSPProvider(head + "(351) $1\n(353) $2")).toBe("VEP_MIXTO");
+  });
+
+  it("VEP con códigos desconocidos → VEP_MIXTO", () => {
+    expect(identifyLSPProvider(head + "INGRESOS BRUTOS (999) $1")).toBe("VEP_MIXTO");
+  });
+
+  it("VEP sin códigos legibles → VEP (comportamiento actual)", () => {
+    expect(identifyLSPProvider(head + "Importe total a pagar $1")).toBe("VEP");
+  });
+});

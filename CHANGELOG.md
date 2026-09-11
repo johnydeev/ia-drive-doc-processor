@@ -3,6 +3,22 @@
 ## [Unreleased]
 
 ### Added
+- **VEP de retención a nombre de la empresa retenida (2026-09-11)**. Un VEP cuyos renglones traen
+  códigos 217/767/353 (SICORE Ganancias, SICORE/SIRE IVA, retención de contribuciones de seguridad
+  social) se resuelve por una fila `LspService` de tipo `VEP RETENCION` con el CUIT del consorcio
+  como número de cliente: consorcio y empresa salen de la fila. Sin fila → Sin Asignar
+  `VEP RETENCION SIN EMPRESA REGISTRADA`.
+  - `classifyVep` / `extractVepConceptCodes` / `extractVepContribuyenteCuit` en `lib/vepExtraction.ts`
+    (regex, 0 tokens). Router: `VEP_RETENCION` y `VEP_MIXTO`.
+  - `vepMixtoGate` antes de la IA: cupón con códigos de encargado **y** retención → Revisión
+    `[VEP MIXTO]`; códigos fuera de ambas listas (ej. IIBB) → Revisión `[VEP SIN CLASIFICAR]`.
+  - Sync del ALTA: en `_LspServices`, PROVEEDOR `VEP RETENCION` toma la razón social de la empresa
+    desde DESCRIPCIÓN y la resuelve a `providerId`; avisa si no existe.
+  - "Agregar gastos fijos" muestra la fila como `VEP RETENCION · <empresa>`.
+  - Alta pendiente del owner: renombre `ARCA` → `ARCA EMPLEADO` (UPDATE + fila del ALTA) y las dos
+    filas de Callao 1441 y Pueyrredón 2418. Ver `docs/progreso.md`.
+
+### Added
 - **Corta-corriente de la cadena de IA (2026-09-10)**. Cuando los tres proveedores fallan por
   infraestructura, el corte se abre **por cliente** durante 30 minutos y las boletas siguientes
   vuelven a Pendientes sin gastar nada, en vez de que cada archivo redescubra la caída pagando el

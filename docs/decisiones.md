@@ -4,6 +4,64 @@ Registro de decisiones tomadas ante problemas reales encontrados en producción.
 
 ---
 
+## 2026-09-11 — El VEP de retención no dice a quién se le retiene; lo dice el ALTA
+
+### Problema
+
+La administración quiere ver el VEP con el que el consorcio ingresa a ARCA las retenciones que le
+practica a su empresa de seguridad o limpieza **a nombre de esa empresa**, no de ARCA. Dio dos reglas:
+"ese VEP va con el CUIT de la empresa" y "se distingue por el tipo de pago". Leídas las rendiciones
+de julio de Callao 1441 y Pueyrredón 2418 (más Carabobo 37 como control sin empleado), **las dos son
+falsas**: todo VEP imprime el CUIT del consorcio —es el agente de retención—, la empresa sólo aparece
+en el F.2004, y "Vep Consolidado ARCA / VCON#n / VEP CONSOLIDADO" es idéntico para un cupón de
+retenciones (Callao) y para la ART del encargado (Pueyrredón p12).
+
+### Decisión
+
+1. **Clasificar por los códigos de impuesto de los renglones**, con regex y sin tokens: 351/301/352/
+   302/312/28 = encargado; 217/767/353 = retención. Es lo único estable entre cupones y meses.
+2. **Modelar "en este edificio las retenciones son a esta empresa" como una fila `LspService`** con
+   `providerName = "VEP RETENCION"` y `clientNumber` = CUIT del consorcio en dígitos, con la empresa en
+   `providerId` (resuelta por el sync desde la columna DESCRIPCIÓN). El fast-path terminal que ya
+   existe hace el resto, igual que con la partida del ABL. Cero migración, cero UI nueva, y la fila
+   aparece en "Agregar gastos fijos" como servicio del edificio.
+3. **Una empresa retenida por consorcio.** Los códigos identifican el régimen, no la empresa: dos
+   empresas del mismo régimen serían indistinguibles en el VEP. Decisión del owner; se revisa si
+   aparece el caso.
+4. **Mixto o desconocido → Revisión antes de la IA.** Un cupón con códigos de los dos grupos no se
+   puede imputar a un proveedor; uno con códigos fuera de ambas listas (hubo un `VEP IIBB` en
+   Pendientes) tampoco tiene regla. Etiquetas `[VEP MIXTO]` / `[VEP SIN CLASIFICAR]`, 0 requests.
+5. **Sin códigos legibles sigue como VEP del encargado**, que es el caso mayoritario y el que ya
+   funcionaba. No se inventa una retención sin evidencia.
+6. **`clientNumber` se pisa siempre desde el texto** (`extractVepContribuyenteCuit`, el rotulado
+   `CUIT:`). El spec del 2026-09-03 documentó que un `Nro. VEP` colado por la IA rebota el cupón por el
+   fast-path; `VEP_RETENCION` es el primer VEP que entra a ese fast-path y por eso no puede depender
+   del modelo.
+7. **`VEP_RETENCION` se saltea la resolución de proveedor por CUIT** dentro del fast-path. Sin ese
+   guard, el CUIT de "Generado por el Usuario" (la administradora, proveedor real) resolvía
+   `lspProviderId` y la boleta salía a su nombre. Es la misma trampa del 2026-09-03 en otro lugar.
+8. El proveedor `ARCA` pasa a llamarse **`ARCA EMPLEADO`** (le entran sólo cupones del encargado). El
+   match es por nombre contra `matchNames`, así que basta con dejar `ARCA` como alias. El renombre se
+   hace con un `UPDATE` de una fila (el panel no edita proveedores y el sync renombra sólo por CUIT).
+
+### Alternativas descartadas
+
+- **Campo `Provider.retentionForConsortiumId`**: más limpio, pero migración + UI + columna nueva en el
+  ALTA para el mismo resultado.
+- **Dejarlo en ARCA con etiqueta**: no resuelve el pedido.
+- **Pedirle los códigos a la IA**: determinístico por regex; gastar tokens en eso no tiene sentido.
+- **Distinguir por `Tipo de Pago` / `Descripción Reducida` / `Concepto`**: medido contra tres cupones
+  reales, no separan nada.
+
+### Impacto
+
+`lib/vepExtraction.ts` (+ clasificación), `lib/extraction.ts` (router, tipos, fallback),
+`jobs/processPendingDocuments.job.ts` (`vepMixtoGate`, `cleanClientNumberStep`, `resolveAssignment`,
+etiqueta), `services/directorySync.service.ts` (fila `VEP RETENCION`),
+`app/admin/obligaciones/lib/availableTargets.ts` (etiqueta). +26 tests (954). Sin migración.
+
+---
+
 ## 2026-09-10 — El cartel SIN MONTO no describía la boleta: describía que nadie la leyó
 
 ### Problema

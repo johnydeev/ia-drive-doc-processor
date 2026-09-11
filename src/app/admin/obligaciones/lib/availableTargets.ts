@@ -44,7 +44,16 @@ export function availableTargets(
 
   const lsp: TargetOption[] = consortium.lspServices
     .filter((l) => !usedLspIds.has(l.id))
-    .map((l) => ({ kind: "lsp" as const, id: l.id, label: `${l.providerName} (${l.clientNumber})` }))
+    .map((l) => {
+      // VEP RETENCION (2026-09-11): el número es el CUIT del consorcio, que no le
+      // dice nada al administrador; lo que identifica la fila es la empresa retenida.
+      const empresa =
+        l.providerName === "VEP RETENCION" && l.providerId
+          ? providers.find((p) => p.id === l.providerId)?.canonicalName
+          : undefined;
+      const label = empresa ? `${l.providerName} · ${empresa}` : `${l.providerName} (${l.clientNumber})`;
+      return { kind: "lsp" as const, id: l.id, label };
+    })
     .filter((o) => matches(o.label))
     .sort((a, b) => a.label.localeCompare(b.label, "es"));
 

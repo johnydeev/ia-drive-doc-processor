@@ -4,7 +4,7 @@ import { correctCaeDueDate } from "@/lib/caeDueDateGuard";
 import { correctVatContainedAmount } from "@/lib/vatContainedAmountGuard";
 import { ExtractedDocumentData } from "@/types/extractedDocument.types";
 import { buildLsdPrompt } from "@/lib/lsdExtraction";
-import { buildVepPrompt } from "@/lib/vepExtraction";
+import { buildVepPrompt, classifyVep } from "@/lib/vepExtraction";
 
 /**
  * Normaliza un CUIT devuelto por la IA al formato canónico `XX-XXXXXXXX-X`
@@ -106,6 +106,8 @@ const OUTPUT_JSON_TEMPLATE = {
 export type LSPProvider =
   | "LSD"
   | "VEP"
+  | "VEP_RETENCION"
+  | "VEP_MIXTO"
   | "EDESUR"
   | "EDENOR"
   | "AYSA"
@@ -133,6 +135,8 @@ export const LSP_FALLBACK_NAMES: Partial<Record<LSPProvider, string>> = {
   LITORAL_GAS: "LITORAL GAS S.A.",
   ABSA: "ABSA",
   PERSONAL: "PERSONAL",
+  // Texto del proveedor si la fila `VEP RETENCION` del ALTA no tiene empresa.
+  VEP_RETENCION: "VEP RETENCION",
   SUTERH: "SUTERH",
   FATERYH: "FATERYH",
   SERACARH: "SERACARH",
@@ -224,7 +228,15 @@ export function identifyLSPProvider(text: string): LSPProvider | null {
   // la regla del 931 porque un VEP de SICOSS no imprime ese número (diría ARCA
   // sólo por "Organismo Recaudador"), y antes de los sindicales por el mismo
   // criterio de especificidad. El CUIT del papel es el del CONTRIBUYENTE.
-  if (isVep(upper)) return "VEP";
+  if (isVep(upper)) {
+    // Los renglones dicen qué paga el cupón (spec 2026-09-11). Retención → fila
+    // LspService por CUIT del consorcio; mixto o desconocido → Revisión sin IA.
+    // Sin códigos legibles sigue como VEP (encargado), que es el caso mayoritario.
+    const kind = classifyVep(text);
+    if (kind === "RETENCION") return "VEP_RETENCION";
+    if (kind === "MIXTO" || kind === "DESCONOCIDO") return "VEP_MIXTO";
+    return "VEP";
+  }
 
   // ── Boletas sindicales (SUTERH / FATERYH / SERACARH) ─────────────────────
   // No son servicios públicos (van ANTES del gate isUtilityBill) pero usan el
@@ -433,6 +445,8 @@ export function buildExtractionPrompt(text: string): string {
   // Route to specific prompt per LSP provider
   switch (lspProvider) {
     case "VEP":
+    case "VEP_RETENCION":
+    case "VEP_MIXTO":
       return buildVepPrompt(relevantText);
     case "LSD":
       return buildLsdPrompt(relevantText);

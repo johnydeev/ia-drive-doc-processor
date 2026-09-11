@@ -5,6 +5,7 @@ import { matchConsortium, matchProvider, normName } from "@/lib/assignmentMatchi
 import { cuitDigits, formatCuit, extractCuitsFromText, cuitsEqual } from "@/lib/cuit";
 import { extractEmitterCuitFromBarcode } from "@/lib/afipBarcode";
 import { identifyLSPProvider, LSPProvider, LSP_FALLBACK_NAMES, annotateSindicalProvider, usesConsortiumCuit } from "@/lib/extraction";
+import { classifyVep, extractVepConceptCodes, extractVepContribuyenteCuit, VEP_RETENCION_KEYWORD } from "@/lib/vepExtraction";
 import { refineExtractionWithRawText } from "@/lib/extraction";
 import { parseLsdOutput } from "@/lib/lsdExtraction";
 import { validateLsdRoster } from "@/lib/lsdValidation";
@@ -177,6 +178,9 @@ const LSP_ROUTER_TO_CANONICAL: Record<string, string> = {
   // ABL: sí usa LspService (la PARTIDA hace de número de cliente), pero el papel
   // no trae CUIT, así que el proveedor se resuelve por este nombre canónico.
   "ABL":         "AGIP",
+  // VEP de retención (2026-09-11): palabra fija de la columna PROVEEDOR del ALTA.
+  // La empresa retenida sale del `providerRef` de la fila, no de este nombre.
+  "VEP_RETENCION": VEP_RETENCION_KEYWORD,
 };
 
 function buildDriveFileUrl(fileId: string, webViewLink?: string | null): string {
@@ -329,7 +333,11 @@ async function resolveAssignment(
   let lspProviderTaxId: string | null = null;
   let lspProviderAlias: string | null = null;
 
-  if (lspProvider && !isSindicalLsp && allTaxIds.length > 0) {
+  // VEP de retención: el proveedor es la EMPRESA de la fila LspService, nunca el
+  // dueño de un CUIT del papel — ahí viaja la administradora (spec 2026-09-03 §3.2).
+  const providerFromLspRow = lspProvider === "VEP_RETENCION";
+
+  if (lspProvider && !isSindicalLsp && !providerFromLspRow && allTaxIds.length > 0) {
     const allProviders = await providerRepository.findAllForMatching(clientId);
 
     for (const cuit of allTaxIds) {
@@ -431,6 +439,15 @@ async function resolveAssignment(
         };
       }
 
+      if (providerFromLspRow) {
+        return {
+          ...base,
+          unassigned: true,
+          unassignedReason: `VEP de retención: el consorcio ${normalizedClientNumber} no tiene empresa retenida en _LspServices`,
+          reasonCategory: "vep_retencion_not_registered",
+        };
+      }
+
       pipelineLog.lspClientNumberNotRegistered(clientId, lspProviderCanonicalName!, normalizedClientNumber);
       return {
         ...base,
@@ -457,7 +474,7 @@ async function resolveAssignment(
   // El VEP tampoco ofrece nombre: no imprime la dirección del inmueble, así que su
   // único identificador es el CUIT del contribuyente. Dejar viva la vía por nombre
   // sólo abre la puerta a que un `consortium` mal extraído lo impute a otro edificio.
-  const consortiumCuitOnly = isPlainInvoice || lspProvider === "VEP";
+  const consortiumCuitOnly = isPlainInvoice || lspProvider === "VEP" || lspProvider === "VEP_RETENCION";
   const consortiumMatch = matchConsortium(allConsortiums, rawConsortium, allTaxIds, consortiumCuitOnly);
 
   if (!consortiumMatch) {
@@ -565,7 +582,7 @@ async function resolveAssignment(
   // del texto, así que la regla del prompt no alcanza: `usesConsortiumCuit` habilita el
   // match por nombre pero NO desactiva el match por CUIT, que corre antes. El proveedor
   // de un VEP es ARCA, siempre, y se resuelve por nombre.
-  const isVepInvoice = lspProvider === "VEP";
+  const isVepInvoice = lspProvider === "VEP" || lspProvider === "VEP_RETENCION";
   const providerMatch = matchProvider(
     allProviders,
     isVepInvoice ? null : rawCuit,
@@ -769,6 +786,39 @@ async function divertNotBoleta(
   }
   ctx.summary.notBoleta = (ctx.summary.notBoleta ?? 0) + 1;
   pipelineLog.fileCompleted(cid, file.name, { processed: 0, unassigned: 0, duplicate: false }, "NO BOLETA → Sin Asignar");
+  return { kind: "halt", result: m.result, reason: m.reason };
+}
+
+/**
+ * 3.6 VEP que no se puede imputar a un solo proveedor (spec 2026-09-11): mezcla
+ * encargado + retención, o trae códigos que no están en ninguna lista (un VEP de
+ * IIBB, por ejemplo). Va a Revisión ANTES de la IA: 0 requests, y lo separa una
+ * persona. Mismo patrón que `noPeriodGate`.
+ */
+async function vepMixtoGate(ctx: PipelineContext): Promise<StepResult> {
+  if (ctx.lspProvider !== "VEP_MIXTO" || ctx.isDuplicate) return { kind: "continue" };
+  const { file } = ctx;
+  const { resolvedConfig, driveService } = ctx.deps;
+  const m = ctx.m;
+  const cid = resolvedConfig.clientId;
+  const finalSourceFolderId = ctx.finalSourceFolderId;
+
+  const kind = classifyVep(ctx.docText ?? "");
+  const tag = kind === "MIXTO" ? "VEP MIXTO" : "VEP SIN CLASIFICAR";
+  m.result = "failed";
+  m.reason = kind === "MIXTO" ? "vep_mixto" : "vep_desconocido";
+  pipelineLog.stepStart(cid, `⚠️ ${tag} → Revisión (sin IA): "${file.name}"`);
+  if (resolvedConfig.driveFailedFolderId && finalSourceFolderId) {
+    await ctx.runStep(`Renombrar [${tag}]`, () => driveService.renameFile(file.id, `[${tag}] ${file.name}`), "move");
+    await ctx.runStep(
+      `Mover a Revisión (${tag.toLowerCase()})`,
+      () => driveService.moveFileToFolder(file.id, finalSourceFolderId, resolvedConfig.driveFailedFolderId!),
+      "move"
+    );
+    pipelineLog.movedToFailed(cid, file.id);
+  }
+  ctx.summary.failed += 1;
+  pipelineLog.fileCompleted(cid, file.name, { processed: 0, unassigned: 0, duplicate: false }, `${tag} → Revisión`);
   return { kind: "halt", result: m.result, reason: m.reason };
 }
 
@@ -1252,6 +1302,18 @@ async function cleanClientNumberStep(ctx: PipelineContext): Promise<StepResult> 
   const cid = ctx.deps.resolvedConfig.clientId;
   const extracted = ctx.extracted!;
 
+  // VEP de retención (spec 2026-09-11): el ÚNICO VEP que usa LspService. La clave
+  // es el CUIT rotulado del contribuyente, leído del texto — nunca lo que devolvió
+  // el modelo (un Nro. VEP colado rebota el cupón por el fast-path terminal).
+  if (ctx.lspProvider === "VEP_RETENCION") {
+    extracted.clientNumber = extractVepContribuyenteCuit(ctx.docText ?? "");
+    const codes = extractVepConceptCodes(ctx.docText ?? "");
+    extracted.detail = codes.length ? `Retención · ${codes.join(" · ")}` : "Retención";
+    if (!extracted.clientNumber) {
+      pipelineLog.stepStart(cid, "⚠️ VEP de retención sin CUIT rotulado — sigue al matching normal");
+    }
+  }
+
   // Guard: clientNumber es exclusivo de boletas LSP.
   // Si la IA alucinó un valor para una boleta normal, limpiarlo.
   // Ninguna boleta del grupo `usesConsortiumCuit` (sindicales, ARCA, VEP) usa
@@ -1455,6 +1517,8 @@ const UNASSIGNED_TAG_BY_CATEGORY: Record<string, string> = {
   consortium_not_found: "SIN CONSORCIO",
   consortium_not_registered: "CONSORCIO SIN REGISTRAR",
   lsp_clientnumber_not_registered: "LSP SIN REGISTRAR",
+  // VEP de retención (2026-09-11): falta la fila `VEP RETENCION` del consorcio en el ALTA.
+  vep_retencion_not_registered: "VEP RETENCION SIN EMPRESA REGISTRADA",
   // Facturas comunes (2026-08-26): el matching es 100% por CUIT, así que la
   // etiqueta dice exactamente cuál de los dos CUITs falta y por qué — si el papel
   // no lo trae (problema del proveedor que emitió) o si falta darlo de alta.
@@ -1796,6 +1860,7 @@ export async function processDriveFile(
       circuitBreakerGate,
       textExtractStep,
       documentTriageGate,
+      vepMixtoGate,
       aiExtractStep,
       isBoletaGate,
       missingAmountGate,
