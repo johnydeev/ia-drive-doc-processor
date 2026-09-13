@@ -74,21 +74,3 @@ describe("availableTargets", () => {
     expect(out.providers).toEqual([]);
   });
 });
-
-describe("availableTargets — fila VEP RETENCION (spec 2026-09-11)", () => {
-  it("se etiqueta con la empresa retenida", () => {
-    const c = {
-      ...consortium,
-      lspServices: [{ id: "l3", providerName: "VEP RETENCION", clientNumber: "30702002415", description: null, providerId: "p3" }],
-    };
-    expect(availableTargets(c, providers, "").lsp[0].label).toBe("VEP RETENCION · N.G. FUMIGACION");
-  });
-
-  it("sin empresa muestra el número, como cualquier LSP", () => {
-    const c = {
-      ...consortium,
-      lspServices: [{ id: "l3", providerName: "VEP RETENCION", clientNumber: "30702002415", description: null, providerId: null }],
-    };
-    expect(availableTargets(c, providers, "").lsp[0].label).toBe("VEP RETENCION (30702002415)");
-  });
-});

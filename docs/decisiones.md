@@ -4,6 +4,63 @@ Registro de decisiones tomadas ante problemas reales encontrados en producción.
 
 ---
 
+## 2026-09-12 — La retención llega como paquete, y el paquete ya generaba boletas fantasma
+
+### Problema
+
+El owner trajo 4 retenciones de septiembre para analizar. No eran VEP sueltos: la administración arma
+un **paquete** — su planilla (consorcio, **empresa con CUIT**, factura, importe total, retenciones,
+subtotal, neto) + certificados SICORE/F.2005/F.2004 + VEP consolidado — y sube la factura aparte.
+Verificado con el extractor real: el router daba `null` (el marcador del VEP está en la última
+página) y el paquete iba a la IA como factura común, que devolvía la empresa con el **nro. de factura
+y el importe total**. Y ya había pasado: **7 boletas fantasma por el total de la factura** (5 de
+ellas duplicando la real, que entró con el número en otro formato) y **3 a nombre de la
+administradora** desde certificados sueltos. Además, Boedo 414 retiene a dos empresas (Aseclim y
+Mayoral) con los mismos regímenes: la fila `VEP RETENCION` del ALTA diseñada el día anterior no podía
+distinguirlas.
+
+### Decisión
+
+1. **`LIQ_RETENCION`, determinístico, 0 requests.** Router por tres marcadores de la planilla
+   (`SUBTOTAL RETENCIONES`, `IMPORTE NETO`, `NOMBRE DEL PROVEEDOR`), evaluado antes que todo lo
+   demás. `parseLiqRetencion` saca los dos CUIT (checksum), el subtotal, las líneas, el nro. de
+   factura y, de la última página, el Nro. VEP y la expiración. La planilla es un formato fijo y
+   pdf-parse la devuelve una línea por campo; la IA no aporta nada y su recorte de 80 líneas ni ve el
+   VEP.
+2. **Una boleta por paquete, por la retención, a nombre de la empresa**, con **el Nro. VEP como
+   número** — no el de la factura, que entra por su propio PDF y tiene que convivir con esta.
+   `allTaxIds` son exactamente los dos CUIT de la planilla: el de la administradora está en el VEP y
+   no debe entrar (la trampa del 2026-09-03, otra vez).
+3. **El paso nuevo llena `ctx.extracted` y `aiExtractStep` se saltea si ya está lleno.** Un guard de
+   una línea; el resto del pipeline (dedup, asignación, canonización, Sheets) no sabe que no hubo IA.
+4. **VEP de retención suelto → Revisión**, sin IA, con etiqueta que pide el paquete completo. El cupón
+   no dice a quién se le retuvo; adivinarlo por el ALTA fue la idea de ayer y no sobrevivió al primer
+   consorcio con dos empresas. Se retira toda esa plomería.
+5. **Certificado suelto → capa 0 del triage** (`[NO BOLETA - CERTIFICADO RETENCION]`). Es el
+   comprobante de una retención ya ingresada: no hay nada que pagar. La capa 0 deja de estar vacía.
+   El paquete completo la saltea porque el router ya lo marcó.
+6. `textExtractStep` conserva el texto completo para `LIQ_RETENCION` (los demás LSP se recortan a la
+   página 1): el VEP está al final.
+7. Código **216** (SIRE IVA) sumado a la lista de retención: convive con el 767 (SICORE) en los
+   paquetes reales.
+
+### Alternativas descartadas
+
+- **Prompt propio para el paquete**: gasta tokens en algo fijo y no ve la última página.
+- **Sacar también la factura del paquete**: es exactamente el fantasma que ya había.
+- **Mantener la fila `VEP RETENCION` del ALTA como camino paralelo**: dos caminos para lo mismo, y
+  el que no distingue empresas.
+
+### Impacto
+
+`lib/liqRetencion.ts` (nuevo, +11 tests), `lib/extraction.ts` (router, tipo), `lib/vepExtraction.ts`
+(216, sin keyword), `lib/documentClassifier.ts` (capa 0 con caso), `jobs/processPendingDocuments.job.ts`
+(`liqRetencionExtractStep`, `vepReviewGate`, guards, retiro), `services/directorySync.service.ts` y
+`app/admin/obligaciones/lib/availableTargets.ts` (retiro). 988 tests. Sin migración. Pendiente del
+owner: borrar las 10 boletas fantasma (lista en `docs/progreso.md`).
+
+---
+
 ## 2026-09-11 — El VEP de retención no dice a quién se le retiene; lo dice el ALTA
 
 ### Problema

@@ -3,6 +3,22 @@
 ## [Unreleased]
 
 ### Added
+- **Liquidación de retenciones como paquete, sin IA (2026-09-12)**. El paquete que arma la
+  administración (planilla + certificados + VEP) se detecta por tres marcadores de la planilla
+  (`LIQ_RETENCION`) y produce **una boleta por la retención**, a nombre de la empresa, con el Nro. VEP
+  como número, todo por regex (`lib/liqRetencion.ts`, 0 requests). Hasta hoy entraba como factura
+  común por el importe total: en la base había 7 boletas fantasma y 3 a nombre de la administradora.
+  - `liqRetencionExtractStep` antes de la IA; `aiExtractStep` se saltea si `ctx.extracted` ya está.
+  - VEP de retención **suelto** → Revisión `[VEP RETENCION SUELTO - SUBIR LIQUIDACION COMPLETA]`.
+  - Certificado de retención suelto → `[NO BOLETA - CERTIFICADO RETENCION]` (capa 0 del triage).
+  - Código 216 (SIRE IVA) en la lista de retención.
+
+### Removed
+- La fila `VEP RETENCION` de `_LspServices`, su rama en el sync, la etiqueta del modal y el fast-path
+  por `LspService` para `VEP_RETENCION` (agregados el 2026-09-11): un consorcio retiene a más de una
+  empresa y el paquete ya trae la empresa en el papel.
+
+### Added
 - **VEP de retención a nombre de la empresa retenida (2026-09-11)**. Un VEP cuyos renglones traen
   códigos 217/767/353 (SICORE Ganancias, SICORE/SIRE IVA, retención de contribuciones de seguridad
   social) se resuelve por una fila `LspService` de tipo `VEP RETENCION` con el CUIT del consorcio

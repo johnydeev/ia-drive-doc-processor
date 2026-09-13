@@ -1,6 +1,7 @@
 # Progreso del proyecto — drive-doc-processor
 
-Actualizado al 11/09/2026 (sesión 64 — VEP de retención a nombre de la empresa retenida).
+Actualizado al 12/09/2026 (sesión 65 — liquidación de retenciones como paquete; retiro del camino LspService de ayer).
+Sesión 64: VEP de retención (commiteado en `a9de5c0`).
 Sesión 63: corta-corriente de IA (commiteado en `9896b6e`).
 Sesión 62: el VEP de ARCA pasa a registrarse como gasto.
 Sesión 61: verificación de pendientes contra producción, fix del vencimiento en Boletas entrantes,
@@ -17,10 +18,59 @@ VEP, y el LSD abierto en una boleta por empleado.
 > **VEP** (sesión 62) dicen "implementado": las primeras entraron en `ae31c15` y `e3551a7`, el VEP en
 > `add4e11`. Lo que sigue abierto en todas ellas es el **smoke en producción**, no el commit.
 
+## 📋 Liquidación de retenciones: el paquete de la administración (2026-09-12)
+
+**Estado: implementado y verificado (typecheck + lint 0 errores + 988 tests + build:jobs OK).
+SIN COMMITEAR. Sin migración.** Reemplaza parcialmente lo de ayer (ver abajo).
+
+Spec: `docs/superpowers/specs/2026-09-12-liquidacion-retenciones-design.md`
+Plan: `docs/superpowers/plans/2026-09-12-liquidacion-retenciones.md`
+
+Origen: el owner trajo 4 retenciones frescas de septiembre (Mayoral y Aseclim en Boedo 414, Shomer
+en Rivadavia 4243, Dogo en Pueyrredón 2418). No son VEP sueltos: son **paquetes de 3 a 5 páginas**
+que arma la administración — planilla propia (CUIT del consorcio, **empresa con CUIT**, nro. de
+factura, importe total, retención por impuesto, `SUBTOTAL RETENCIONES`, `IMPORTE NETO`) +
+certificados SICORE / F.2005 / F.2004 + VEP consolidado. **La factura se sube aparte.**
+
+Hallazgo de la re-revisión contra la base: **ya había pasado 10 veces.** El pipeline los trataba como
+factura común y generó 7 boletas fantasma de la empresa por el importe TOTAL de la factura (Mayoral
+05 y 06, Aseclim 05/06/08, G4S 05, Libres 08 — 5 duplican la factura real, que entró con el número en
+otro formato) y 3 a nombre de la administradora (certificados sueltos, 19/08).
+
+Qué se hizo:
+- `LIQ_RETENCION` en el router (`SUBTOTAL RETENCIONES` + `IMPORTE NETO` + `NOMBRE DEL PROVEEDOR`),
+  evaluado primero de todo. `lib/liqRetencion.ts`: `parseLiqRetencion` / `toExtractedDocument`,
+  todo por regex sobre el texto de pdf-parse (una línea por campo). **0 requests.**
+- `liqRetencionExtractStep` llena `ctx.extracted` antes de la IA; `aiExtractStep` se saltea si ya
+  está lleno. Una boleta por paquete: proveedor = la empresa (por CUIT, como cualquier factura),
+  monto = subtotal de retenciones, **nro. = Nro. VEP** (no el de la factura, para no chocar con la
+  real), vencimiento = expiración del VEP, detalle con factura y desglose.
+- `textExtractStep` conserva el texto completo para este tipo (el VEP está en la última página).
+- **VEP de retención suelto** → Revisión `[VEP RETENCION SUELTO - SUBIR LIQUIDACION COMPLETA]`, 0
+  requests (`vepMixtoGate` → `vepReviewGate`). El cupón no dice a quién se le retuvo.
+- **Certificado suelto** (SICORE / F.2004 / F.2005 sin planilla) → capa 0 del triage,
+  `[NO BOLETA - CERTIFICADO RETENCION]`, Sin Asignar. La capa 0 deja de estar vacía.
+- Código **216** (SIRE IVA) agregado a `VEP_RETENCION_CODES`.
+- **Retirado de ayer**: la fila `VEP RETENCION` del ALTA, su rama en el sync, la etiqueta del modal,
+  el fast-path por `LspService` y la categoría `vep_retencion_not_registered`. Un consorcio retiene a
+  más de una empresa (Boedo 414: Aseclim y Mayoral), así que esa regla no podía funcionar.
+
+**Pendiente del owner:**
+1. **Borrar las 10 boletas fantasma.** Las de mayo–agosto desde la pestaña Boletas del consorcio (van
+   a Revisión, NO se reprocesan: su período ya cerró). Lista: Boedo 414 / Mayoral `00001-00001728`
+   y `00001-00001755`; Boedo 414 / Aseclim `00003-00008853`, `00003-00009049`, `00003-00009331`;
+   Riobamba 1261 / G4S `00008-00001688`; Callao 1441 / Libres `00002-00000211`; y las 3 de MORINIGO
+   RAMONA NATALIA con detalle "RETENCIONES Y PERCEPCIONES…" (Callao ×2, Boedo ×1, del 19/08).
+2. Si creó filas `VEP RETENCION` en `_LspServices`, borrarlas antes del próximo sync.
+3. Subir los 4 paquetes de septiembre a Pendientes y verificar con la consulta 6b de
+   `scripts/metrics-cuota.sql`: 4 boletas con detalle `Retenciones s/fra. …`, proveedor = la
+   empresa, `aiRequests = 0`.
+
 ## 🧾 VEP de retención → empresa retenida (2026-09-11)
 
-**Estado: implementado y verificado (typecheck + lint 0 errores + 954 tests + build:jobs OK).
-SIN COMMITEAR. Sin migración.**
+**Estado: commiteado en `master` el 2026-09-11 (`a9de5c0`). El 2026-09-12 se RETIRÓ el camino por
+`LspService` (fila `VEP RETENCION`, fast-path, etiqueta del modal): ver la sección de arriba. Sigue
+vigente la clasificación por códigos, `VEP_MIXTO` y `ARCA EMPLEADO`.**
 
 Spec: `docs/superpowers/specs/2026-09-11-vep-retencion-design.md`
 Plan: `docs/superpowers/plans/2026-09-11-vep-retencion.md`
@@ -51,11 +101,16 @@ Qué se hizo:
   para ese tipo la columna DESCRIPCIÓN es la empresa y se resuelve a `providerId`.
 - Modal "Agregar gastos fijos": la fila se muestra `VEP RETENCION · <empresa>`.
 
-**Pendiente del owner (alta, en este orden):**
-1. Renombrar el proveedor `ARCA` → `ARCA EMPLEADO`. El panel no edita proveedores y el sync renombra
-   sólo por CUIT (ARCA no tiene): Claude corre un `UPDATE "Provider" SET "canonicalName" = 'ARCA
-   EMPLEADO'` sobre la fila (conserva `id`, gastos fijos y boletas), y **después** el owner cambia la
-   fila del ALTA a `ARCA EMPLEADO | (sin CUIT) | ARCA|AGENCIA DE RECAUDACION Y CONTROL ADUANERO`.
+**Alta — hecho el 2026-09-11 (commiteado en `master`, deploy automático):**
+1. ~~Renombrar `ARCA` → `ARCA EMPLEADO`~~. **Hecho, con vuelta:** el owner sincronizó el ALTA antes del
+   `UPDATE`, así que el sync creó un `ARCA EMPLEADO` nuevo y vacío (el sync renombra sólo por CUIT y
+   ARCA no tiene). Se resolvió mudando por SQL todo lo que apuntaba al `ARCA` viejo (FixedExpense,
+   Invoice, Receipt, LspService, ConsortiumProvider) al nuevo, verificando que quedara en 0 en las 5
+   tablas, y borrándolo. Queda un solo `ARCA EMPLEADO` (`cmtwsswiz004smp018ls4grn4`), alias `ARCA`.
+   Además se cargó `ARCA EMPLEADO` como gasto fijo en los **25 edificios con `SUELDO`** que no lo tenían
+   (27 en total; Carlos Calvo 1357 lo tenía sin SUELDO ni SUTERH — queda a revisar por el owner).
+
+**Pendiente del owner:**
 2. Dos filas en `_LspServices`: `CALLAO 1441 | VEP RETENCION | 30702002415 | LIBRES SEGURIDAD S.R.L.` y
    `PUEYRREDON 2418 | VEP RETENCION | 30710015607 | COOPERATIVA DE TRABAJO DE SEGURIDAD Y VIGILANCIA
    DOGO ARGENTINO LTDA`. Sincronizar directorio.

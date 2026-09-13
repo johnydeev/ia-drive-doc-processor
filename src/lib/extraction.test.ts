@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { MAYORAL as LIQ_MAYORAL } from "./liqRetencion.test";
 import {
   identifyLSPProvider,
   buildExtractionPrompt,
@@ -574,5 +575,24 @@ describe("identifyLSPProvider — tipos de VEP (spec 2026-09-11)", () => {
 
   it("VEP sin códigos legibles → VEP (comportamiento actual)", () => {
     expect(identifyLSPProvider(head + "Importe total a pagar $1")).toBe("VEP");
+  });
+});
+
+describe("identifyLSPProvider — liquidación de retenciones (spec 2026-09-12)", () => {
+  it("el paquete completo es LIQ_RETENCION aunque termine en un VEP", () => {
+    expect(identifyLSPProvider(LIQ_MAYORAL)).toBe("LIQ_RETENCION");
+  });
+
+  it("una factura con 'retenciones' en el detalle sigue siendo factura común", () => {
+    expect(identifyLSPProvider(`FACTURA B
+IMPORTE TOTAL 1.000,00
+GASTOS Y RETENCIONES FOJAS`)).toBeNull();
+  });
+
+  it("el VEP de retención suelto sigue siendo VEP_RETENCION", () => {
+    expect(identifyLSPProvider(`VEP
+Volante Electrónico de Pago
+Nro. VEP: 1
+(216) $1`)).toBe("VEP_RETENCION");
   });
 });

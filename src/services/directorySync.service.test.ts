@@ -160,43 +160,6 @@ describe("syncDirectory", () => {
     expect(report.lspServices.created).toBe(1);
   });
 
-  // ── Fila VEP RETENCION (spec 2026-09-11) ─────────────────────────────────
-  // PROVEEDOR es una palabra fija; la empresa retenida viene en DESCRIPCIÓN.
-  function prismaConEmpresa() {
-    const prisma = prismaConServicio("PROVEEDOR");
-    prisma.provider.findMany = vi.fn().mockResolvedValue([
-      { id: "libres", canonicalName: "LIBRES SEGURIDAD S.R.L.", cuit: "30-71144782-9", matchNames: null, paymentAlias: null, providerType: "PROVEEDOR" },
-    ]);
-    return prisma;
-  }
-
-  it("fila VEP RETENCION: la empresa sale de DESCRIPCIÓN y no avisa por el tipo", async () => {
-    const prisma = prismaConEmpresa();
-    const report = await syncDirectory(prisma, "cli1", {
-      ...directorioConServicio,
-      lspServices: [
-        { consortiumName: "FRIAS 324", provider: "vep retencion", clientNumber: "30702002415", description: "LIBRES SEGURIDAD S.R.L." },
-      ],
-    });
-
-    const data = prisma.lspService.createMany.mock.calls[0][0].data;
-    expect(data[0]).toMatchObject({ providerName: "VEP RETENCION", clientNumber: "30702002415", providerId: "libres" });
-    expect(report.warnings).toEqual([]);
-  });
-
-  it("fila VEP RETENCION con empresa desconocida: se crea sin providerId y avisa", async () => {
-    const prisma = prismaConEmpresa();
-    const report = await syncDirectory(prisma, "cli1", {
-      ...directorioConServicio,
-      lspServices: [
-        { consortiumName: "FRIAS 324", provider: "VEP RETENCION", clientNumber: "30702002415", description: "NO EXISTE SA" },
-      ],
-    });
-
-    expect(prisma.lspService.createMany.mock.calls[0][0].data[0].providerId).toBeNull();
-    expect(report.warnings.join(" ")).toMatch(/NO EXISTE SA/);
-  });
-
   it("resuelve el oficio por nombre y avisa cuando no está en el catálogo", async () => {
     const entity = {
       findMany: vi.fn().mockResolvedValue([]),

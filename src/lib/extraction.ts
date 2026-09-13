@@ -5,6 +5,7 @@ import { correctVatContainedAmount } from "@/lib/vatContainedAmountGuard";
 import { ExtractedDocumentData } from "@/types/extractedDocument.types";
 import { buildLsdPrompt } from "@/lib/lsdExtraction";
 import { buildVepPrompt, classifyVep } from "@/lib/vepExtraction";
+import { isLiqRetencionText } from "@/lib/liqRetencion";
 
 /**
  * Normaliza un CUIT devuelto por la IA al formato canónico `XX-XXXXXXXX-X`
@@ -108,6 +109,7 @@ export type LSPProvider =
   | "VEP"
   | "VEP_RETENCION"
   | "VEP_MIXTO"
+  | "LIQ_RETENCION"
   | "EDESUR"
   | "EDENOR"
   | "AYSA"
@@ -135,8 +137,6 @@ export const LSP_FALLBACK_NAMES: Partial<Record<LSPProvider, string>> = {
   LITORAL_GAS: "LITORAL GAS S.A.",
   ABSA: "ABSA",
   PERSONAL: "PERSONAL",
-  // Texto del proveedor si la fila `VEP RETENCION` del ALTA no tiene empresa.
-  VEP_RETENCION: "VEP RETENCION",
   SUTERH: "SUTERH",
   FATERYH: "FATERYH",
   SERACARH: "SERACARH",
@@ -212,6 +212,12 @@ function isVep(upper: string): boolean {
 
 export function identifyLSPProvider(text: string): LSPProvider | null {
   const upper = text.slice(0, 4000).toUpperCase();
+
+  // ── Liquidación de retenciones (spec 2026-09-12) ─────────────────────────
+  // Paquete de la administración: planilla + certificados + VEP. Va PRIMERO
+  // porque termina en un VEP y contiene certificados; cualquier otra regla lo
+  // confundiría. Los tres marcadores están en la página 1.
+  if (isLiqRetencionText(upper)) return "LIQ_RETENCION";
 
   // ── Liquidación de Sueldos Digital (LSD) ───────────────────────────────────────
   // VA PRIMERO, antes que los sindicales: el libro nombra el convenio colectivo
@@ -447,6 +453,8 @@ export function buildExtractionPrompt(text: string): string {
     case "VEP":
     case "VEP_RETENCION":
     case "VEP_MIXTO":
+    // Sólo si el parser determinístico falló: el prompt del VEP es el menos malo.
+    case "LIQ_RETENCION":
       return buildVepPrompt(relevantText);
     case "LSD":
       return buildLsdPrompt(relevantText);

@@ -74,6 +74,10 @@ describe("classifyVep", () => {
     expect(classifyVep("Tipo de Pago: Vep Consolidado ARCA\nSEG.RIESGO DE TRABAJO L 24557 (312) $609.793,62")).toBe("EMPLEADO");
   });
 
+  it("216 (SIRE IVA) también es retención", () => {
+    expect(classifyVep("SIRE - IVA (216) $642.557,74")).toBe("RETENCION");
+  });
+
   it("SICOSS + 353 → MIXTO", () => {
     expect(classifyVep(VEP_SICOSS + "\nRETENCIONES CONTRIB.SEG.SOCIAL (353) $1")).toBe("MIXTO");
   });

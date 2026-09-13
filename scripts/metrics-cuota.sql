@@ -125,35 +125,48 @@ ORDER BY 1 DESC;
 
 
 -- ─────────────────────────────────────────────────────────────────────────────
--- 6) VEP POR TIPO (2026-09-11). Los cupones que no se pudieron clasificar van a
---    Revisión con 0 requests (`vep_mixto` / `vep_desconocido`); los de retención
---    sin fila en el ALTA van a Sin Asignar (`vep_retencion_not_registered`).
---    CONTROL: los dos primeros tienen que dar `requests = 0` — el gate corre
---    ANTES de la IA.
+-- 6) VEP POR TIPO (2026-09-11/12). Los cupones que no se pueden imputar van a
+--    Revisión con 0 requests: mixto, códigos desconocidos, o retención SUELTA
+--    (hay que subir la liquidación completa).
+--    CONTROL: los tres tienen que dar `requests = 0` — el gate corre ANTES de la IA.
 -- ─────────────────────────────────────────────────────────────────────────────
 SELECT "reasonCategory",
        count(*)          AS cupones,
        sum("aiRequests") AS requests
 FROM "ProcessingJob"
-WHERE "reasonCategory" IN ('vep_mixto', 'vep_desconocido', 'vep_retencion_not_registered')
+WHERE "reasonCategory" IN ('vep_mixto', 'vep_desconocido', 'vep_retencion_suelto')
 GROUP BY 1
 ORDER BY 2 DESC;
 
 
--- 6b) VEP de retención que SÍ entraron: boletas colgadas de una fila `VEP RETENCION`.
---     Tienen que salir con el proveedor = la empresa retenida (Libres, Dogo…), no ARCA.
+-- 6b) Liquidaciones de retención que SÍ entraron (2026-09-12): una boleta por paquete,
+--     a nombre de la EMPRESA retenida (Mayoral, Aseclim, Shomer, Dogo…), con el Nro. VEP
+--     como número y el subtotal de retenciones como monto. CONTROL: el job del archivo
+--     tiene que tener `aiRequests = 0` (sale por regex, sin IA).
 SELECT c."canonicalName" AS consorcio,
        p."canonicalName" AS empresa_retenida,
        i."boletaNumber"  AS nro_vep,
-       i.amount,
+       i.amount          AS retenido,
        i.detail,
-       i."createdAt"::date AS dia
+       i."createdAt"::date AS dia,
+       (SELECT max(pj."aiRequests") FROM "ProcessingJob" pj WHERE pj."driveFileId" = i."driveFileId") AS requests
 FROM "Invoice" i
-JOIN "LspService" l ON l.id = i."lspServiceId"
 JOIN "Consortium" c ON c.id = i."consortiumId"
 LEFT JOIN "Provider" p ON p.id = i."providerId"
-WHERE l."providerName" = 'VEP RETENCION'
+WHERE i.detail LIKE 'Retenciones s/fra.%'
 ORDER BY i."createdAt" DESC;
+
+
+-- 6c) BOLETAS FANTASMA de paquetes viejos (a borrar por el owner, ver progreso.md):
+--     la planilla entró como factura de la empresa por el importe TOTAL (detalle
+--     'PAGO CORRESPONDIENTE AL MES DE…'), o un certificado suelto entró a nombre de
+--     la administradora. Tiene que dar 0 filas cuando la limpieza esté hecha.
+SELECT c."canonicalName" AS consorcio, p."canonicalName" AS proveedor, i."boletaNumber", i.amount,
+       i."createdAt"::date AS cargada, left(i.detail, 50) AS detalle
+FROM "Invoice" i JOIN "Consortium" c ON c.id = i."consortiumId" JOIN "Provider" p ON p.id = i."providerId"
+WHERE i.detail ILIKE 'PAGO CORRESPONDIENTE AL MES%'
+   OR (p."canonicalName" = 'MORINIGO RAMONA NATALIA' AND i.detail ILIKE '%RETENCION%')
+ORDER BY i."createdAt";
 
 
 -- ─────────────────────────────────────────────────────────────────────────────

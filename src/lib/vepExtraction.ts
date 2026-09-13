@@ -47,13 +47,14 @@ export function buildVepPrompt(text: string): string {
 // Clasificación por códigos de renglón (spec 2026-09-11)
 // ═══════════════════════════════════════════════════════════════════════════
 
-/** Palabra fija de la columna PROVEEDOR de `_LspServices` para la fila de retención. */
-export const VEP_RETENCION_KEYWORD = "VEP RETENCION";
-
 /** Códigos de impuesto ARCA del encargado: SICOSS, obra social, ART, seguro de vida. */
 export const VEP_EMPLEADO_CODES = new Set(["351", "301", "352", "302", "312", "28"]);
-/** Retenciones a terceros: SICORE Ganancias, SICORE/SIRE IVA, contrib. seg. social (seguridad/limpieza). */
-export const VEP_RETENCION_CODES = new Set(["217", "767", "353"]);
+/**
+ * Retenciones a terceros: SICORE Ganancias (217), IVA por SICORE (767) o por SIRE
+ * (216 — los dos regímenes conviven en los paquetes reales), contrib. seg. social
+ * de empresas de seguridad/limpieza (353).
+ */
+export const VEP_RETENCION_CODES = new Set(["217", "767", "216", "353"]);
 
 export type VepKind = "EMPLEADO" | "RETENCION" | "MIXTO" | "DESCONOCIDO" | "SIN_CODIGOS";
 

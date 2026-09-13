@@ -41,23 +41,28 @@ const BOLETA_MARKERS = [
 ];
 
 /** Tipos de documento que NO son boletas y se identifican sin ambigüedad. */
-export type NotBoletaKind = never;
+export type NotBoletaKind = "CERTIFICADO RETENCION";
 
 /**
  * Capa 0 del triage: tipos de documento **inequívocos**, que se descartan aunque
- * tengan todas las señales de una boleta.
+ * tengan todas las señales de una boleta ($, CUIT, montos).
  *
  * Existe porque `classifyDocumentType` no puede agarrarlos: exige que NO haya
- * señales de boleta, y tanto un VEP como un LSD tienen `$` y CUIT. Agregarlos a
- * `NOT_BOLETA_MARKERS` no serviría de nada.
+ * señales de boleta. Nació el 2026-08-31 con el VEP y el LSD; los dos salieron al
+ * pasar a procesarse (hoy los detecta `identifyLSPProvider`).
  *
- * **Hoy está vacía.** Nació el 2026-08-31 con el VEP y el LSD; los dos salieron
- * después porque pasaron a procesarse (el LSD el 2026-09-01, el VEP el
- * 2026-09-03) y hoy los detecta el router de prompts (`identifyLSPProvider`). El
- * mecanismo se conserva —la firma, el gate que la llama y su lugar en el
- * pipeline— para el próximo formulario que haya que descartar.
+ * Desde el 2026-09-12 tiene un caso: el **certificado de retención/percepción**
+ * suelto (SICORE, F.2004, F.2005). Es el comprobante de una retención que el
+ * consorcio ya ingresó por VEP; solo no hay nada que pagar, y procesado como
+ * factura terminaba a nombre de la administradora. El paquete completo de
+ * liquidación (planilla + certificados + VEP) NO pasa por acá: el router lo marca
+ * `LIQ_RETENCION` y `documentTriageGate` lo saltea.
  */
-export function detectDecisiveNotBoleta(_text: string): NotBoletaKind | null {
+export function detectDecisiveNotBoleta(text: string): NotBoletaKind | null {
+  const upper = text.toUpperCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
+  if (upper.includes("DATOS DEL AGENTE DE RETENCI") && upper.includes("DATOS DEL SUJETO RETENIDO")) {
+    return "CERTIFICADO RETENCION";
+  }
   return null;
 }
 

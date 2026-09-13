@@ -4,6 +4,14 @@
 **Estado:** diseño aprobado en conversación, pendiente de plan
 **Antecedente:** `2026-09-03-vep-arca-como-gasto-design.md` (el VEP como gasto del encargado)
 
+> **Enmienda 2026-09-12** — `2026-09-12-liquidacion-retenciones-design.md`. Las retenciones llegan
+> como un **paquete** (planilla de la administración + certificados + VEP) que nombra a la empresa
+> con CUIT, y un consorcio puede retener a más de una. Quedan **sin efecto** §3.5, §3.6, §4.2 y §4.3
+> de este spec (la fila `VEP RETENCION` del ALTA y el fast-path por `LspService`): el VEP de
+> retención suelto pasa a Revisión con la etiqueta `[VEP RETENCION SUELTO - SUBIR LIQUIDACION
+> COMPLETA]`. Sigue vigente el resto: clasificación por códigos (con 216 agregado), `VEP_MIXTO`,
+> `ARCA EMPLEADO`.
+
 ---
 
 ## 1. Problema

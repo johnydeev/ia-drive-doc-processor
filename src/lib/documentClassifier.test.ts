@@ -63,16 +63,28 @@ Importe total a pagar $4.267.254,03`;
 
 
 describe("detectDecisiveNotBoleta", () => {
-  // La capa 0 quedó VACÍA el 2026-09-03. Nació con el VEP y el LSD, y los dos
-  // salieron al pasar a procesarse: hoy los detecta `identifyLSPProvider`, y su
-  // cobertura vive en `extraction.test.ts`. El mecanismo se conserva para el
-  // próximo formulario que haya que descartar, así que este test fija que sigue
-  // existiendo y que no descarta nada.
-  it("hoy no descarta ningún tipo: el VEP y el LSD pasaron a procesarse", () => {
+  // El VEP y el LSD salieron de la capa 0 al pasar a procesarse (hoy los detecta
+  // `identifyLSPProvider`, cobertura en `extraction.test.ts`). Desde el 2026-09-12
+  // vuelve a tener un caso: el certificado de retención suelto.
+  it("no descarta un VEP ni una factura", () => {
     expect(detectDecisiveNotBoleta(VEP_REAL)).toBeNull();
     expect(
       detectDecisiveNotBoleta("FACTURA B N° 0001 CUIT 30-12345678-9 TOTAL A PAGAR $ 12.500,00 CAE 7412")
     ).toBeNull();
     expect(detectDecisiveNotBoleta("")).toBeNull();
+  });
+
+  // Certificado F.2004 tal como lo devuelve pdf-parse, sin la planilla de la
+  // administración adelante. No hay nada que pagar: es el comprobante de la
+  // retención, no la retención. Solo, generó boletas a nombre de la administradora.
+  const F2004 = `CERTIFICADO DE RETENCIÓN/PERCEPCIÓN de la SEGURIDAD SOCIAL
+F.2004
+A - Datos del Agente de Retención/Percepción CONS DE PROP BOEDO 414
+CUIT Nº 30546756234
+B - Datos del Sujeto Retenido/Percibido MAYORAL SEGURIDAD S.R.L.
+Monto de la Retención/Percepción 367175.85`;
+
+  it("un certificado de retención solo no es boleta (spec 2026-09-12)", () => {
+    expect(detectDecisiveNotBoleta(F2004)).toBe("CERTIFICADO RETENCION");
   });
 });
