@@ -17,8 +17,8 @@ const consortium: OverviewConsortium = {
 };
 
 const providers = [
-  { id: "p1", canonicalName: "SEGURO LA CAJA", paymentAlias: null },
-  { id: "p2", canonicalName: "TECNOPAS ASC.", paymentAlias: null },
+  { id: "p1", canonicalName: "SEGURO LA CAJA", paymentAlias: null, matchNames: null },
+  { id: "p2", canonicalName: "TECNOPAS ASC.", paymentAlias: null, matchNames: null },
 ];
 
 function renderModal(overrides: Partial<React.ComponentProps<typeof AddFixedExpenseModal>> = {}) {

@@ -4,6 +4,41 @@ Registro de decisiones tomadas ante problemas reales encontrados en producción.
 
 ---
 
+## 2026-09-14 — `matchNames` del proveedor deja de ser interno: se muestra como nombre de fantasía
+
+### Problema
+
+La vista de Obligaciones lista los gastos fijos por razón social (`canonicalName`). Cuando un negocio
+factura con varios CUITs — Fumigaciones Miguel (tres personas físicas), Chere Ascensores (`CHERE JUAN
+JOSE` y, desde hoy, `CHERE SANDRA VIVIANA`) — cada uno es un proveedor distinto y en la planilla no se
+ve que son el mismo. El administrador los reconoce por el nombre de fantasía, que ya está cargado en
+`_Proveedores` (columna NOMBRE FANTASÍA → `matchNames`) pero era "interno, no se muestra en la UI".
+
+### Decisión
+
+Mostrar el **primer valor** de `matchNames` en negrita, más chico, debajo de la razón social; nada si
+no hay. Sólo en filas por proveedor (una fila LSP ya lleva el nombre corto del servicio). No se agrega
+un campo nuevo: el dato existe, sólo cambia su visibilidad.
+
+Por qué el primero y no todos: `matchNames` mezcla el nombre de fantasía con variantes para el
+matcher (`CHERE ASCENSORES|ASCENSORES CHERE`); listar todas sería ruido. Convención para el ALTA: el
+primer valor es el que se muestra.
+
+### Alternativas descartadas
+
+- Agrupar visualmente por fantasía (una fila por negocio con sub-filas por CUIT): resuelve la
+  vinculación de obligaciones, que es el problema de fondo (pendiente "Agrupar proveedores que son la
+  misma empresa"), pero es otra feature. Esto es sólo legibilidad.
+- Incluirlo en el PDF de jsPDF: no se pidió; la impresión por `@media print` sí lo muestra porque usa
+  el mismo DOM.
+
+### Impacto
+
+`obligations/overview/route.ts` (select `matchNames`), `sheetModel.ts` (`SheetRow.fantasia`,
+`firstMatchName`), `SheetCard.tsx`, `page.module.css` (`.fantasia`), tests y CLAUDE.md.
+
+---
+
 ## 2026-09-12 — La retención llega como paquete, y el paquete ya generaba boletas fantasma
 
 ### Problema

@@ -181,8 +181,11 @@ Client          → Tenant. Roles: ADMIN / CLIENT / VIEWER. consortiumsEnabled (
 - `statementsFolderId` → ID de la carpeta del edificio dentro de "Rendiciones" (`driveFoldersJson.statements`). La crea/comparte la app la 1ª vez que organiza una boleta del consorcio; luego se reutiliza.
 - `statementsFolderUrl` → webViewLink **público** de esa carpeta (para el QR de rendición). Visible en el panel con botón **Copiar**.
 ### Campos importantes en Provider
-- `matchNames` → nombres alternativos separados por `|` para matching interno
-  - Campo interno — **no se muestra en la UI**
+- `matchNames` → nombres alternativos separados por `|` para matching interno (columna NOMBRE
+  FANTASÍA del ALTA). **Desde 2026-09-14 el primer valor se muestra** en la vista de Obligaciones,
+  en negrita debajo de la razón social de cada gasto fijo: es el nombre por el que el administrador
+  reconoce al proveedor y lo que agrupa a los que facturan con varios CUITs por el mismo negocio
+  (Fumigaciones Miguel, Chere Ascensores). No se muestra en ningún otro lado.
 - `paymentAlias` → alias visible en la UI (label "Alias") y escrito en la columna "ALIAS" de Google Sheets
   - Si no tiene valor, la celda de Sheets queda vacía
 ### googleConfigJson por cliente
@@ -508,6 +511,7 @@ Respuesta: `{ ok, deleted, driveMovedBack, driveFailed, sheetsCleared }`
 
 Diagnóstico carpetas: `npx tsx scripts/fix-client-folders.ts`
 Diagnóstico consistencia Sheets↔DB: `npx tsx scripts/diag-sheets-consistency.ts`
+Preflight de Pendientes / Sin Asignar (sin IA, qué falta dar de alta): `npx tsx scripts/preflight-drive.ts` (`--folders=unassigned`, `--texto=<dir>` vuelca el texto)
 ---
 ## Autenticación
 - Cookie `dpp_session` (httpOnly, sameSite=lax)

@@ -1,6 +1,7 @@
 # Progreso del proyecto — drive-doc-processor
 
-Actualizado al 12/09/2026 (sesión 65 — liquidación de retenciones como paquete; retiro del camino LspService de ayer).
+Actualizado al 14/09/2026 (sesión 66 — nombre de fantasía en Obligaciones; `scripts/preflight-drive.ts`; plan de rendiciones faltantes en `INFO PROVEEDORES\_analisis`).
+Sesión 65: liquidación de retenciones como paquete; retiro del camino LspService del día anterior.
 Sesión 64: VEP de retención (commiteado en `a9de5c0`).
 Sesión 63: corta-corriente de IA (commiteado en `9896b6e`).
 Sesión 62: el VEP de ARCA pasa a registrarse como gasto.
@@ -17,6 +18,22 @@ VEP, y el LSD abierto en una boleta por empleado.
 > Las secciones de la **sesión 61** (instrumentación de requests, triage de no-boletas, LSD) y la del
 > **VEP** (sesión 62) dicen "implementado": las primeras entraron en `ae31c15` y `e3551a7`, el VEP en
 > `add4e11`. Lo que sigue abierto en todas ellas es el **smoke en producción**, no el commit.
+
+## 🏷️ Nombre de fantasía en la vista de Obligaciones (2026-09-14)
+
+Pedido del owner: en la lista de gastos fijos, debajo de la razón social, el nombre de fantasía en
+negrita y más chico; nada si no tiene. Es el nombre por el que se reconoce al proveedor y agrupa a
+los que facturan con varios CUITs por el mismo negocio (Fumigaciones Miguel; Chere Ascensores, que
+desde hoy tiene `CHERE JUAN JOSE` y `CHERE SANDRA VIVIANA`).
+
+- Fuente: **primer valor** de `Provider.matchNames` (columna NOMBRE FANTASÍA del ALTA). Si el ALTA
+  trae varios (`CHERE ASCENSORES|ASCENSORES CHERE`), se muestra el primero.
+- `overview` devuelve `matchNames`; `buildSheets` lo baja a `SheetRow.fantasia` (null en filas LSP:
+  ahí el concepto ya es el nombre corto del servicio). `SheetCard` lo dibuja como `<strong>` sólo si
+  existe. El PDF de jsPDF no lo incluye (no se pidió).
+- Tests: 3 en `sheetModel.test.ts`, 1 en `SheetCard.test.tsx`. Typecheck y lint limpios.
+- **Estado: listo para commitear.** Hasta hoy `matchNames` de proveedor era "interno, no se muestra
+  en la UI"; CLAUDE.md actualizado.
 
 ## 📋 Liquidación de retenciones: el paquete de la administración (2026-09-12)
 
@@ -637,6 +654,8 @@ Todo lo de acá lo hace el owner; nada requiere cambios de código.
 | 18 | Revisar `scripts/metrics-cuota.sql` tras unos días de producción | ❌ | Decidir si vale adelantar el descarte por CUIT antes de la IA |
 | 19 | Smoke del **VEP**: confirmar `[NO BOLETA - VEP]` en Sin Asignar con `aiRequests = 0` | ❌ | Prueba de que el triage ahorra cuota |
 | 20 | Smoke del **LSD**: un libro de 2 empleados → 2 gastos en la hoja, montos contra el PDF | ❌ | Es donde se detectaría un `Total Neto` mal extraído |
+| 21 | **Pedir las rendiciones (jul + ago 2026) de los 38 edificios que faltan** y volcarlas: LSP, partidas AGIP, empleados, proveedores fijos. Plan, prioridades y scripts en `INFO PROVEEDORES\_analisis\PLAN-rendiciones-faltantes.md` (fuera del repo) | ❌ | Padrón fehaciente por edificio; hoy `_LspServices` sale de la planilla del administrador, que ya mostró 3 errores |
+| 22 | Sin Asignar al 2026-09-13 (6 archivos, `scripts/preflight-drive.ts`): alta de **MAPFRE ARGENTINA SEG. VIDA** `33-70089372-9`; confirmar CUIT `30-71573334-6` ("ORO 2178 S.R.L.", factura Subito) y consorcio **AV. CÓRDOBA 6235** `30-71617051-5` (Neme); AySA cuenta `488240` (Culpina 388, ¿JOSE BONIFACIO 720?); `CCD_00001606` es un estado de deuda de Manutenzione, no la factura | ❌ | Esas 6 no entran hasta resolverlo |
 
 **Riesgo operativo abierto, sin dueño:** en la corrida real del 2026-08-28 **Cerebras devolvió 402 en
 las 4 boletas**. La cadena está colgada de Gemini free tier, cuya cuota es diaria **por modelo**; una

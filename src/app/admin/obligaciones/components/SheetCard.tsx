@@ -98,7 +98,10 @@ export function SheetCard({
               return (
               <tr key={row.fixedExpenseId} className={rowClass(row)}>
                 <td>{row.facturas ?? ""}</td>
-                <td>{row.concepto}</td>
+                <td>
+                  {row.concepto}
+                  {row.fantasia && <strong className={styles.fantasia}>{row.fantasia}</strong>}
+                </td>
                 <td>{row.monto != null ? money.format(row.monto) : ""}</td>
                 <td>{row.aliasCbu.map((a) => (<div key={a}>{a}</div>))}</td>
                 <td />

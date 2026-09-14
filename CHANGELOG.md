@@ -3,6 +3,18 @@
 ## [Unreleased]
 
 ### Added
+- **Nombre de fantasía en la vista de Obligaciones (2026-09-14)**. Cada gasto fijo por proveedor muestra,
+  en negrita y más chico debajo de la razón social, el primer valor de `Provider.matchNames` (columna
+  NOMBRE FANTASÍA del ALTA). Sólo se renderiza si existe; las filas LSP no lo llevan. Motivo: es el
+  nombre por el que se reconoce al proveedor, y agrupa a simple vista a los que facturan con varios
+  CUITs por el mismo negocio (Fumigaciones Miguel; Chere: `CHERE JUAN JOSE` + `CHERE SANDRA VIVIANA`).
+  `SheetRow.fantasia`, `overview` devuelve `matchNames`, `.fantasia` en `page.module.css`. Tests en
+  `sheetModel.test.ts` y `SheetCard.test.tsx`. El PDF (`sheetPdf.ts`) no cambia.
+- **`scripts/preflight-drive.ts` (2026-09-13)**: diagnóstico read-only y sin IA que recorre Pendientes y
+  Sin Asignar en Drive y dice, por PDF, si va a matchear consorcio / proveedor / LspService contra el
+  directorio actual, y qué CUIT o número de cliente falta dar de alta. Reusa la lógica del pipeline
+  (`extractCuitsFromText`, `identifyLSPProvider`, `usesConsortiumCuit`, triage capas 0/1). `--texto=<dir>`
+  vuelca el texto extraído para inspección.
 - **Liquidación de retenciones como paquete, sin IA (2026-09-12)**. El paquete que arma la
   administración (planilla + certificados + VEP) se detecta por tres marcadores de la planilla
   (`LIQ_RETENCION`) y produce **una boleta por la retención**, a nombre de la empresa, con el Nro. VEP

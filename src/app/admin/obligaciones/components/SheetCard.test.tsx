@@ -15,13 +15,13 @@ const sheet: SheetData = {
   periodStatus: "ACTIVE",
   rows: [
     { fixedExpenseId: "fx1", obligationId: "ob1", providerId: null, lspServiceId: "l1",
-      facturas: "4804882", concepto: "EDESUR", monto: 118000, aliasCbu: ["edesur.pago"],
+      facturas: "4804882", concepto: "EDESUR", fantasia: null, monto: 118000, aliasCbu: ["edesur.pago"],
       status: "RECEIVED", active: true, invoiceId: "inv1", carryOverRequested: false, carriedIn: false },
     { fixedExpenseId: "fx2", obligationId: "ob2", providerId: "p1", lspServiceId: null,
-      facturas: null, concepto: "SEGURO LA CAJA", monto: null, aliasCbu: [],
+      facturas: null, concepto: "SEGURO LA CAJA", fantasia: null, monto: null, aliasCbu: [],
       status: "PENDING", active: true, invoiceId: null, carryOverRequested: false, carriedIn: false },
     { fixedExpenseId: "fx3", obligationId: "ob3", providerId: "p2", lspServiceId: null,
-      facturas: null, concepto: "N.G. FUMIGACION", monto: null, aliasCbu: [],
+      facturas: null, concepto: "N.G. FUMIGACION", fantasia: "FUMIGACIONES MIGUEL", monto: null, aliasCbu: [],
       status: "SKIPPED", active: true, invoiceId: null, carryOverRequested: false, carriedIn: false },
   ],
   carried: [],
@@ -55,6 +55,17 @@ describe("SheetCard", () => {
     for (const header of ["FACTURAS", "PROVEEDORES Y SERVICIOS", "MONTO", "ALIAS - CBU", "TÉCNICO O GESTOR", "TEL. CONTACTO"]) {
       expect(screen.getByRole("columnheader", { name: header })).toBeInTheDocument();
     }
+  });
+
+  it("muestra el nombre de fantasía en negrita debajo de la razón social, sólo cuando existe", () => {
+    renderCard();
+    const fantasia = screen.getByText("FUMIGACIONES MIGUEL");
+    expect(fantasia.tagName).toBe("STRONG");
+    expect(fantasia.closest("td")).toHaveTextContent("N.G. FUMIGACION");
+    // Las filas sin fantasía no dejan ni un nodo vacío.
+    const seguro = screen.getByText("SEGURO LA CAJA").closest("td")!;
+    expect(within(seguro).queryByRole("strong")).toBeNull();
+    expect(seguro.querySelector("strong")).toBeNull();
   });
 
   it("muestra el monto formateado sólo cuando la boleta llegó", () => {

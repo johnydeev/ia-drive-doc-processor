@@ -13,9 +13,9 @@ const payload: OverviewPayload = {
   year: 2026,
   monthLabel: "julio 2026",
   providers: [
-    { id: "p1", canonicalName: "SEGURO LA CAJA", paymentAlias: "seguro.caja" },
-    { id: "p2", canonicalName: "TECNOPAS ASC.", paymentAlias: null },
-    { id: "p9", canonicalName: "EDESUR S.A.", paymentAlias: "edesur.pago" },
+    { id: "p1", canonicalName: "SEGURO LA CAJA", paymentAlias: "seguro.caja", matchNames: null },
+    { id: "p2", canonicalName: "TECNOPAS ASC.", paymentAlias: null, matchNames: "TECNOPAS|TECNO PAS ASCENSORES" },
+    { id: "p9", canonicalName: "EDESUR S.A.", paymentAlias: "edesur.pago", matchNames: "EDESUR" },
   ],
   consortiums: [
     {
@@ -120,6 +120,25 @@ describe("buildSheets", () => {
     };
     const rows = buildSheets(conVarios)[0].rows;
     expect(rows.find((r) => r.fixedExpenseId === "fx1")!.aliasCbu).toEqual(["uno", "dos", "tres"]);
+  });
+
+  it("expone el nombre de fantasía del proveedor (primer valor de matchNames), y nada si no tiene", () => {
+    const rows = buildSheets(payload)[0].rows;
+    expect(rows.find((r) => r.fixedExpenseId === "fx3")!.fantasia).toBe("TECNOPAS");
+    expect(rows.find((r) => r.fixedExpenseId === "fx1")!.fantasia).toBeNull();
+  });
+
+  it("una fila LSP no lleva nombre de fantasía: el concepto ya es el nombre corto del servicio", () => {
+    const rows = buildSheets(payload)[0].rows;
+    expect(rows.find((r) => r.fixedExpenseId === "fx2")!.fantasia).toBeNull();
+  });
+
+  it("ignora un matchNames vacío o de puros separadores", () => {
+    const vacio: OverviewPayload = {
+      ...payload,
+      providers: payload.providers.map((p) => (p.id === "p2" ? { ...p, matchNames: " | " } : p)),
+    };
+    expect(buildSheets(vacio)[0].rows.find((r) => r.fixedExpenseId === "fx3")!.fantasia).toBeNull();
   });
 
   it("sin obligación pero con período, la fila queda PENDING y sin obligationId", () => {

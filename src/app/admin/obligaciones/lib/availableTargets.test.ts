@@ -3,9 +3,9 @@ import { availableTargets } from "./availableTargets";
 import type { OverviewConsortium } from "./sheetModel";
 
 const providers = [
-  { id: "p1", canonicalName: "SEGURO LA CAJA", paymentAlias: null },
-  { id: "p2", canonicalName: "TECNOPAS ASC.", paymentAlias: null },
-  { id: "p3", canonicalName: "N.G. FUMIGACION", paymentAlias: null },
+  { id: "p1", canonicalName: "SEGURO LA CAJA", paymentAlias: null, matchNames: null },
+  { id: "p2", canonicalName: "TECNOPAS ASC.", paymentAlias: null, matchNames: null },
+  { id: "p3", canonicalName: "N.G. FUMIGACION", paymentAlias: null, matchNames: null },
 ];
 
 const consortium: OverviewConsortium = {
@@ -54,7 +54,7 @@ describe("availableTargets", () => {
   });
 
   it("la búsqueda ignora acentos y mayúsculas", () => {
-    const out = availableTargets(consortium, [{ id: "p8", canonicalName: "FUMIGACIÓN SUR", paymentAlias: null }], "fumigacion");
+    const out = availableTargets(consortium, [{ id: "p8", canonicalName: "FUMIGACIÓN SUR", paymentAlias: null, matchNames: null }], "fumigacion");
     expect(out.providers.map((o) => o.id)).toEqual(["p8"]);
   });
 

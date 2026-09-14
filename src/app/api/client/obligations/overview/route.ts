@@ -122,7 +122,7 @@ export async function GET(request: NextRequest) {
 
   const providers = await prisma.provider.findMany({
     where: { clientId },
-    select: { id: true, canonicalName: true, paymentAlias: true },
+    select: { id: true, canonicalName: true, paymentAlias: true, matchNames: true },
     orderBy: { canonicalName: "asc" },
   });
 

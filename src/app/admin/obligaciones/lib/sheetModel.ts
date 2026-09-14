@@ -73,7 +73,7 @@ export type OverviewPayload = {
   month: number | null;
   year: number | null;
   monthLabel: string | null;
-  providers: Array<{ id: string; canonicalName: string; paymentAlias: string | null }>;
+  providers: Array<{ id: string; canonicalName: string; paymentAlias: string | null; matchNames: string | null }>;
   consortiums: OverviewConsortium[];
 };
 
@@ -86,6 +86,13 @@ export type SheetRow = {
   facturas: string | null;
   /** Columna PROVEEDORES Y SERVICIOS. */
   concepto: string;
+  /**
+   * Nombre de fantasía del proveedor (primer valor de `Provider.matchNames`), debajo
+   * de la razón social. Es lo que el administrador reconoce a simple vista y lo que
+   * agrupa a los proveedores que facturan bajo varios CUITs por el mismo negocio
+   * (Fumigaciones Miguel, Chere Ascensores). Null en filas LSP y si no tiene.
+   */
+  fantasia: string | null;
   /** Columna MONTO: sale de la boleta vinculada; null mientras no llegó. */
   monto: number | null;
   /** Columna ALIAS - CBU: hasta 3 alias o CBU, uno debajo del otro. */
@@ -149,6 +156,12 @@ function norm(value: string): string {
     .trim();
 }
 
+/** Primer nombre de fantasía de `matchNames` (`A|B|C`), o null si no hay ninguno. */
+function firstMatchName(matchNames: string | null | undefined): string | null {
+  const first = (matchNames ?? "").split("|").map((n) => n.trim()).find(Boolean);
+  return first ?? null;
+}
+
 export function buildSheets(payload: OverviewPayload): SheetData[] {
   const providerById = new Map(payload.providers.map((p) => [p.id, p]));
 
@@ -164,6 +177,7 @@ export function buildSheets(payload: OverviewPayload): SheetData[] {
       const concepto = lsp
         ? `${lsp.providerName}${lsp.description ? ` — ${lsp.description}` : ""}`
         : provider?.canonicalName ?? fx.description ?? "—";
+      const fantasia = lsp ? null : firstMatchName(provider?.matchNames);
 
       return {
         fixedExpenseId: fx.id,
@@ -172,6 +186,7 @@ export function buildSheets(payload: OverviewPayload): SheetData[] {
         lspServiceId: fx.lspServiceId,
         facturas: lsp?.clientNumber ?? null,
         concepto,
+        fantasia,
         monto: fx.obligation?.amount ?? null,
         aliasCbu: parsePaymentAliases(lsp ? lspProvider?.paymentAlias : provider?.paymentAlias),
         status: c.periodId ? fx.obligation?.status ?? "PENDING" : "NO_PERIOD",
