@@ -4,8 +4,8 @@ import { generateObligationsForPeriod, syncObligationsForClient } from "./obliga
 /** Fake prisma en memoria, solo con lo que usa generateObligationsForPeriod. */
 function makeFakePrisma(opts: {
   period: { id: string; consortiumId: string; clientId: string };
-  fixedExpenses: Array<{ id: string; providerId: string | null; lspServiceId: string | null }>;
-  invoices: Array<{ id: string; providerId: string | null; lspServiceId: string | null }>;
+  fixedExpenses: Array<{ id: string; providerId: string | null; lspServiceId: string | null; kind?: "FACTURA" | "RETENCION" }>;
+  invoices: Array<{ id: string; providerId: string | null; lspServiceId: string | null; docKind?: "FACTURA" | "RETENCION" }>;
   existingObligations?: Array<{ fixedExpenseId: string }>;
 }) {
   const created: any[] = [];
@@ -104,6 +104,39 @@ function makeFakeSyncPrisma(opts: {
     } as any,
   };
 }
+
+describe("generateObligationsForPeriod — tipo de documento (spec 2026-09-17)", () => {
+  it("factura y retención del mismo proveedor van cada una a la obligación de su tipo, sin importar el orden", async () => {
+    // Dos gastos fijos de Mayoral: FACTURA y RETENCION. La retención se creó ANTES
+    // que la factura (caso real Pueyrredón/Dogo 09/2026).
+    const fake = makeFakePrisma({
+      period: { id: "per1", consortiumId: "c1", clientId: "cl1" },
+      fixedExpenses: [
+        { id: "fx-fact", providerId: "mayoral", lspServiceId: null, kind: "FACTURA" },
+        { id: "fx-ret", providerId: "mayoral", lspServiceId: null, kind: "RETENCION" },
+      ],
+      invoices: [
+        { id: "inv-ret", providerId: "mayoral", lspServiceId: null, docKind: "RETENCION" },
+        { id: "inv-fact", providerId: "mayoral", lspServiceId: null, docKind: "FACTURA" },
+      ],
+    });
+    const res = await generateObligationsForPeriod("per1", fake.client);
+    expect(res.linked).toBe(2);
+    const pares = fake.updated.map((u) => [fake.created[Number(u.where.id.split("-")[1]) - 1].fixedExpenseId, u.data.invoiceId]);
+    expect(pares).toEqual(expect.arrayContaining([["fx-fact", "inv-fact"], ["fx-ret", "inv-ret"]]));
+  });
+
+  it("un gasto fijo FACTURA solo NO toma la retención", async () => {
+    const fake = makeFakePrisma({
+      period: { id: "per1", consortiumId: "c1", clientId: "cl1" },
+      fixedExpenses: [{ id: "fx-fact", providerId: "mayoral", lspServiceId: null, kind: "FACTURA" }],
+      invoices: [{ id: "inv-ret", providerId: "mayoral", lspServiceId: null, docKind: "RETENCION" }],
+    });
+    const res = await generateObligationsForPeriod("per1", fake.client);
+    expect(res.created).toBe(1);
+    expect(res.linked).toBe(0);
+  });
+});
 
 describe("syncObligationsForClient", () => {
   it("crea las faltantes de todos los períodos activos con un solo createMany", async () => {

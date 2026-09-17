@@ -20,6 +20,8 @@ const itemSchema = z.object({
   providerId: z.string().optional().nullable(),
   lspServiceId: z.string().optional().nullable(),
   description: z.string().optional().nullable(),
+  // FACTURA (default) o RETENCION: la retención es un gasto fijo aparte (spec 2026-09-17).
+  kind: z.enum(["FACTURA", "RETENCION"]).default("FACTURA"),
 });
 
 /** Acepta la forma vieja (un objeto) y la nueva (`{ items: [...] }`). */
@@ -63,6 +65,7 @@ export async function POST(request: NextRequest, context: { params: Promise<{ id
             providerId: item.providerId ?? null,
             lspServiceId: item.lspServiceId ?? null,
             description: item.description ?? null,
+            kind: item.kind,
           })
         );
       } catch (err) {

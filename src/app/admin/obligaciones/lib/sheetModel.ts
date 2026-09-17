@@ -16,6 +16,8 @@ export type OverviewFixedExpense = {
   providerId: string | null;
   lspServiceId: string | null;
   description: string | null;
+  /** FACTURA o RETENCION: la retención del proveedor es un gasto fijo aparte (spec 2026-09-17). */
+  kind: "FACTURA" | "RETENCION";
   active: boolean;
   obligation: {
     id: string;
@@ -182,9 +184,10 @@ export function buildSheets(payload: OverviewPayload): SheetData[] {
       // Para un LSP el alias de pago vive en el proveedor asociado, si lo tiene.
       const lspProvider = lsp?.providerId ? providerById.get(lsp.providerId) ?? null : null;
 
-      const concepto = lsp
+      const base = lsp
         ? `${lsp.providerName}${lsp.description ? ` — ${lsp.description}` : ""}`
         : provider?.canonicalName ?? fx.description ?? "—";
+      const concepto = fx.kind === "RETENCION" ? `${base} — Retención` : base;
       const fantasia = lsp ? null : firstMatchName(provider?.matchNames);
 
       return {

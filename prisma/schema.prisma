@@ -33,6 +33,14 @@ enum TipoGasto {
   PARTICULAR
 }
 
+/// Tipo de documento: la factura del proveedor o la retención que el consorcio le
+/// practica (paquete de liquidación, spec 2026-09-12). Un gasto fijo espera uno u
+/// otro; una obligación sólo acepta boletas de su tipo (spec 2026-09-17).
+enum DocKind {
+  FACTURA
+  RETENCION
+}
+
 enum PaymentMethod {
   DEBITO_AUTOMATICO
   TRANSFERENCIA
@@ -162,6 +170,7 @@ model Invoice {
   tipoComprobante     String?
   lspServiceId        String?
   paymentMethod       PaymentMethod?
+  docKind             DocKind             @default(FACTURA)
   driveFileId         String?
   sourceFileUrl       String?
   isDuplicate         Boolean      @default(false)
@@ -536,6 +545,7 @@ model FixedExpense {
   providerId   String?
   lspServiceId String?
   description  String?
+  kind         DocKind             @default(FACTURA)
   active       Boolean             @default(true)
   createdAt    DateTime            @default(now())
   updatedAt    DateTime            @updatedAt
@@ -545,10 +555,11 @@ model FixedExpense {
   lspService   LspService?         @relation(fields: [lspServiceId], references: [id], onDelete: Cascade)
   obligations  ExpenseObligation[]
 
-  // Un gasto fijo por objetivo y por consorcio. Postgres considera los NULL
+  // Un gasto fijo por objetivo, tipo y consorcio: la factura y la retención del
+  // mismo proveedor son dos filas (spec 2026-09-17). Postgres considera los NULL
   // distintos entre sí, así que un gasto LSP (providerId NULL) nunca colisiona
   // con otro LSP del mismo consorcio.
-  @@unique([consortiumId, providerId])
+  @@unique([consortiumId, providerId, kind])
   @@unique([consortiumId, lspServiceId])
   @@index([clientId])
   @@index([consortiumId])

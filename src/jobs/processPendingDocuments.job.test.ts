@@ -224,6 +224,8 @@ describe("processDriveFile — caracterización de los 7 caminos de salida", () 
 
     expect(ctx.sheetsService.insertRow).toHaveBeenCalledTimes(1);
     expect(ctx.invoiceRepository.saveProcessedInvoice).toHaveBeenCalledTimes(1);
+    // Una factura común es FACTURA (spec 2026-09-17); sólo el paquete de retención es RETENCION.
+    expect(ctx.invoiceRepository.saveProcessedInvoice.mock.calls[0][0].docKind).toBe("FACTURA");
     // Boleta OK → renombra + mueve a la carpeta de período de Rendiciones.
     expect(ctx.driveService.moveFileToFolder).toHaveBeenCalledWith("file-1", "pending", "pf1");
     expect(summary.processed).toBe(1);
@@ -709,6 +711,7 @@ Importe total a pagar $1.095.792,54`;
       expect(guardada.extraction.amount).toBe(1130782.14);
       expect(guardada.extraction.boletaNumber).toBe("1679299135");
       expect(guardada.extraction.dueDate).toBe("2026-10-10");
+      expect(guardada.docKind).toBe("RETENCION");
       expect(summary.processed).toBe(1);
       expect(metricsCore().result).toBe("ok");
     });

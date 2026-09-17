@@ -100,7 +100,7 @@ export function useObligationsOverview() {
       if (targets.length === 0) return;
       try {
         const items = targets.map((t) =>
-          t.kind === "provider" ? { providerId: t.id } : { lspServiceId: t.id }
+          t.kind === "provider" ? { providerId: t.id, kind: t.expenseKind } : { lspServiceId: t.id }
         );
         const res = await guardedFetch(`/api/client/consortiums/${consortiumId}/fixed-expenses`, {
           method: "POST",

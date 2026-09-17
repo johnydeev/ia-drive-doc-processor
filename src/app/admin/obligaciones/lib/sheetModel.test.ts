@@ -31,11 +31,11 @@ const payload: OverviewPayload = {
         { id: "l1", providerName: "EDESUR", clientNumber: "4804882", description: null, providerId: "p9" },
       ],
       fixedExpenses: [
-        { id: "fx1", providerId: "p1", lspServiceId: null, description: null, active: true,
+        { id: "fx1", providerId: "p1", lspServiceId: null, description: null, kind: "FACTURA", active: true,
           obligation: { id: "ob1", status: "PENDING", amount: null, invoiceId: null, carryOverRequested: false, carriedIn: false, invoiceUrl: null } },
-        { id: "fx2", providerId: null, lspServiceId: "l1", description: null, active: true,
+        { id: "fx2", providerId: null, lspServiceId: "l1", description: null, kind: "FACTURA", active: true,
           obligation: { id: "ob2", status: "RECEIVED", amount: 118000, invoiceId: null, carryOverRequested: false, carriedIn: false, invoiceUrl: null } },
-        { id: "fx3", providerId: "p2", lspServiceId: null, description: null, active: false,
+        { id: "fx3", providerId: "p2", lspServiceId: null, description: null, kind: "FACTURA", active: false,
           obligation: null },
       ],
     },
@@ -50,7 +50,7 @@ const payload: OverviewPayload = {
   periodStatus: "ACTIVE",
       lspServices: [],
       fixedExpenses: [
-        { id: "fx4", providerId: "p1", lspServiceId: null, description: null, active: true, obligation: null },
+        { id: "fx4", providerId: "p1", lspServiceId: null, description: null, kind: "FACTURA", active: true, obligation: null },
       ],
     },
   ],
@@ -104,10 +104,10 @@ describe("buildSheets", () => {
       consortiums: [{
         ...payload.consortiums[0],
         fixedExpenses: [
-          { id: "fx1", providerId: "p1", lspServiceId: null, description: null, active: true,
+          { id: "fx1", providerId: "p1", lspServiceId: null, description: null, kind: "FACTURA", active: true,
             obligation: { id: "ob1", status: "RECEIVED", amount: 5000, invoiceId: "inv1", carryOverRequested: false, carriedIn: false,
               invoiceUrl: "https://drive.google.com/file/d/ABC/view" } },
-          { id: "fx2", providerId: null, lspServiceId: "l1", description: null, active: true,
+          { id: "fx2", providerId: null, lspServiceId: "l1", description: null, kind: "FACTURA", active: true,
             obligation: { id: "ob2", status: "PENDING", amount: null, invoiceId: null, carryOverRequested: false, carriedIn: false, invoiceUrl: null } },
         ],
       }],
@@ -158,6 +158,23 @@ describe("buildSheets", () => {
       providers: payload.providers.map((p) => (p.id === "p2" ? { ...p, matchNames: " | " } : p)),
     };
     expect(buildSheets(vacio)[0].rows.find((r) => r.fixedExpenseId === "fx3")!.fantasia).toBeNull();
+  });
+
+  it("un gasto fijo RETENCION se llama '<razón social> — Retención' (spec 2026-09-17)", () => {
+    const sheets = buildSheets({
+      ...payload,
+      consortiums: [{
+        ...payload.consortiums[0],
+        fixedExpenses: [
+          ...payload.consortiums[0].fixedExpenses,
+          { id: "fx-ret", providerId: "p1", lspServiceId: null, description: null, kind: "RETENCION", active: true, obligation: null },
+        ],
+      }],
+    });
+    const conceptos = sheets[0].rows.map((r) => r.concepto);
+    expect(conceptos).toContain("SEGURO LA CAJA — Retención");
+    // la factura del mismo proveedor sigue con su nombre pelado
+    expect(conceptos).toContain("SEGURO LA CAJA");
   });
 
   it("sin obligación pero con período, la fila queda PENDING y sin obligationId", () => {

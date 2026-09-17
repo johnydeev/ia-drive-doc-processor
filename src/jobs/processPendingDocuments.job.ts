@@ -1834,6 +1834,9 @@ async function persistStep(ctx: PipelineContext): Promise<StepResult> {
           sourceFileUrl, extraction: boleta.fields, isDuplicate,
           consortiumId: assignment.consortiumId, providerId: boleta.providerId, periodId: assignment.periodId,
           lspServiceId: assignment.lspServiceId, paymentMethod: boleta.paymentMethod,
+          // La retención es un documento distinto de la factura del mismo proveedor y
+          // sólo cumple obligaciones de su tipo (spec 2026-09-17).
+          docKind: ctx.lspProvider === "LIQ_RETENCION" ? "RETENCION" : "FACTURA",
           tokensInput: fileAiUsage?.inputTokens ?? null,
           tokensOutput: fileAiUsage?.outputTokens ?? null,
           tokensTotal: fileAiUsage?.totalTokens ?? null,
@@ -1855,6 +1858,7 @@ async function persistStep(ctx: PipelineContext): Promise<StepResult> {
             periodId: saved.periodId,
             providerId: saved.providerId,
             lspServiceId: saved.lspServiceId,
+            docKind: saved.docKind,
           });
         } catch (obErr) {
           pipelineLog.stepStart(cid, `⚠️ vínculo de obligación falló: ${obErr instanceof Error ? obErr.message : obErr}`);

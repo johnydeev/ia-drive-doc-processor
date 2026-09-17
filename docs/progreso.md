@@ -1,6 +1,7 @@
 # Progreso del proyecto — drive-doc-processor
 
-Actualizado al 14/09/2026 (sesión 66 — nombre de fantasía en Obligaciones; `scripts/preflight-drive.ts`; plan de rendiciones faltantes en `INFO PROVEEDORES\_analisis`).
+Actualizado al 17/09/2026 (sesión 67 — la retención como gasto fijo propio, con migración `DocKind`).
+Sesión 66 (14/09): nombre de fantasía en Obligaciones; `scripts/preflight-drive.ts`; plan de rendiciones faltantes en `INFO PROVEEDORES\_analisis`).
 Sesión 65: liquidación de retenciones como paquete; retiro del camino LspService del día anterior.
 Sesión 64: VEP de retención (commiteado en `a9de5c0`).
 Sesión 63: corta-corriente de IA (commiteado en `9896b6e`).
@@ -78,6 +79,42 @@ desde hoy tiene `CHERE JUAN JOSE` y `CHERE SANDRA VIVIANA`).
   Ahora la etiqueta es `RAZÓN SOCIAL (FANTASÍA)` y el filtro corre sobre la etiqueta completa, así
   "popular" la encuentra. `providerLabel` en `availableTargets.ts`; `firstMatchName` pasó a exportarse
   desde `sheetModel.ts`. Test nuevo en `availableTargets.test.ts`. **Listo para commitear.**
+
+## 🧾 La retención como gasto fijo propio (2026-09-17)
+
+**Estado: implementado y verificado (typecheck + lint 0 errores + 1016 tests + build:jobs + next build OK).
+SIN COMMITEAR. Migración `20260917000000_doc_kind_retencion` APLICADA en producción por el owner
+(`prisma migrate deploy` + `prisma generate`) antes de escribir el código.**
+
+Spec: `docs/superpowers/specs/2026-09-17-gasto-fijo-retencion-design.md`
+Plan: `docs/superpowers/plans/2026-09-17-gasto-fijo-retencion.md`
+
+Origen: el paquete de retención entra como boleta de la empresa (2026-09-12) pero en la vista de
+obligaciones no se veía: un gasto fijo era un proveedor por edificio, con una obligación y **una**
+boleta por mes, y la vinculación tomaba la primera boleta del proveedor. Boedo/Mayoral: la factura
+ocupó la obligación, la retención quedó invisible. Y el caso inverso ya había pasado: en
+Pueyrredón, la obligación de Dogo estaba `RECEIVED` con la **retención** ($711 K) porque el paquete
+llegó antes que la factura — el PDF del banco mostraba eso como "Dogo".
+
+Qué se hizo:
+- Enum `DocKind { FACTURA, RETENCION }`; `Invoice.docKind` y `FixedExpense.kind`; el unique de
+  gasto fijo pasa a `(consortiumId, providerId, kind)`. La migración hace backfill de las 5
+  retenciones cargadas y **libera** las obligaciones FACTURA colgadas de una retención (Dogo).
+- `obligationMatchesInvoice` compara el tipo: una obligación sólo acepta boletas de su tipo, en
+  los 3 caminos de vinculación (generar período, al guardar la boleta, sync).
+- El pipeline guarda `docKind = RETENCION` cuando el router dio `LIQ_RETENCION`.
+- Repositorio + endpoint de gastos fijos aceptan `kind`; el dedupe a nivel app también lo mira.
+- Modal "Agregar gastos fijos": cada proveedor ofrece `X` y `X — Retención`; la vista y el PDF del
+  banco muestran la fila `X — Retención` con su monto y estado.
+
+**Pendiente del owner:**
+1. Cargar `— Retención` desde el modal en: Boedo 414 (Mayoral y Aseclim), Pueyrredón 2418 (Dogo),
+   Rivadavia 4243 (Shomer), Callao 1441 (Libres). Al abrir la vista, la sincronización engancha las
+   5 retenciones de septiembre. **No hay que recargar boletas.**
+2. Borrar el gasto fijo `RETENCIONES VEPS` de Boedo 414 (y el proveedor genérico si nació sólo para
+   eso): nunca puede matchear.
+3. Verificar que la factura de Dogo de septiembre, cuando entre, ocupe su obligación (hoy liberada).
+4. Las 10 boletas fantasma de mayo–agosto (sección 2026-09-12) siguen pendientes de borrar.
 
 ## 📋 Liquidación de retenciones: el paquete de la administración (2026-09-12)
 

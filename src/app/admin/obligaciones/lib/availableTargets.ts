@@ -4,6 +4,8 @@ export type TargetOption = {
   kind: "provider" | "lsp";
   id: string;
   label: string;
+  /** FACTURA o RETENCION (spec 2026-09-17). Los LSP son siempre FACTURA. */
+  expenseKind: "FACTURA" | "RETENCION";
 };
 
 export type AvailableTargets = {
@@ -42,8 +44,10 @@ export function availableTargets(
   providers: OverviewPayload["providers"],
   query: string
 ): AvailableTargets {
-  const usedProviderIds = new Set(
-    consortium.fixedExpenses.map((fx) => fx.providerId).filter((id): id is string => Boolean(id))
+  // Un proveedor puede estar cargado dos veces, una por tipo: lo usado se mira por
+  // (proveedor, tipo), así la retención sigue ofreciéndose con la factura ya cargada.
+  const usedProvider = new Set(
+    consortium.fixedExpenses.filter((fx) => fx.providerId).map((fx) => `${fx.providerId}:${fx.kind}`)
   );
   const usedLspIds = new Set(
     consortium.fixedExpenses.map((fx) => fx.lspServiceId).filter((id): id is string => Boolean(id))
@@ -54,13 +58,18 @@ export function availableTargets(
 
   const lsp: TargetOption[] = consortium.lspServices
     .filter((l) => !usedLspIds.has(l.id))
-    .map((l) => ({ kind: "lsp" as const, id: l.id, label: `${l.providerName} (${l.clientNumber})` }))
+    .map((l) => ({ kind: "lsp" as const, id: l.id, label: `${l.providerName} (${l.clientNumber})`, expenseKind: "FACTURA" as const }))
     .filter((o) => matches(o.label))
     .sort((a, b) => a.label.localeCompare(b.label, "es"));
 
+  // Cada proveedor ofrece su factura y, aparte, su retención (spec 2026-09-17):
+  // "X" y "X — Retención". El sort por etiqueta deja la retención debajo de la factura.
   const provs: TargetOption[] = providers
-    .filter((p) => !usedProviderIds.has(p.id))
-    .map((p) => ({ kind: "provider" as const, id: p.id, label: providerLabel(p) }))
+    .flatMap((p) => [
+      { kind: "provider" as const, id: p.id, label: providerLabel(p), expenseKind: "FACTURA" as const },
+      { kind: "provider" as const, id: p.id, label: `${providerLabel(p)} — Retención`, expenseKind: "RETENCION" as const },
+    ])
+    .filter((o) => !usedProvider.has(`${o.id}:${o.expenseKind}`))
     .filter((o) => matches(o.label))
     .sort((a, b) => a.label.localeCompare(b.label, "es"));
 

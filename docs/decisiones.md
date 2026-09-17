@@ -4,6 +4,52 @@ Registro de decisiones tomadas ante problemas reales encontrados en producción.
 
 ---
 
+## 2026-09-17 — Una obligación sólo acepta boletas de su tipo
+
+### Problema
+
+Con el paquete de retención entrando como boleta de la empresa (2026-09-12), factura y retención
+del mismo proveedor comparten `providerId`. El modelo de obligaciones era "un gasto fijo por
+proveedor y edificio, una boleta por obligación, la primera que llega gana": la retención de Mayoral
+quedó invisible en Boedo, y en Pueyrredón la retención de Dogo **ocupó** la obligación de la factura
+(el paquete llegó antes) — el PDF del banco mostraba $711 K como "Dogo". Además la vinculación al
+guardar sólo mira obligaciones `PENDING`, así que ese error no se corregía solo.
+
+### Decisión
+
+1. **La retención es un gasto fijo propio del mismo proveedor**, `FixedExpense.kind = RETENCION`,
+   con unique `(consortiumId, providerId, kind)`. Reusa obligación mensual, estados, saltear,
+   vista y PDF. El owner la carga por edificio desde el modal (`X — Retención`), porque a una misma
+   empresa se le retiene en un edificio y en otro no.
+2. **Las boletas llevan el tipo** (`Invoice.docKind`), decidido en un solo lugar: `persistStep`,
+   `RETENCION` si el router dio `LIQ_RETENCION`. Distinguir por el texto del detalle era frágil y no
+   servía para la clave única.
+3. **`obligationMatchesInvoice` compara el tipo** antes que el objetivo. Sin `kind`/`docKind` se
+   asume `FACTURA`, así los callers y tests viejos no cambian de comportamiento.
+4. **La migración repara el dato**: backfill de `docKind` por el detalle `Retenciones s/fra.%` y
+   liberación de toda obligación FACTURA colgada de una retención. Verificado en producción:
+   Dogo volvió a `PENDING`.
+5. **El dedupe a nivel app del repositorio también mira `kind`**: sin eso, el 409 saltaba antes de
+   llegar al unique nuevo.
+
+### Alternativas descartadas
+
+- Tilde "con retención" en el gasto fijo existente que genera dos obligaciones: duplica la lógica
+  de obligaciones (dos estados, dos `invoiceId`, saltear una y no la otra).
+- Proveedor aparte "X — RETENCIONES": el matching es por CUIT, la boleta nunca llegaría ahí.
+- Línea informativa sin estado bajo la factura: no reclama la que falta (descartada por el owner).
+
+### Impacto
+
+`prisma/schema.prisma` + migración `20260917000000_doc_kind_retencion`; `lib/fixedExpense.ts`;
+`services/obligation.service.ts` (3 callers); `repositories/fixedExpense.repository.ts` e
+`invoice.repository.ts`; `api/client/consortiums/[id]/fixed-expenses/route.ts`;
+`api/client/obligations/overview/route.ts`; `jobs/processPendingDocuments.job.ts` (persist + link);
+`app/admin/obligaciones/lib/{sheetModel,availableTargets}.ts`, `components/AddFixedExpenseModal.tsx`,
+`hooks/useObligationsOverview.ts`. +28 tests (1016).
+
+---
+
 ## 2026-09-16 — Un gasto fijo no se borra: se archiva (desactivado, en bloque plegado)
 
 ### Problema

@@ -57,9 +57,16 @@ describe("AddFixedExpenseModal", () => {
     await userEvent.click(screen.getByRole("button", { name: "Agregar (1)" }));
 
     expect(props.onAdd).toHaveBeenCalledWith("c1", [
-      { kind: "provider", id: "p2", label: "TECNOPAS ASC." },
+      { kind: "provider", id: "p2", label: "TECNOPAS ASC.", expenseKind: "FACTURA" },
     ]);
     expect(props.onClose).toHaveBeenCalled();
+  });
+
+  it("factura y retención del mismo proveedor se tildan por separado (spec 2026-09-17)", async () => {
+    renderModal();
+    await userEvent.click(screen.getByLabelText("TECNOPAS ASC."));
+    await userEvent.click(screen.getByLabelText("TECNOPAS ASC. — Retención"));
+    expect(screen.getByRole("button", { name: "Agregar (2)" })).toBeEnabled();
   });
 
   it("el buscador recorta las opciones", async () => {
@@ -74,9 +81,11 @@ describe("AddFixedExpenseModal", () => {
       consortium: {
         ...consortium,
         fixedExpenses: [
-          { id: "a", providerId: "p1", lspServiceId: null, description: null, active: true, obligation: null },
-          { id: "b", providerId: "p2", lspServiceId: null, description: null, active: true, obligation: null },
-          { id: "c", providerId: null, lspServiceId: "l1", description: null, active: true, obligation: null },
+          { id: "a", providerId: "p1", lspServiceId: null, description: null, kind: "FACTURA", active: true, obligation: null },
+          { id: "a2", providerId: "p1", lspServiceId: null, description: null, kind: "RETENCION", active: true, obligation: null },
+          { id: "b", providerId: "p2", lspServiceId: null, description: null, kind: "FACTURA", active: true, obligation: null },
+          { id: "b2", providerId: "p2", lspServiceId: null, description: null, kind: "RETENCION", active: true, obligation: null },
+          { id: "c", providerId: null, lspServiceId: "l1", description: null, kind: "FACTURA", active: true, obligation: null },
         ],
       },
     });

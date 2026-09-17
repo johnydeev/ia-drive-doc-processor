@@ -129,15 +129,21 @@ Client          → Tenant. Roles: ADMIN / CLIENT / VIEWER. consortiumsEnabled (
   │                 lspServiceId / paymentMethod (nullable)
   │                 receiptDriveFileId / receiptDriveFileUrl (recibo de pago)
   │                 tokensInput / tokensOutput / tokensTotal / aiProvider / aiModel (IA tracking)
+  │                 docKind: FACTURA | RETENCION (2026-09-17) — RETENCION sólo la pone el pipeline
+  │                 para el paquete LIQ_RETENCION; una obligación sólo acepta boletas de su tipo
   │   └── Payment   → Pago registrado (parcial o total). amount + paymentDate +
   │                   paymentType (TOTAL/LIBRE/CUOTA) + installmentNumber/totalInstallments +
   │                   driveFileId/Url (comprobante) + paymentMethod
   ├── Receipt     → Recibo de pago (modelo separado, relacionado 1:1 con Invoice)
   ├── FixedExpense → Gasto fijo mensual por consorcio. Apunta a Provider? o LspService? + active
-  │                 Unique (consortiumId, providerId) y (consortiumId, lspServiceId) — los NULL de
+  │                 + kind: FACTURA | RETENCION (2026-09-17): la retención que el consorcio le practica a
+  │                 la empresa es un gasto fijo APARTE de su factura, del mismo proveedor
+  │                 Unique (consortiumId, providerId, kind) y (consortiumId, lspServiceId) — los NULL de
   │                 Postgres son distintos entre sí, así que un LSP no choca con otro LSP
   │   └── ExpenseObligation → Instancia por período. status: PENDING/RECEIVED/SKIPPED/NOT_RECEIVED
   │                           + invoiceId? (se vincula solo cuando llega la boleta). Unique (periodId, fixedExpenseId)
+  │                           `obligationMatchesInvoice` exige fixedExpense.kind === invoice.docKind: la
+  │                           factura y la retención del mismo proveedor no se pisan (spec 2026-09-17)
   ├── ConsortiumProvider → Relación N:M consorcio↔proveedor. Unique (consortiumId, providerId)
   ├── ProcessingJob → Cola de jobs (PENDING/PROCESSING/COMPLETED/FAILED)
   │                    diagnosticRunId? → agrupa los jobs de una corrida selectiva
@@ -191,6 +197,12 @@ Client          → Tenant. Roles: ADMIN / CLIENT / VIEWER. consortiumsEnabled (
   otro lado.
 - `paymentAlias` → alias visible en la UI (label "Alias") y escrito en la columna "ALIAS" de Google Sheets
   - Si no tiene valor, la celda de Sheets queda vacía
+
+> **Gasto fijo de retención (2026-09-17).** En "Agregar gastos fijos" cada proveedor aparece **dos veces**:
+> `X` (su factura) y `X — Retención` (el paquete de liquidación de retenciones que el consorcio le
+> practica). Se tilda la segunda sólo en los edificios que retienen a esa empresa; no hay nada que
+> marcar en el proveedor ni en el ALTA. La vista de Obligaciones y el PDF del banco muestran la fila
+> `X — Retención` con su estado y su boleta, aparte de la factura.
 ### googleConfigJson por cliente
 ```json
 {
@@ -285,7 +297,7 @@ Siempre usar `resolveGoogleConfig(client)` para construir el `GoogleSheetsServic
 2b. **Corta-corriente** (`circuitBreakerGate`, 2026-09-10) → si la cadena de IA está cortada para el cliente, la boleta vuelve a **Pendientes** con 0 requests y **sin extraer texto** (se ahorra el OCR). Los **duplicados están exceptuados**: no llaman a la IA (reusan la extracción guardada), así que siguen su camino a Duplicados. `reasonCategory = "circuit_open"`.
 3. **Extracción texto** (`textExtractStep`, sin tokens) → pdf-parse → fallback OCR (tesseract). El texto del OCR se conserva si es más largo **o si aporta un CUIT que el texto directo no tiene** (`lib/ocrMerge.ts`, 2026-08-18): antes se descartaba por longitud y con él se iba el CUIT del membrete. Si pdf-parse no saca texto propio, el PDF es un **escaneo** (`isLastPdfScanned()`). Luego el **triage**, ANTES de la IA y sin gastar tokens: **capa 0** (`detectDecisiveNotBoleta`, 2026-08-31) para los formularios inequívocos — nació con el VEP y el LSD (salieron al pasar a procesarse) y desde el 2026-09-12 tiene un caso: el **certificado de retención suelto** (SICORE / F.2004 / F.2005 sin la planilla) → `[NO BOLETA - CERTIFICADO RETENCION]`; el paquete completo (`LIQ_RETENCION`) la saltea; y **capa 1** (`classifyDocumentType`), heurística conservadora para oblea, certificado de fumigación, plano… Ambas renombran `[NO BOLETA - <TIPO>]` y mueven a **Sin Asignar** (antes iban a Revisión; cambió el 2026-08-31 para que la limpieza manual se haga en un solo lugar).
 3b. **VEP que no se puede imputar** (`vepReviewGate`, 2026-09-11/12) → `VEP_MIXTO` va a **Revisión** como `[VEP MIXTO]` o `[VEP SIN CLASIFICAR]`; `VEP_RETENCION` (cupón de retención **suelto**) va a Revisión como `[VEP RETENCION SUELTO - SUBIR LIQUIDACION COMPLETA]`. Sin IA (`reasonCategory = vep_mixto` / `vep_desconocido` / `vep_retencion_suelto`).
-3c. **Liquidación de retenciones** (`liqRetencionExtractStep`, 2026-09-12) → si el router dio `LIQ_RETENCION` (paquete de la administración: planilla + certificados + VEP), `lib/liqRetencion.ts` arma la boleta **por regex, 0 requests**: proveedor = la empresa (CUIT de la planilla), monto = `SUBTOTAL RETENCIONES`, nro. = **Nro. VEP** (no el de la factura, que entra aparte), vencimiento = expiración del VEP. `aiExtractStep` se saltea si `ctx.extracted` ya está lleno. Si el parser falla, sigue a la IA.
+3c. **Liquidación de retenciones** (`liqRetencionExtractStep`, 2026-09-12) → si el router dio `LIQ_RETENCION` (paquete de la administración: planilla + certificados + VEP), `lib/liqRetencion.ts` arma la boleta **por regex, 0 requests**: proveedor = la empresa (CUIT de la planilla), monto = `SUBTOTAL RETENCIONES`, nro. = **Nro. VEP** (no el de la factura, que entra aparte), vencimiento = expiración del VEP. `aiExtractStep` se saltea si `ctx.extracted` ya está lleno. Si el parser falla, sigue a la IA. Se guarda con `docKind = RETENCION` (2026-09-17) y sólo cumple el gasto fijo `X — Retención` del edificio, nunca el de la factura.
 4. **Extracción IA** (`aiExtractStep`) → **PDF escaneado**: la página 1 que rindió el OCR va a **Gemini Vision** (2026-08-18); si falla sigue la cadena, si da 429/503 vuelve a Pendientes. Resto: cadena Gemini → Cerebras → OpenAI → Claude (fallback final OCR_ONLY). El barrido de modelos de Gemini son 3 (`gemini-2.5-flash-lite` → `2.5-flash` → `flash-latest`; se podaron los dos `2.0-*` que devolvían 404); un 503 reintenta el MISMO modelo una vez antes de saltar, y si los 3 caen por 429/503 la boleta vuelve a Pendientes, no a Revisión (2026-08-24). Luego **triage capa 2** (`isBoletaGate`): si la IA devolvió `isBoleta=false` → `[NO BOLETA]` + Sin Asignar.
 5. **Dedup business key** → boletaNumber + providerTaxId + dueDate + amount
 6. **Resolve assignment** → match consorcio + proveedor + período activo del consorcio

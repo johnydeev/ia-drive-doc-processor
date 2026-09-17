@@ -1,4 +1,4 @@
-import { FixedExpense, PrismaClient } from "@prisma/client";
+import { DocKind, FixedExpense, PrismaClient } from "@prisma/client";
 import { getPrismaClient } from "@/lib/prisma";
 import { validateFixedExpenseTarget } from "@/lib/fixedExpense";
 
@@ -8,6 +8,8 @@ export interface CreateFixedExpenseInput {
   providerId?: string | null;
   lspServiceId?: string | null;
   description?: string | null;
+  /** FACTURA (default) o RETENCION — spec 2026-09-17. */
+  kind?: DocKind;
 }
 
 export class FixedExpenseError extends Error {
@@ -34,16 +36,19 @@ export class FixedExpenseRepository {
     const target = {
       providerId: input.providerId ?? null,
       lspServiceId: input.lspServiceId ?? null,
+      kind: input.kind ?? ("FACTURA" as DocKind),
     };
     const err = validateFixedExpenseTarget(target);
     if (err) throw new FixedExpenseError(err, 400);
 
-    // Dedupe a nivel app: mismo consorcio + mismo objetivo.
+    // Dedupe a nivel app: mismo consorcio + mismo objetivo + mismo tipo. La factura
+    // y la retención del mismo proveedor son dos gastos fijos (spec 2026-09-17).
     const existing = await this.prisma.fixedExpense.findFirst({
       where: {
         consortiumId: input.consortiumId,
         providerId: target.providerId,
         lspServiceId: target.lspServiceId,
+        kind: target.kind,
       },
     });
     if (existing) throw new FixedExpenseError("Ese gasto fijo ya está cargado en el consorcio.", 409);
@@ -54,6 +59,7 @@ export class FixedExpenseRepository {
         consortiumId: input.consortiumId,
         providerId: target.providerId,
         lspServiceId: target.lspServiceId,
+        kind: target.kind,
         description: input.description ?? null,
       },
     });

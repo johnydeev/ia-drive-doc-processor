@@ -1,4 +1,4 @@
-import { PrismaClient } from "@prisma/client";
+import { PrismaClient, type DocKind } from "@prisma/client";
 import { getPrismaClient } from "@/lib/prisma";
 import { obligationMatchesInvoice } from "@/lib/fixedExpense";
 
@@ -35,7 +35,7 @@ export async function generateObligationsForPeriod(
     // las conserva y `ExpenseObligation.invoiceId` es unique → vincularlas acá
     // reventaría con P2002.
     where: { periodId, carriedFromPeriodId: null },
-    select: { id: true, providerId: true, lspServiceId: true },
+    select: { id: true, providerId: true, lspServiceId: true, docKind: true },
   });
 
   let created = 0;
@@ -46,8 +46,8 @@ export async function generateObligationsForPeriod(
 
     const match = invoices.find((inv) =>
       obligationMatchesInvoice(
-        { providerId: fx.providerId, lspServiceId: fx.lspServiceId },
-        { providerId: inv.providerId, lspServiceId: inv.lspServiceId }
+        { providerId: fx.providerId, lspServiceId: fx.lspServiceId, kind: fx.kind },
+        { providerId: inv.providerId, lspServiceId: inv.lspServiceId, docKind: inv.docKind }
       )
     );
 
@@ -79,21 +79,21 @@ export async function generateObligationsForPeriod(
  * Se usa en el pipeline. No toca Sheets.
  */
 export async function linkInvoiceToObligation(
-  invoice: { id: string; periodId: string | null; providerId: string | null; lspServiceId: string | null },
+  invoice: { id: string; periodId: string | null; providerId: string | null; lspServiceId: string | null; docKind?: DocKind },
   prisma: PrismaClient = getPrismaClient()
 ): Promise<boolean> {
   if (!invoice.periodId) return false;
 
   const candidates = await prisma.expenseObligation.findMany({
     where: { periodId: invoice.periodId, status: "PENDING" },
-    include: { fixedExpense: { select: { providerId: true, lspServiceId: true } } },
+    include: { fixedExpense: { select: { providerId: true, lspServiceId: true, kind: true } } },
     orderBy: { createdAt: "asc" },
   });
 
   const target = candidates.find((ob) =>
     obligationMatchesInvoice(
-      { providerId: ob.fixedExpense.providerId, lspServiceId: ob.fixedExpense.lspServiceId },
-      { providerId: invoice.providerId, lspServiceId: invoice.lspServiceId }
+      { providerId: ob.fixedExpense.providerId, lspServiceId: ob.fixedExpense.lspServiceId, kind: ob.fixedExpense.kind },
+      { providerId: invoice.providerId, lspServiceId: invoice.lspServiceId, docKind: invoice.docKind }
     )
   );
   if (!target) return false;
@@ -175,7 +175,7 @@ export async function syncObligationsForClient(
 
   const fixedExpenses = await prisma.fixedExpense.findMany({
     where: { consortiumId: { in: consortiumIds }, active: true },
-    select: { id: true, consortiumId: true, providerId: true, lspServiceId: true },
+    select: { id: true, consortiumId: true, providerId: true, lspServiceId: true, kind: true },
   });
 
   const existing = await prisma.expenseObligation.findMany({
@@ -223,7 +223,7 @@ export async function syncObligationsForClient(
     // Mismo motivo que en `generateObligationsForPeriod`: una boleta arrastrada
     // ya tiene su obligación en el período de origen.
     where: { periodId: { in: touchedPeriodIds }, carriedFromPeriodId: null },
-    select: { id: true, periodId: true, providerId: true, lspServiceId: true },
+    select: { id: true, periodId: true, providerId: true, lspServiceId: true, docKind: true },
   });
 
   const fxById = new Map(fixedExpenses.map((fx) => [fx.id, fx]));
@@ -238,8 +238,8 @@ export async function syncObligationsForClient(
         inv.periodId === ob.periodId &&
         !takenInvoiceIds.has(inv.id) &&
         obligationMatchesInvoice(
-          { providerId: fx.providerId, lspServiceId: fx.lspServiceId },
-          { providerId: inv.providerId, lspServiceId: inv.lspServiceId }
+          { providerId: fx.providerId, lspServiceId: fx.lspServiceId, kind: fx.kind },
+          { providerId: inv.providerId, lspServiceId: inv.lspServiceId, docKind: inv.docKind }
         )
     );
     if (!match) continue;

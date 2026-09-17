@@ -1,5 +1,5 @@
 import { createHash } from "crypto";
-import { Invoice, Prisma, PrismaClient } from "@prisma/client";
+import { DocKind, Invoice, Prisma, PrismaClient } from "@prisma/client";
 import {
   buildBusinessKeyParts,
   buildBusinessKeyString,
@@ -29,6 +29,8 @@ export interface SaveInvoiceInput {
   periodId?: string;
   lspServiceId?: string | null;
   paymentMethod?: string | null;
+  /** FACTURA (default) o RETENCION (paquete de liquidación) — spec 2026-09-17. */
+  docKind?: DocKind;
   tokensInput?: number | null;
   tokensOutput?: number | null;
   tokensTotal?: number | null;
@@ -222,6 +224,7 @@ export class InvoiceRepository {
           alias: input.extraction.alias,
           lspServiceId: input.lspServiceId ?? null,
           paymentMethod: input.paymentMethod as any ?? null,
+          docKind: input.docKind ?? "FACTURA",
           tokensInput: input.tokensInput ?? null,
           tokensOutput: input.tokensOutput ?? null,
           tokensTotal: input.tokensTotal ?? null,
@@ -250,6 +253,7 @@ export class InvoiceRepository {
           alias: input.extraction.alias,
           lspServiceId: input.lspServiceId ?? null,
           paymentMethod: input.paymentMethod as any ?? null,
+          docKind: input.docKind ?? "FACTURA",
           tokensInput: input.tokensInput ?? null,
           tokensOutput: input.tokensOutput ?? null,
           tokensTotal: input.tokensTotal ?? null,

@@ -3,6 +3,17 @@
 ## [Unreleased]
 
 ### Added
+- **La retención como gasto fijo propio (2026-09-17)** — migración `20260917000000_doc_kind_retencion`.
+  Enum `DocKind { FACTURA, RETENCION }` en `Invoice.docKind` y `FixedExpense.kind`; unique de gasto
+  fijo `(consortiumId, providerId, kind)`. Una obligación sólo acepta boletas de su tipo: la factura
+  y la retención del mismo proveedor conviven cada una con su fila, su estado y su boleta, sin
+  importar cuál llegó primero.
+  - Modal "Agregar gastos fijos": cada proveedor ofrece `X` y `X — Retención`.
+  - Vista de obligaciones y PDF del banco: fila `X — Retención`.
+  - La migración marca las 5 retenciones ya cargadas y libera las obligaciones FACTURA que una
+    retención había ocupado (caso Dogo / Pueyrredón).
+
+### Added
 - **Vista previa del PDF desde la planilla de Obligaciones (2026-09-16)**. Columna nueva a la izquierda
   de FACTURAS con un ícono de ojo en las filas con boleta (también en "Vienen del mes anterior"); abre
   el PDF de Drive en un modal con "Abrir en Drive". `overview` devuelve `invoiceUrl`. El modal se extrajo

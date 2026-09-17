@@ -23,7 +23,7 @@ const payload = {
       carried: [],
       lspServices: [],
       fixedExpenses: [
-        { id: "fx1", providerId: "p1", lspServiceId: null, description: null, active: true,
+        { id: "fx1", providerId: "p1", lspServiceId: null, description: null, kind: "FACTURA", active: true,
           obligation: { id: "ob1", status: "PENDING", amount: null, invoiceId: null,
             carryOverRequested: false, carriedIn: false, invoiceUrl: null } },
       ],
@@ -91,15 +91,16 @@ describe("useObligationsOverview", () => {
 
     await act(async () => {
       await result.current.addFixedExpenses("c1", [
-        { kind: "provider", id: "p2", label: "TECNOPAS" },
-        { kind: "lsp", id: "l1", label: "AYSA (66757)" },
+        { kind: "provider", id: "p2", label: "TECNOPAS", expenseKind: "FACTURA" },
+        { kind: "provider", id: "p2", label: "TECNOPAS — Retención", expenseKind: "RETENCION" },
+        { kind: "lsp", id: "l1", label: "AYSA (66757)", expenseKind: "FACTURA" },
       ]);
     });
 
     const post = guardedFetch.mock.calls.find((c) => (c[0] as string).includes("/fixed-expenses"))!;
     expect(post[1]).toMatchObject({ method: "POST" });
     expect(JSON.parse((post[1] as RequestInit).body as string)).toEqual({
-      items: [{ providerId: "p2" }, { lspServiceId: "l1" }],
+      items: [{ providerId: "p2", kind: "FACTURA" }, { providerId: "p2", kind: "RETENCION" }, { lspServiceId: "l1" }],
     });
     expect(guardedFetch.mock.calls.some((c) => (c[0] as string).includes("/overview"))).toBe(true);
   });

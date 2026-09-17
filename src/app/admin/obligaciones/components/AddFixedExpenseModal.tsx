@@ -32,7 +32,7 @@ export function AddFixedExpenseModal({ consortium, providers, onAdd, onClose }: 
   const toggle = (option: TargetOption) => {
     setSelected((prev) => {
       const next = new Map(prev);
-      const key = `${option.kind}:${option.id}`;
+      const key = `${option.kind}:${option.id}:${option.expenseKind}`;
       if (next.has(key)) next.delete(key);
       else next.set(key, option);
       return next;
@@ -47,7 +47,7 @@ export function AddFixedExpenseModal({ consortium, providers, onAdd, onClose }: 
   };
 
   const renderOption = (option: TargetOption) => {
-    const key = `${option.kind}:${option.id}`;
+    const key = `${option.kind}:${option.id}:${option.expenseKind}`;
     return (
       <li key={key} className={styles.targetItem}>
         <label className={styles.targetLabel}>

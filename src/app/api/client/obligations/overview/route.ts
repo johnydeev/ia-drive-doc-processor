@@ -66,7 +66,7 @@ export async function GET(request: NextRequest) {
       },
       fixedExpenses: {
         select: {
-          id: true, providerId: true, lspServiceId: true, description: true, active: true,
+          id: true, providerId: true, lspServiceId: true, description: true, kind: true, active: true,
         },
       },
       lspServices: {
@@ -173,6 +173,7 @@ export async function GET(request: NextRequest) {
             providerId: fx.providerId,
             lspServiceId: fx.lspServiceId,
             description: fx.description,
+            kind: fx.kind,
             active: fx.active,
             obligation: ob
               ? {
