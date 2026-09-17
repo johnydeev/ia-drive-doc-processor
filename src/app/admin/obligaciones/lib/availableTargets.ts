@@ -1,4 +1,4 @@
-import type { OverviewConsortium, OverviewPayload } from "./sheetModel";
+import { firstMatchName, type OverviewConsortium, type OverviewPayload } from "./sheetModel";
 
 export type TargetOption = {
   kind: "provider" | "lsp";
@@ -17,6 +17,16 @@ function norm(value: string): string {
     .replace(/\p{Diacritic}/gu, "") // saca los acentos: "FUMIGACIÓN" matchea con "fumigacion"
     .toLowerCase()
     .trim();
+}
+
+/**
+ * Etiqueta del proveedor en el selector: razón social y, si tiene, el primer
+ * nombre de fantasía entre paréntesis. La búsqueda filtra sobre la etiqueta
+ * completa, así "popular" encuentra a "REY MONICA ALEJANDRA (LA POPULAR)".
+ */
+function providerLabel(p: OverviewPayload["providers"][number]): string {
+  const fantasia = firstMatchName(p.matchNames);
+  return fantasia ? `${p.canonicalName} (${fantasia})` : p.canonicalName;
 }
 
 /**
@@ -50,7 +60,7 @@ export function availableTargets(
 
   const provs: TargetOption[] = providers
     .filter((p) => !usedProviderIds.has(p.id))
-    .map((p) => ({ kind: "provider" as const, id: p.id, label: p.canonicalName }))
+    .map((p) => ({ kind: "provider" as const, id: p.id, label: providerLabel(p) }))
     .filter((o) => matches(o.label))
     .sort((a, b) => a.label.localeCompare(b.label, "es"));
 

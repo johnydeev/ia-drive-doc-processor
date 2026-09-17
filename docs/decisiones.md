@@ -4,6 +4,42 @@ Registro de decisiones tomadas ante problemas reales encontrados en producción.
 
 ---
 
+## 2026-09-16 — Un gasto fijo no se borra: se archiva (desactivado, en bloque plegado)
+
+### Problema
+
+El owner cargó por error un empleado en el edificio equivocado y quiso eliminarlo. La UI no tiene
+borrado; el endpoint `DELETE .../fixed-expenses/[fxId]` existe pero `ExpenseObligation` cuelga de
+`FixedExpense` con `onDelete: Cascade`: borrar el gasto fijo borra su historial mes a mes (qué se
+recibió, qué se salteó). Las boletas no se tocan (`Invoice` es independiente), pero el registro de
+cumplimiento sí. Un borrado accidental de un proveedor con dos años de obligaciones sería
+irrecuperable. Y el owner quiere que si un proveedor se va y vuelve, el historial quede con huecos.
+
+### Decisión
+
+**Desactivar es el archivo.** Ya hacía lo que se pedía: `active=false` frena la generación de
+obligaciones (`where active: true` en `obligation.service.ts`), conserva todo y al reactivar los
+meses intermedios quedan sin obligación. Lo que faltaba era UX: las filas desactivadas ocupaban lugar
+en la tabla principal. Ahora van a un `<details>` "Desactivados (N)" plegado al pie de la tarjeta,
+con sólo Activar. Sin cambios de modelo ni de API.
+
+`<details>` nativo y no estado React: no hay nada que persistir, el navegador lo maneja, y la hoja de
+impresión lo esconde con una regla.
+
+### Alternativas descartadas
+
+- **Eliminar sólo si no tiene historial** (rechazar el DELETE con 409 si alguna obligación no es
+  PENDING sin boleta). Válida y barata; el owner la dejó para más adelante. Es la única forma segura
+  de exponer un "Eliminar" en la UI.
+- **`fixedExpenseId` nullable + `SetNull`**: las obligaciones huérfanas no dicen de qué proveedor
+  eran; historial inútil.
+- **Columna `deletedAt`**: duplica `active`, requiere migración, no aporta.
+
+### Impacto
+
+`SheetCard.tsx` (bloque + `renderRow` compartido + precedencia `!active` sobre `isSkipped`),
+`page.module.css` (`.inactiveBlock`, `.inactiveSummary`, regla print), `SheetCard.test.tsx`.
+
 ## 2026-09-14 — `matchNames` del proveedor deja de ser interno: se muestra como nombre de fantasía
 
 ### Problema
@@ -23,6 +59,13 @@ un campo nuevo: el dato existe, sólo cambia su visibilidad.
 Por qué el primero y no todos: `matchNames` mezcla el nombre de fantasía con variantes para el
 matcher (`CHERE ASCENSORES|ASCENSORES CHERE`); listar todas sería ruido. Convención para el ALTA: el
 primer valor es el que se muestra.
+
+**Extensión del mismo día — el selector de "agregar gasto fijo".** Al cargar los gastos fijos de las
+rendiciones el owner buscó "MYN SOLUCIONES" y "LA POPULAR" y el modal no los encontraba: listaba y
+filtraba sólo por razón social. Se cambió la etiqueta a `RAZÓN SOCIAL (FANTASÍA)` y el filtro corre
+sobre esa etiqueta, sin campo aparte. Paréntesis y no guión/pipe: el `|` ya es el separador de
+`matchNames` y confundiría; el guión aparece en razones sociales. El rendimiento no distingue entre
+separadores (es un `includes` sobre ~200 strings en memoria).
 
 ### Alternativas descartadas
 

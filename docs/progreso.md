@@ -19,6 +19,44 @@ VEP, y el LSD abierto en una boleta por empleado.
 > **VEP** (sesión 62) dicen "implementado": las primeras entraron en `ae31c15` y `e3551a7`, el VEP en
 > `add4e11`. Lo que sigue abierto en todas ellas es el **smoke en producción**, no el commit.
 
+## 👁 Vista previa del PDF desde la planilla de Obligaciones (2026-09-16)
+
+Pedido del owner: columna a la izquierda de FACTURAS con un ícono de vista previa en las filas que
+tienen boleta, y menos aire entre filas.
+
+- `overview` devuelve `invoiceUrl` (`Invoice.sourceFileUrl`) en la obligación y en las arrastradas;
+  `SheetRow.invoiceUrl` / `CarriedRow.invoiceUrl`. El ícono (ojo, SVG inline) sólo se renderiza si hay
+  URL: mismo criterio que el monto, porque las dos cosas salen de la boleta vinculada.
+- El modal de vista previa que vivía inline en `admin/boletas/page.tsx` se extrajo a
+  `src/components/PdfPreviewModal.tsx` (iframe `/preview` de Drive + "Abrir en Drive" + Escape) y
+  `toDrivePreviewUrl` a `src/lib/drivePreviewUrl.ts`. Boletas entrantes lo usa igual que antes.
+- Padding de filas: `td` 6px → 3px, `th` 6px → 4px. La columna del ojo no se imprime (`@media print`)
+  ni va al PDF de jsPDF.
+- Tests: `drivePreviewUrl.test.ts` (3), `sheetModel.test.ts` (+1), `SheetCard.test.tsx` (+1: ícono sólo
+  con boleta, abre el iframe con la URL `/preview`, link a Drive, cierra). 1001/1001, typecheck y lint
+  limpios. Verificado en local con THAMES 647 (AySA $744.230,47).
+- **Listo para commitear** junto con lo anterior de hoy.
+
+## 📦 Gastos fijos desactivados en bloque plegado (2026-09-16)
+
+Contexto: cargando los gastos fijos de las rendiciones el owner cargó a PARAVICINI (encargado de
+VILLARROEL) en SAN JUAN por error y quiso borrarlo. No hay borrado en la UI y el `DELETE` del endpoint
+arrastra por Cascade el historial de obligaciones (RECEIVED / SKIPPED / NOT_RECEIVED). Decisión del
+owner: **no se borra; desactivar es el archivo**, y si el proveedor vuelve se reactiva con huecos en
+el historial. Lo que faltaba era que el desactivado no ensucie la tabla.
+
+- `SheetCard`: las filas `active=false` salen de la tabla principal y van a un `<details>` plegado
+  "Desactivados (N)" al pie, con la misma tabla y sólo el botón **Activar**. Sin desactivados, el
+  bloque no existe. Si todos están desactivados, la nota dice "sin gastos fijos activos" y el bloque
+  queda. `@media print` lo esconde entero. Modelo (`buildSheets`) y PDF sin cambios.
+- Bug arreglado de paso: una fila desactivada cuyo último estado era SKIPPED ofrecía "Agregar al
+  periodo" en vez de "Activar" (el `isSkipped` se evaluaba antes que `!active`).
+- `.claude/launch.json` nuevo: `next dev -p 3100` (el 3000 es el Docker de producción).
+- Tests: 3 nuevos en `SheetCard.test.tsx` (100/100). Typecheck y lint limpios. Verificación visual
+  pendiente de login (a cargo del owner).
+- **Listo para commitear.** Queda para otra sesión el "Eliminar" restringido a gastos fijos sin
+  historial (opción 1 de la propuesta, descartada por ahora por el owner).
+
 ## 🏷️ Nombre de fantasía en la vista de Obligaciones (2026-09-14)
 
 Pedido del owner: en la lista de gastos fijos, debajo de la razón social, el nombre de fantasía en
@@ -32,8 +70,14 @@ desde hoy tiene `CHERE JUAN JOSE` y `CHERE SANDRA VIVIANA`).
   ahí el concepto ya es el nombre corto del servicio). `SheetCard` lo dibuja como `<strong>` sólo si
   existe. El PDF de jsPDF no lo incluye (no se pidió).
 - Tests: 3 en `sheetModel.test.ts`, 1 en `SheetCard.test.tsx`. Typecheck y lint limpios.
-- **Estado: listo para commitear.** Hasta hoy `matchNames` de proveedor era "interno, no se muestra
-  en la UI"; CLAUDE.md actualizado.
+- **Estado: commiteado** (`bbc7b7c`). Hasta hoy `matchNames` de proveedor era "interno, no se
+  muestra en la UI"; CLAUDE.md actualizado.
+- **Extensión (misma fecha, más tarde): el selector del botón "+" también lo muestra y lo busca.**
+  Caso real: el owner quiso cargar "MYN SOLUCIONES" y "LA POPULAR" en SAN JUAN 4125 y el modal no
+  los encontraba — la lista era sólo razón social (`MORINIGO MARCOS DAVID`, `REY MONICA ALEJANDRA`).
+  Ahora la etiqueta es `RAZÓN SOCIAL (FANTASÍA)` y el filtro corre sobre la etiqueta completa, así
+  "popular" la encuentra. `providerLabel` en `availableTargets.ts`; `firstMatchName` pasó a exportarse
+  desde `sheetModel.ts`. Test nuevo en `availableTargets.test.ts`. **Listo para commitear.**
 
 ## 📋 Liquidación de retenciones: el paquete de la administración (2026-09-12)
 
@@ -655,6 +699,7 @@ Todo lo de acá lo hace el owner; nada requiere cambios de código.
 | 19 | Smoke del **VEP**: confirmar `[NO BOLETA - VEP]` en Sin Asignar con `aiRequests = 0` | ❌ | Prueba de que el triage ahorra cuota |
 | 20 | Smoke del **LSD**: un libro de 2 empleados → 2 gastos en la hoja, montos contra el PDF | ❌ | Es donde se detectaría un `Total Neto` mal extraído |
 | 21 | **Pedir las rendiciones (jul + ago 2026) de los 38 edificios que faltan** y volcarlas: LSP, partidas AGIP, empleados, proveedores fijos. Plan, prioridades y scripts en `INFO PROVEEDORES\_analisis\PLAN-rendiciones-faltantes.md` (fuera del repo) | ❌ | Padrón fehaciente por edificio; hoy `_LspServices` sale de la planilla del administrador, que ya mostró 3 errores |
+| 23 | **CANELO OSCAR `23-13428278-9`** (SAN JUAN 4125): transferencia judicial de $1.500.000/mes (juzgado 63, autos CANELO c/ CONSORCIO), jul y ago 2026. No es proveedor; sin alta en `_Proveedores` ni gasto fijo. **En espera por decisión del owner (2026-09-16)** | ⏸ | Mientras tanto el comprobante BBVA rebota como `CUIT DE PROVEEDOR NO REGISTRADO` |
 | 22 | Sin Asignar al 2026-09-13 (6 archivos, `scripts/preflight-drive.ts`): alta de **MAPFRE ARGENTINA SEG. VIDA** `33-70089372-9`; confirmar CUIT `30-71573334-6` ("ORO 2178 S.R.L.", factura Subito) y consorcio **AV. CÓRDOBA 6235** `30-71617051-5` (Neme); AySA cuenta `488240` (Culpina 388, ¿JOSE BONIFACIO 720?); `CCD_00001606` es un estado de deuda de Manutenzione, no la factura | ❌ | Esas 6 no entran hasta resolverlo |
 
 **Riesgo operativo abierto, sin dueño:** en la corrida real del 2026-08-28 **Cerebras devolvió 402 en

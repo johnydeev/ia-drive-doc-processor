@@ -32,9 +32,9 @@ const payload: OverviewPayload = {
       ],
       fixedExpenses: [
         { id: "fx1", providerId: "p1", lspServiceId: null, description: null, active: true,
-          obligation: { id: "ob1", status: "PENDING", amount: null, invoiceId: null, carryOverRequested: false, carriedIn: false } },
+          obligation: { id: "ob1", status: "PENDING", amount: null, invoiceId: null, carryOverRequested: false, carriedIn: false, invoiceUrl: null } },
         { id: "fx2", providerId: null, lspServiceId: "l1", description: null, active: true,
-          obligation: { id: "ob2", status: "RECEIVED", amount: 118000, invoiceId: null, carryOverRequested: false, carriedIn: false } },
+          obligation: { id: "ob2", status: "RECEIVED", amount: 118000, invoiceId: null, carryOverRequested: false, carriedIn: false, invoiceUrl: null } },
         { id: "fx3", providerId: "p2", lspServiceId: null, description: null, active: false,
           obligation: null },
       ],
@@ -96,6 +96,25 @@ describe("buildSheets", () => {
     const rows = buildSheets(conLspInactivo)[0].rows;
     expect(rows.map((r) => r.fixedExpenseId)).toEqual(["fx1", "fx2"]);
     expect(rows[rows.length - 1].active).toBe(false);
+  });
+
+  it("expone la URL del PDF de la boleta vinculada, y null si no llegó", () => {
+    const withUrl: OverviewPayload = {
+      ...payload,
+      consortiums: [{
+        ...payload.consortiums[0],
+        fixedExpenses: [
+          { id: "fx1", providerId: "p1", lspServiceId: null, description: null, active: true,
+            obligation: { id: "ob1", status: "RECEIVED", amount: 5000, invoiceId: "inv1", carryOverRequested: false, carriedIn: false,
+              invoiceUrl: "https://drive.google.com/file/d/ABC/view" } },
+          { id: "fx2", providerId: null, lspServiceId: "l1", description: null, active: true,
+            obligation: { id: "ob2", status: "PENDING", amount: null, invoiceId: null, carryOverRequested: false, carriedIn: false, invoiceUrl: null } },
+        ],
+      }],
+    };
+    const rows = buildSheets(withUrl)[0].rows;
+    expect(rows.find((r) => r.fixedExpenseId === "fx1")?.invoiceUrl).toBe("https://drive.google.com/file/d/ABC/view");
+    expect(rows.find((r) => r.fixedExpenseId === "fx2")?.invoiceUrl).toBeNull();
   });
 
   it("toma el monto de la boleta vinculada y lo deja null si no llegó", () => {

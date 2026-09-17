@@ -16,13 +16,14 @@ const sheet: SheetData = {
   rows: [
     { fixedExpenseId: "fx1", obligationId: "ob1", providerId: null, lspServiceId: "l1",
       facturas: "4804882", concepto: "EDESUR", fantasia: null, monto: 118000, aliasCbu: ["edesur.pago"],
-      status: "RECEIVED", active: true, invoiceId: "inv1", carryOverRequested: false, carriedIn: false },
+      status: "RECEIVED", active: true, invoiceId: "inv1", carryOverRequested: false, carriedIn: false,
+      invoiceUrl: "https://drive.google.com/file/d/ABC123/view?usp=drivesdk" },
     { fixedExpenseId: "fx2", obligationId: "ob2", providerId: "p1", lspServiceId: null,
       facturas: null, concepto: "SEGURO LA CAJA", fantasia: null, monto: null, aliasCbu: [],
-      status: "PENDING", active: true, invoiceId: null, carryOverRequested: false, carriedIn: false },
+      status: "PENDING", active: true, invoiceId: null, carryOverRequested: false, carriedIn: false, invoiceUrl: null },
     { fixedExpenseId: "fx3", obligationId: "ob3", providerId: "p2", lspServiceId: null,
       facturas: null, concepto: "N.G. FUMIGACION", fantasia: "FUMIGACIONES MIGUEL", monto: null, aliasCbu: [],
-      status: "SKIPPED", active: true, invoiceId: null, carryOverRequested: false, carriedIn: false },
+      status: "SKIPPED", active: true, invoiceId: null, carryOverRequested: false, carriedIn: false, invoiceUrl: null },
   ],
   carried: [],
 };
@@ -48,6 +49,27 @@ describe("SheetCard", () => {
     expect(screen.getByText("FRANKLIN 25")).toBeInTheDocument();
     expect(screen.getByText(/Santander/)).toBeInTheDocument();
     expect(screen.getByText(/julio 2026/)).toBeInTheDocument();
+  });
+
+  it("ofrece la vista previa del PDF sólo en las filas con boleta", async () => {
+    renderCard();
+    const botones = screen.getAllByRole("button", { name: /Vista previa de la boleta/ });
+    expect(botones).toHaveLength(1);
+    expect(botones[0]).toHaveAccessibleName("Vista previa de la boleta de EDESUR");
+
+    await userEvent.click(botones[0]);
+    const dialog = screen.getByRole("dialog");
+    expect(within(dialog).getByTitle("Vista previa de boleta")).toHaveAttribute(
+      "src",
+      "https://drive.google.com/file/d/ABC123/preview"
+    );
+    expect(within(dialog).getByRole("link", { name: /Abrir en Drive/ })).toHaveAttribute(
+      "href",
+      "https://drive.google.com/file/d/ABC123/view?usp=drivesdk"
+    );
+
+    await userEvent.click(within(dialog).getByRole("button", { name: "Cerrar vista previa" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
   it("dibuja las seis columnas de la planilla", () => {
@@ -132,6 +154,35 @@ describe("SheetCard", () => {
     expect(props.onToggle).toHaveBeenCalledWith("c1", "fx2", true);
   });
 
+  it("los desactivados van a un bloque plegado aparte, fuera de la tabla principal", () => {
+    const mixta = {
+      ...sheet,
+      rows: [sheet.rows[0], { ...sheet.rows[1], active: false }, { ...sheet.rows[2], active: false }],
+    };
+    renderCard({ sheet: mixta });
+
+    const bloque = screen.getByText("Desactivados (2)").closest("details")!;
+    expect(bloque).not.toHaveAttribute("open");
+    expect(within(bloque).getByText("SEGURO LA CAJA")).toBeInTheDocument();
+    expect(within(bloque).getByText("N.G. FUMIGACION")).toBeInTheDocument();
+    expect(within(bloque).getAllByRole("button", { name: "Activar" })).toHaveLength(2);
+
+    const [principal] = screen.getAllByRole("table");
+    expect(within(principal).getByText("EDESUR")).toBeInTheDocument();
+    expect(within(principal).queryByText("SEGURO LA CAJA")).not.toBeInTheDocument();
+  });
+
+  it("sin desactivados no dibuja el bloque", () => {
+    renderCard();
+    expect(screen.queryByText(/Desactivados/)).not.toBeInTheDocument();
+  });
+
+  it("si todos están desactivados avisa que no hay activos y deja el bloque", () => {
+    renderCard({ sheet: { ...sheet, rows: sheet.rows.map((r) => ({ ...r, active: false })) } });
+    expect(screen.getByText(/sin gastos fijos activos/i)).toBeInTheDocument();
+    expect(screen.getByText("Desactivados (3)").closest("details")).toBeInTheDocument();
+  });
+
   // Feedback de carga: convención del proyecto para toda acción async.
   it("mientras la acción corre, el botón se deshabilita y avisa que está ocupado", async () => {
     let release: () => void = () => {};
@@ -206,7 +257,7 @@ describe("SheetCard", () => {
       carried: [
         { invoiceId: "inv-ago", facturas: null, concepto: "EDESUR S.A.", monto: 980000,
           originalAmount: 980000, lateAmount: null, aliasCbu: [],
-          fromLabel: "agosto 2026", carryOverRequested: false },
+          fromLabel: "agosto 2026", carryOverRequested: false, invoiceUrl: null },
       ],
     };
     const { container: c3 } = render(<SheetCard sheet={soloImpaga} {...noop} />);
@@ -230,7 +281,7 @@ describe("SheetCard", () => {
         ...sheet,
         carried: [
           { invoiceId: "inv9", facturas: null, concepto: "ASCENSORES POTENZA", monto: 118000,
-            originalAmount: 118000, lateAmount: null, aliasCbu: [], fromLabel: "junio 2026", carryOverRequested: false },
+            originalAmount: 118000, lateAmount: null, aliasCbu: [], fromLabel: "junio 2026", carryOverRequested: false, invoiceUrl: null },
         ],
       },
     });
@@ -247,7 +298,7 @@ describe("SheetCard", () => {
         ...sheet,
         carried: [
           { invoiceId: "inv9", facturas: null, concepto: "ASCENSORES POTENZA", monto: 118000,
-            originalAmount: 118000, lateAmount: null, aliasCbu: [], fromLabel: "junio 2026", carryOverRequested: false },
+            originalAmount: 118000, lateAmount: null, aliasCbu: [], fromLabel: "junio 2026", carryOverRequested: false, invoiceUrl: null },
         ],
       },
     });
@@ -292,7 +343,7 @@ describe("SheetCard", () => {
         ...sheet,
         carried: [
           { invoiceId: "inv9", facturas: null, concepto: "ASCENSORES POTENZA", monto: 118000,
-            originalAmount: 118000, lateAmount: null, aliasCbu: [], fromLabel: "junio 2026", carryOverRequested: false },
+            originalAmount: 118000, lateAmount: null, aliasCbu: [], fromLabel: "junio 2026", carryOverRequested: false, invoiceUrl: null },
         ],
       },
     });
@@ -310,7 +361,7 @@ describe("SheetCard", () => {
         ...sheet,
         carried: [
           { invoiceId: "inv9", facturas: null, concepto: "ASCENSORES POTENZA", monto: 130000,
-            originalAmount: 118000, lateAmount: 130000, aliasCbu: [], fromLabel: "junio 2026", carryOverRequested: false },
+            originalAmount: 118000, lateAmount: 130000, aliasCbu: [], fromLabel: "junio 2026", carryOverRequested: false, invoiceUrl: null },
         ],
       },
     });
@@ -333,7 +384,7 @@ describe("SheetCard", () => {
         carried: [
           { invoiceId: "inv9", facturas: null, concepto: "ASCENSORES POTENZA", monto: 118000,
             originalAmount: 118000, lateAmount: null, aliasCbu: [], fromLabel: "junio 2026",
-            carryOverRequested: false },
+            carryOverRequested: false, invoiceUrl: null },
         ],
       },
     });
@@ -352,7 +403,7 @@ describe("SheetCard", () => {
         carried: [
           { invoiceId: "inv9", facturas: null, concepto: "ASCENSORES POTENZA", monto: 118000,
             originalAmount: 118000, lateAmount: null, aliasCbu: [], fromLabel: "junio 2026",
-            carryOverRequested: false },
+            carryOverRequested: false, invoiceUrl: null },
         ],
       },
     });

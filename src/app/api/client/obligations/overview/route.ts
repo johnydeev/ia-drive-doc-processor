@@ -89,7 +89,7 @@ export async function GET(request: NextRequest) {
           fixedExpenseId: true,
           status: true,
           invoice: {
-            select: { id: true, amount: true, carryOverRequestedAt: true, carriedFromPeriodId: true },
+            select: { id: true, amount: true, sourceFileUrl: true, carryOverRequestedAt: true, carriedFromPeriodId: true },
           },
         },
       })
@@ -112,6 +112,7 @@ export async function GET(request: NextRequest) {
           provider: true,
           amount: true,
           lateAmount: true,
+          sourceFileUrl: true,
           carryOverRequestedAt: true,
           providerRef: { select: { canonicalName: true, paymentAlias: true } },
           lspServiceRef: { select: { clientNumber: true } },
@@ -163,6 +164,7 @@ export async function GET(request: NextRequest) {
              * septiembre. El arrastre encadenado conserva el origen ORIGINAL.
              */
             carryOverRequested: Boolean(inv.carryOverRequestedAt),
+            invoiceUrl: inv.sourceFileUrl ?? null,
           })),
         fixedExpenses: c.fixedExpenses.map((fx) => {
           const ob = period ? obligationByKey.get(`${period.id}:${fx.id}`) : undefined;
@@ -179,6 +181,8 @@ export async function GET(request: NextRequest) {
                   // Decimal de Prisma serializa como string: la UI espera número.
                   amount: ob.invoice?.amount != null ? Number(ob.invoice.amount) : null,
                   invoiceId: ob.invoice?.id ?? null,
+                  /** Link de Drive del PDF, para la vista previa desde la planilla. */
+                  invoiceUrl: ob.invoice?.sourceFileUrl ?? null,
                   /** Marcada para pasar al mes siguiente (se mueve al cerrar). */
                   carryOverRequested: Boolean(ob.invoice?.carryOverRequestedAt),
                   /** Esta boleta vino empujada de un mes anterior. */

@@ -50,9 +50,18 @@
 .sheetTable { width: 100%; border-collapse: collapse; font-size: 13px; }
 .sheetTable th {
   text-align: left; font-size: 11px; letter-spacing: 0.04em;
-  padding: 6px 8px; border-bottom: 1px solid rgba(127, 127, 127, 0.3); white-space: nowrap;
+  padding: 4px 8px; border-bottom: 1px solid rgba(127, 127, 127, 0.3); white-space: nowrap;
 }
-.sheetTable td { padding: 6px 8px; border-bottom: 1px solid rgba(127, 127, 127, 0.12); }
+.sheetTable td { padding: 3px 8px; border-bottom: 1px solid rgba(127, 127, 127, 0.12); }
+
+/* Columna de vista previa del PDF: sólo el ícono, sin encabezado. */
+.previewCell { width: 1%; padding-left: 4px; padding-right: 0; }
+.previewBtn {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 28px; height: 28px; border-radius: 6px; border: 1px solid transparent;
+  background: none; color: inherit; opacity: 0.7; cursor: pointer;
+}
+.previewBtn:hover { opacity: 1; border-color: rgba(127, 127, 127, 0.4); }
 .actionsHeader { width: 1%; }
 .rowActions { display: flex; gap: 8px; justify-content: flex-end; white-space: nowrap; }
 
@@ -85,6 +94,15 @@
   opacity: 0.75; margin: 0 0 6px;
 }
 .rowCarried td { background: rgba(217, 119, 6, 0.06); }
+
+/* Bloque plegado de gastos fijos desactivados. */
+.inactiveBlock { margin-top: 14px; border-top: 1px dashed rgba(127, 127, 127, 0.45); padding-top: 8px; }
+.inactiveSummary {
+  cursor: pointer; font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em;
+  opacity: 0.75; user-select: none;
+}
+.inactiveSummary:hover { opacity: 1; }
+.inactiveBlock[open] .inactiveSummary { margin-bottom: 6px; }
 .carriedBadge {
   display: inline-block; margin-left: 6px; padding: 1px 6px; border-radius: 999px;
   font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em;
@@ -163,6 +181,8 @@
   /* Salteadas y desactivadas no son parte de lo que hay que pagar. */
   .sheetTable .rowSkipped,
   .sheetTable .rowInactive { display: none; }
+  .inactiveBlock { display: none; }
+  .previewCell { display: none; }
   .sheetTable { min-width: 0; font-size: 10pt; }
   .sheetTable td,
   .sheetTable th { border-bottom: 1px solid #999; }

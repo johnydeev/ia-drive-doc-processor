@@ -58,6 +58,18 @@ describe("availableTargets", () => {
     expect(out.providers.map((o) => o.id)).toEqual(["p8"]);
   });
 
+  it("muestra el nombre de fantasía entre paréntesis y lo encuentra al buscar", () => {
+    const withFantasia = [
+      { id: "p8", canonicalName: "REY MONICA ALEJANDRA", paymentAlias: null, matchNames: "LA POPULAR|POPULAR" },
+      { id: "p9", canonicalName: "MORINIGO MARCOS DAVID", paymentAlias: null, matchNames: " | " },
+    ];
+    const all = availableTargets(consortium, withFantasia, "");
+    expect(all.providers.map((o) => o.label)).toEqual(["MORINIGO MARCOS DAVID", "REY MONICA ALEJANDRA (LA POPULAR)"]);
+
+    const byFantasia = availableTargets(consortium, withFantasia, "popular");
+    expect(byFantasia.providers.map((o) => o.id)).toEqual(["p8"]);
+  });
+
   it("devuelve listas vacías cuando ya está todo cargado", () => {
     const full: OverviewConsortium = {
       ...consortium,

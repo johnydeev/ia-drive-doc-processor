@@ -83,6 +83,7 @@ src/
 │       ├── boletas/           # UI vista global "Boletas entrantes" (borrado/move masivo)
 │       ├── obligaciones/      # UI vista global de gastos fijos por edificio
 │       │                      # + Descargar PDF (jsPDF, import dinámico) e Imprimir (@media print)
+│       │                      # + vista previa del PDF por fila (src/components/PdfPreviewModal.tsx)
 │       ├── clients/
 │       │   └── [id]/          # UI edición de configuración de cliente
 │       └── page.tsx           # Panel admin principal
@@ -185,7 +186,9 @@ Client          → Tenant. Roles: ADMIN / CLIENT / VIEWER. consortiumsEnabled (
   FANTASÍA del ALTA). **Desde 2026-09-14 el primer valor se muestra** en la vista de Obligaciones,
   en negrita debajo de la razón social de cada gasto fijo: es el nombre por el que el administrador
   reconoce al proveedor y lo que agrupa a los que facturan con varios CUITs por el mismo negocio
-  (Fumigaciones Miguel, Chere Ascensores). No se muestra en ningún otro lado.
+  (Fumigaciones Miguel, Chere Ascensores). También en el selector de "agregar gasto fijo", como
+  `RAZÓN SOCIAL (FANTASÍA)`, y el buscador de ese modal filtra por los dos. No se muestra en ningún
+  otro lado.
 - `paymentAlias` → alias visible en la UI (label "Alias") y escrito en la columna "ALIAS" de Google Sheets
   - Si no tiene valor, la celda de Sheets queda vacía
 ### googleConfigJson por cliente

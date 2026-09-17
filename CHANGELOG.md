@@ -3,6 +3,17 @@
 ## [Unreleased]
 
 ### Added
+- **Vista previa del PDF desde la planilla de Obligaciones (2026-09-16)**. Columna nueva a la izquierda
+  de FACTURAS con un ícono de ojo en las filas con boleta (también en "Vienen del mes anterior"); abre
+  el PDF de Drive en un modal con "Abrir en Drive". `overview` devuelve `invoiceUrl`. El modal se extrajo
+  de Boletas entrantes a `src/components/PdfPreviewModal.tsx` (+ `src/lib/drivePreviewUrl.ts`). Filas
+  más compactas (padding 6px → 3px). La columna no se imprime.
+- **Gastos fijos desactivados en bloque plegado (2026-09-16)**. En la vista de Obligaciones las filas
+  desactivadas ya no se mezclan con las activas: van a un `<details>` "Desactivados (N)" al pie de cada
+  edificio, plegado, sólo con **Activar**. Desactivar es el archivo del gasto fijo (historial de
+  obligaciones intacto, huecos si vuelve); no hay borrado en la UI. Fix: fila desactivada con último
+  estado SKIPPED ofrecía "Agregar al periodo" en vez de "Activar". `.claude/launch.json` para
+  `next dev -p 3100`.
 - **Nombre de fantasía en la vista de Obligaciones (2026-09-14)**. Cada gasto fijo por proveedor muestra,
   en negrita y más chico debajo de la razón social, el primer valor de `Provider.matchNames` (columna
   NOMBRE FANTASÍA del ALTA). Sólo se renderiza si existe; las filas LSP no lo llevan. Motivo: es el
@@ -10,6 +21,9 @@
   CUITs por el mismo negocio (Fumigaciones Miguel; Chere: `CHERE JUAN JOSE` + `CHERE SANDRA VIVIANA`).
   `SheetRow.fantasia`, `overview` devuelve `matchNames`, `.fantasia` en `page.module.css`. Tests en
   `sheetModel.test.ts` y `SheetCard.test.tsx`. El PDF (`sheetPdf.ts`) no cambia.
+  - **Selector del botón "+" (misma fecha)**: los proveedores se listan como `RAZÓN SOCIAL (FANTASÍA)`
+    y el buscador también encuentra por fantasía ("popular" → `REY MONICA ALEJANDRA (LA POPULAR)`).
+    `providerLabel` en `availableTargets.ts`; `firstMatchName` exportado desde `sheetModel.ts`.
 - **`scripts/preflight-drive.ts` (2026-09-13)**: diagnóstico read-only y sin IA que recorre Pendientes y
   Sin Asignar en Drive y dice, por PDF, si va a matchear consorcio / proveedor / LspService contra el
   directorio actual, y qué CUIT o número de cliente falta dar de alta. Reusa la lógica del pipeline

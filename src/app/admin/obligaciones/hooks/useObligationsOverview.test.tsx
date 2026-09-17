@@ -25,7 +25,7 @@ const payload = {
       fixedExpenses: [
         { id: "fx1", providerId: "p1", lspServiceId: null, description: null, active: true,
           obligation: { id: "ob1", status: "PENDING", amount: null, invoiceId: null,
-            carryOverRequested: false, carriedIn: false } },
+            carryOverRequested: false, carriedIn: false, invoiceUrl: null } },
       ],
     },
   ],

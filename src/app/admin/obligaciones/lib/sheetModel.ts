@@ -26,6 +26,8 @@ export type OverviewFixedExpense = {
     carryOverRequested: boolean;
     /** Esta boleta vino empujada de un mes anterior. */
     carriedIn: boolean;
+    /** Link de Drive del PDF de la boleta, si llegó. */
+    invoiceUrl: string | null;
   } | null;
 };
 
@@ -51,6 +53,8 @@ export type OverviewCarried = {
   fromLabel: string | null;
   /** Marcada para volver a pasar al mes siguiente (arrastre encadenado). */
   carryOverRequested: boolean;
+  /** Link de Drive del PDF de la boleta. */
+  invoiceUrl?: string | null;
 };
 
 export type OverviewConsortium = {
@@ -105,6 +109,8 @@ export type SheetRow = {
   carryOverRequested: boolean;
   /** Esta boleta vino empujada del mes anterior. */
   carriedIn: boolean;
+  /** Link de Drive del PDF de la boleta, para la vista previa. Null si no llegó. */
+  invoiceUrl: string | null;
 };
 
 /**
@@ -129,6 +135,8 @@ export type CarriedRow = {
   fromLabel: string | null;
   /** Marcada para volver a pasar al mes siguiente. */
   carryOverRequested: boolean;
+  /** Link de Drive del PDF, para la vista previa. */
+  invoiceUrl: string | null;
 };
 
 export type SheetData = {
@@ -157,7 +165,7 @@ function norm(value: string): string {
 }
 
 /** Primer nombre de fantasía de `matchNames` (`A|B|C`), o null si no hay ninguno. */
-function firstMatchName(matchNames: string | null | undefined): string | null {
+export function firstMatchName(matchNames: string | null | undefined): string | null {
   const first = (matchNames ?? "").split("|").map((n) => n.trim()).find(Boolean);
   return first ?? null;
 }
@@ -194,6 +202,7 @@ export function buildSheets(payload: OverviewPayload): SheetData[] {
         invoiceId: fx.obligation?.invoiceId ?? null,
         carryOverRequested: fx.obligation?.carryOverRequested ?? false,
         carriedIn: fx.obligation?.carriedIn ?? false,
+        invoiceUrl: fx.obligation?.invoiceUrl ?? null,
       };
     });
 
@@ -226,6 +235,7 @@ export function buildSheets(payload: OverviewPayload): SheetData[] {
         aliasCbu: parsePaymentAliases(inv.aliasCbu),
         fromLabel: inv.fromLabel,
         carryOverRequested: inv.carryOverRequested,
+        invoiceUrl: inv.invoiceUrl ?? null,
       }))
       .sort((a, b) => a.concepto.localeCompare(b.concepto, "es"));
 
