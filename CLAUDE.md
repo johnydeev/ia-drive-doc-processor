@@ -82,6 +82,7 @@ src/
 │       ├── consortiums/       # UI principal de gestión
 │       ├── boletas/           # UI vista global "Boletas entrantes" (borrado/move masivo)
 │       ├── obligaciones/      # UI vista global de gastos fijos por edificio
+│       │                      # + subfilas de boletas adicionales y bloque "Otras boletas del mes" (2026-09-18)
 │       │                      # + Descargar PDF (jsPDF, import dinámico) e Imprimir (@media print)
 │       │                      # + vista previa del PDF por fila (src/components/PdfPreviewModal.tsx)
 │       ├── clients/
@@ -144,6 +145,10 @@ Client          → Tenant. Roles: ADMIN / CLIENT / VIEWER. consortiumsEnabled (
   │                           + invoiceId? (se vincula solo cuando llega la boleta). Unique (periodId, fixedExpenseId)
   │                           `obligationMatchesInvoice` exige fixedExpense.kind === invoice.docKind: la
   │                           factura y la retención del mismo proveedor no se pisan (spec 2026-09-17)
+  │                           Una obligación = UNA boleta principal (la primera que llega). Las demás del
+  │                           mismo proveedor y las de proveedores sin gasto fijo se DERIVAN en lectura
+  │                           (`Invoice` con `obligation: null`) y la hoja las muestra como adicionales
+  │                           `↳ 2ª boleta` / bloque "Otras boletas del mes" (spec 2026-09-18)
   ├── ConsortiumProvider → Relación N:M consorcio↔proveedor. Unique (consortiumId, providerId)
   ├── ProcessingJob → Cola de jobs (PENDING/PROCESSING/COMPLETED/FAILED)
   │                    diagnosticRunId? → agrupa los jobs de una corrida selectiva
@@ -553,7 +558,9 @@ Customizable por cliente en `extractionConfigJson.columnMapping`. Fuente única 
   - Logo placeholder, nombre del cliente, separador.
   - Botones: Sincronizar directorio, Bancos, Consorcios (con badge Premium si `consortiumsEnabled` es false), Cerrar Periodo General (solo rol CLIENT), Cerrar sesión.
 - **Toolbar superior**: Pausar/Ejecutar scheduler a la izquierda, toggle dark/light (switch con iconos sol/luna) a la derecha.
-- **Toggle de tema**: estado solo de sesión (no persiste en localStorage). Clase `dark` en `<html>`.
+- **Toggle de tema**: `src/hooks/useThemeMode.ts` + `src/components/ThemeToggle.tsx` (2026-09-18), en
+  todas las páginas del panel. Persiste en `localStorage` (`dpp_admin_theme`) y escribe `data-theme`
+  en `<html>`; `globals.css` tematiza por `[data-theme]`.
 ### Vista general: dos niveles (bancos → edificios)
 - **Nivel 0** (landing): grilla de cards de banco (`BankGrid`). Cada card muestra el nombre, la
   cantidad de edificios y un badge por edificio, con un color sutil según `Bank.color`

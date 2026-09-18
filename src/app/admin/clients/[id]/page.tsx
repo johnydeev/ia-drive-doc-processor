@@ -1,12 +1,12 @@
 "use client";
 
 import { FormEvent, useCallback, useEffect, useState } from "react";
+import { useThemeMode } from "@/hooks/useThemeMode";
+import { ThemeToggle } from "@/components/ThemeToggle";
 import { useParams, useRouter } from "next/navigation";
 import styles from "./page.module.css";
 import { useAuthGuard } from "@/lib/useAuthGuard";
 
-type ThemeMode = "dark" | "light";
-const THEME_STORAGE_KEY = "dpp_admin_theme";
 
 type ClientConfig = {
   id: string;
@@ -60,7 +60,7 @@ export default function EditClientPage() {
   const router = useRouter();
   const { guardedFetch } = useAuthGuard();
 
-  const [theme, setTheme] = useState<ThemeMode>("dark");
+  const { theme, toggleTheme } = useThemeMode();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -87,13 +87,6 @@ export default function EditClientPage() {
     openaiApiKey: "",
     anthropicApiKey: "",
   });
-
-  useEffect(() => {
-    try {
-      const stored = window.localStorage.getItem(THEME_STORAGE_KEY);
-      if (stored === "dark" || stored === "light") setTheme(stored);
-    } catch { /* no-op */ }
-  }, []);
 
   const set = (field: keyof FormState) =>
     (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) =>
@@ -208,13 +201,7 @@ export default function EditClientPage() {
             >
               Volver al panel
             </button>
-            <button
-              type="button"
-              className={styles.ghostBtn}
-              onClick={() => setTheme((t) => t === "dark" ? "light" : "dark")}
-            >
-              {theme === "dark" ? "Modo claro" : "Modo oscuro"}
-            </button>
+            <ThemeToggle theme={theme} onToggle={toggleTheme} />
           </div>
         </header>
 

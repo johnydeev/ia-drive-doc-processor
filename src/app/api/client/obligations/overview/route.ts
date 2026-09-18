@@ -121,9 +121,56 @@ export async function GET(request: NextRequest) {
       })
     : [];
 
+  // Boletas del mes que NO ocupan ninguna obligación: la 2ª del mismo proveedor,
+  // o la de un proveedor que no es gasto fijo del edificio. `sheetModel` decide
+  // en cuál de los dos casos está cada una. `obligation: null` es la inversa de
+  // `ExpenseObligation.invoiceId` (spec 2026-09-18).
+  const looseSelect = {
+    id: true, consortiumId: true, periodId: true, providerId: true, lspServiceId: true,
+    docKind: true, amount: true, sourceFileUrl: true, carryOverRequestedAt: true, createdAt: true,
+    provider: true,
+    providerRef: { select: { canonicalName: true, paymentAlias: true, matchNames: true } },
+    lspServiceRef: { select: { clientNumber: true } },
+  } as const;
+
+  const loose = periodIds.length
+    ? await prisma.invoice.findMany({
+        where: { clientId, periodId: { in: periodIds }, carriedFromPeriodId: null, obligation: null },
+        select: looseSelect,
+      })
+    : [];
+
+  // Las que NACIERON en este mes y el owner empujó al siguiente: el origen las
+  // sigue mostrando (rendición ante los inquilinos), sin acciones. `obligation:
+  // null` también acá: la principal arrastrada conserva su obligación (queda
+  // CARRIED_OVER y ya se muestra en su fila); sin el filtro saldría dos veces.
+  const carriedOut = periodIds.length
+    ? await prisma.invoice.findMany({
+        where: { clientId, carriedFromPeriodId: { in: periodIds }, obligation: null },
+        select: { ...looseSelect, carriedFromPeriodId: true, periodRef: { select: { year: true, month: true } } },
+      })
+    : [];
+
+  const toLoose = (inv: (typeof loose)[number], carriedOutTo: string | null) => ({
+    invoiceId: inv.id,
+    providerId: inv.providerId,
+    lspServiceId: inv.lspServiceId,
+    docKind: inv.docKind,
+    concepto: inv.providerRef?.canonicalName ?? inv.provider ?? "—",
+    matchNames: inv.providerRef?.matchNames ?? null,
+    facturas: inv.lspServiceRef?.clientNumber ?? null,
+    aliasCbu: inv.providerRef?.paymentAlias ?? null,
+    // Decimal de Prisma serializa como string: la UI espera número.
+    amount: inv.amount != null ? Number(inv.amount) : null,
+    invoiceUrl: inv.sourceFileUrl ?? null,
+    carryOverRequested: Boolean(inv.carryOverRequestedAt),
+    createdAt: inv.createdAt.toISOString(),
+    carriedOutTo,
+  });
+
   const providers = await prisma.provider.findMany({
     where: { clientId },
-    select: { id: true, canonicalName: true, paymentAlias: true, matchNames: true },
+    select: { id: true, canonicalName: true, paymentAlias: true, matchNames: true, providerType: true },
     orderBy: { canonicalName: "asc" },
   });
 
@@ -166,6 +213,12 @@ export async function GET(request: NextRequest) {
             carryOverRequested: Boolean(inv.carryOverRequestedAt),
             invoiceUrl: inv.sourceFileUrl ?? null,
           })),
+        looseInvoices: [
+          ...loose.filter((inv) => inv.consortiumId === c.id).map((inv) => toLoose(inv, null)),
+          ...carriedOut
+            .filter((inv) => inv.consortiumId === c.id && inv.carriedFromPeriodId === period?.id)
+            .map((inv) => toLoose(inv, inv.periodRef ? periodLabel(inv.periodRef.year, inv.periodRef.month) : null)),
+        ],
         fixedExpenses: c.fixedExpenses.map((fx) => {
           const ob = period ? obligationByKey.get(`${period.id}:${fx.id}`) : undefined;
           return {

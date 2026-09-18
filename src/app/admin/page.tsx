@@ -1,14 +1,14 @@
 "use client";
 
 import { FormEvent, useCallback, useEffect, useState } from "react";
+import { useThemeMode } from "@/hooks/useThemeMode";
+import { ThemeToggle } from "@/components/ThemeToggle";
 import { useRouter } from "next/navigation";
 import styles from "./page.module.css";
 import { SchedulerRuntimeState } from "@/types/scheduler.types";
 import { useAuthGuard } from "@/lib/useAuthGuard";
 
 type AuthRole = "ADMIN" | "CLIENT" | "VIEWER";
-type ThemeMode = "dark" | "light";
-const THEME_STORAGE_KEY = "dpp_admin_theme";
 
 type SchedulerStatusResponse = {
   ok: boolean; error?: string;
@@ -87,7 +87,7 @@ export default function AdminPage() {
   const [clientMetrics, setClientMetrics] = useState<ClientMetricRow[]>([]);
   const [createForm, setCreateForm] = useState<CreateClientForm>(INITIAL_FORM);
   const [isCreateClientOpen, setIsCreateClientOpen] = useState(false);
-  const [theme, setTheme] = useState<ThemeMode>("dark");
+  const { theme, toggleTheme } = useThemeMode();
   const [purgeTarget, setPurgeTarget] = useState<PurgeTarget>(null);
   const [purgeStep, setPurgeStep] = useState<PurgeStep>("preview");
   const [purgeCount, setPurgeCount] = useState(0);
@@ -101,18 +101,6 @@ export default function AdminPage() {
     (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) =>
       setCreateForm((c) => ({ ...c, [field]: e.target.value }));
 
-  useEffect(() => {
-    try {
-      const stored = window.localStorage.getItem(THEME_STORAGE_KEY);
-      if (stored === "dark" || stored === "light") setTheme(stored);
-    } catch { /* no-op */ }
-  }, []);
-
-  const handleToggleTheme = () => {
-    const next: ThemeMode = theme === "dark" ? "light" : "dark";
-    setTheme(next);
-    try { window.localStorage.setItem(THEME_STORAGE_KEY, next); } catch { /* no-op */ }
-  };
 
   const fetchStatus = useCallback(async () => {
     setLoading(true); setError(null);
@@ -394,10 +382,7 @@ export default function AdminPage() {
                 Invoices
               </button>
             )}
-            <button type="button" className={`${styles.ghostBtn} ${styles.themeBtn}`}
-              onClick={handleToggleTheme} disabled={busyAction !== null}>
-              {theme === "dark" ? "Modo claro" : "Modo oscuro"}
-            </button>
+            <ThemeToggle theme={theme} onToggle={toggleTheme} disabled={busyAction !== null} />
             <button type="button" className={styles.ghostBtn}
               onClick={() => void fetchStatus()} disabled={loading || busyAction !== null}>
               Refrescar

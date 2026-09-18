@@ -29,7 +29,7 @@ import { useUnassignedModal } from "./hooks/useUnassignedModal";
 import { UnassignedModal } from "./components/UnassignedModal";
 import { DirectorySyncModal } from "./components/DirectorySyncModal";
 import { useSession } from "./hooks/useSession";
-import { useTheme } from "./hooks/useTheme";
+import { useThemeMode } from "@/hooks/useThemeMode";
 import { useToolbarToast } from "./hooks/useToolbarToast";
 import { useScheduler } from "./hooks/useScheduler";
 import { useInvoiceModal } from "./hooks/useInvoiceModal";
@@ -48,7 +48,7 @@ export default function ConsortiumsPage() {
   const router = useRouter();
   const { guardedFetch } = useAuthGuard();
   const { accessChecked, userName, userRole, consortiumsEnabled, handleLogout } = useSession();
-  const { theme } = useTheme();
+  const { theme, toggleTheme } = useThemeMode();
   const { toolbarInfo, toolbarError, setToolbarInfo, setToolbarError } = useToolbarToast();
 
   // Nav sidebar
@@ -413,6 +413,20 @@ export default function ConsortiumsPage() {
             {!navCollapsed && <span className={styles.navSidebarItemLabel}>Ejecutar ahora</span>}
           </button>
         )}
+
+        <button
+          type="button"
+          className={styles.navSidebarItem}
+          onClick={toggleTheme}
+          title={theme === "dark" ? "Cambiar a modo claro" : "Cambiar a modo oscuro"}
+        >
+          <span className={styles.navSidebarItemIcon}>{theme === "dark" ? "☀️" : "🌙"}</span>
+          {!navCollapsed && (
+            <span className={styles.navSidebarItemLabel}>
+              {theme === "dark" ? "Modo claro" : "Modo oscuro"}
+            </span>
+          )}
+        </button>
 
         <div className={styles.navSidebarDivider} />
 

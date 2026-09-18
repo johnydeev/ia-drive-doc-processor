@@ -45,6 +45,12 @@ a {
   }
 }
 
+/* El toggle del panel escribe `data-theme` en <html> (hook `useThemeMode`): pisa
+   la preferencia del sistema también para las páginas que sólo usan
+   --background / --foreground (obligaciones, login). */
+[data-theme="dark"] { --background: #0a0a0a; --foreground: #ededed; color-scheme: dark; }
+[data-theme="light"] { --background: #ffffff; --foreground: #171717; color-scheme: light; }
+
 /* ── Theme variables (dark default) ── */
 :root {
   --bg: #080d1a;

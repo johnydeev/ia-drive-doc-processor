@@ -139,6 +139,23 @@ describe("generateObligationsForPeriod — tipo de documento (spec 2026-09-17)",
 });
 
 describe("syncObligationsForClient", () => {
+  it("revincula una boleta suelta a una obligación PENDING aunque no haya creado nada (la principal se borró)", async () => {
+    const fake = makeFakeSyncPrisma({
+      periods: [{ id: "per1", consortiumId: "c1" }],
+      fixedExpenses: [{ id: "fx1", consortiumId: "c1", providerId: "p1", lspServiceId: null }],
+      existing: [{ periodId: "per1", fixedExpenseId: "fx1", invoiceId: null }],
+      fresh: [{ id: "ob1", periodId: "per1", fixedExpenseId: "fx1" }],
+      invoices: [{ id: "inv2", periodId: "per1", providerId: "p1", lspServiceId: null }],
+    });
+
+    const res = await syncObligationsForClient("cl1", fake.client);
+
+    expect(res.created).toBe(0);
+    expect(res.linked).toBe(1);
+    expect(fake.createdMany).toHaveLength(0);
+    expect(fake.updated[0]).toMatchObject({ where: { id: "ob1" }, data: { status: "RECEIVED", invoiceId: "inv2" } });
+  });
+
   it("crea las faltantes de todos los períodos activos con un solo createMany", async () => {
     const fake = makeFakeSyncPrisma({
       periods: [

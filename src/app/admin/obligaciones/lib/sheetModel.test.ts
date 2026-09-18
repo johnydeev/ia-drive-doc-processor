@@ -4,7 +4,10 @@ import {
   filterSheets,
   hasPrintableRows,
   isPrintableRow,
+  printableExtras,
+  shortClientNumber,
   toPrintableSheets,
+  type OverviewLooseInvoice,
   type OverviewPayload,
 } from "./sheetModel";
 
@@ -73,7 +76,7 @@ describe("buildSheets", () => {
     expect(seguro.facturas).toBeNull();
   });
 
-  it("ordena los LSP primero y después el resto alfabético", () => {
+  it("ordena: con boleta arriba; después servicios antes que proveedores", () => {
     const rows = buildSheets(payload)[0].rows;
     expect(rows.map((r) => r.fixedExpenseId)).toEqual(["fx2", "fx1", "fx3"]);
   });
@@ -376,5 +379,256 @@ describe("isPrintableRow / hasPrintableRows", () => {
   it("hasPrintableRows resume la hoja entera", () => {
     expect(hasPrintableRows(buildSheets(payload)[0])).toBe(true);
     expect(hasPrintableRows({ ...buildSheets(payload)[0], rows: [] })).toBe(false);
+  });
+});
+
+describe("boletas adicionales y otras del mes", () => {
+  const loose = (over: Partial<OverviewLooseInvoice> & { invoiceId: string }): OverviewLooseInvoice => ({
+    providerId: null, lspServiceId: null, docKind: "FACTURA",
+    concepto: "X", matchNames: null, facturas: null, aliasCbu: null,
+    amount: 1000, invoiceUrl: null, carryOverRequested: false,
+    createdAt: "2026-07-10T00:00:00.000Z", carriedOutTo: null,
+    ...over,
+  });
+  const withLoose = (items: OverviewLooseInvoice[]): OverviewPayload => ({
+    ...payload,
+    consortiums: [{ ...payload.consortiums[0], looseInvoices: items }, payload.consortiums[1]],
+  });
+
+  it("una boleta suelta del proveedor de un gasto fijo activo cuelga de su fila como 2ª boleta", () => {
+    const sheet = buildSheets(withLoose([
+      loose({ invoiceId: "i2", providerId: "p1", amount: 500, invoiceUrl: "https://d/2", concepto: "SEGURO LA CAJA" }),
+    ]))[0];
+    const seguro = sheet.rows.find((r) => r.fixedExpenseId === "fx1")!;
+    expect(seguro.extras).toEqual([
+      { invoiceId: "i2", ordinal: 2, monto: 500, invoiceUrl: "https://d/2", carryOverRequested: false, carriedOutTo: null },
+    ]);
+    expect(sheet.others).toEqual([]);
+  });
+
+  it("matchea por LSP: una 2ª boleta de EDESUR con el mismo servicio cuelga de la fila del servicio", () => {
+    const sheet = buildSheets(withLoose([
+      loose({ invoiceId: "i3", lspServiceId: "l1", providerId: "p9", concepto: "EDESUR S.A.", facturas: "4804882" }),
+    ]))[0];
+    expect(sheet.rows.find((r) => r.fixedExpenseId === "fx2")!.extras.map((e) => e.invoiceId)).toEqual(["i3"]);
+    expect(sheet.others).toEqual([]);
+  });
+
+  it("una RETENCION no cuelga de la fila FACTURA del mismo proveedor: va a otras", () => {
+    const sheet = buildSheets(withLoose([
+      loose({ invoiceId: "i4", providerId: "p1", docKind: "RETENCION", concepto: "SEGURO LA CAJA" }),
+    ]))[0];
+    expect(sheet.rows.find((r) => r.fixedExpenseId === "fx1")!.extras).toEqual([]);
+    expect(sheet.others.map((o) => o.invoiceId)).toEqual(["i4"]);
+  });
+
+  it("ordena las extras por fecha de carga y numera 2ª, 3ª", () => {
+    const sheet = buildSheets(withLoose([
+      loose({ invoiceId: "tarde", providerId: "p1", createdAt: "2026-07-20T00:00:00.000Z" }),
+      loose({ invoiceId: "temprano", providerId: "p1", createdAt: "2026-07-05T00:00:00.000Z" }),
+    ]))[0];
+    const extras = sheet.rows.find((r) => r.fixedExpenseId === "fx1")!.extras;
+    expect(extras.map((e) => [e.invoiceId, e.ordinal])).toEqual([["temprano", 2], ["tarde", 3]]);
+  });
+
+  it("una boleta de un proveedor sin gasto fijo va a 'otras' con concepto, fantasía, alias y nro. de cliente", () => {
+    const sheet = buildSheets(withLoose([
+      loose({ invoiceId: "i5", providerId: "pZ", concepto: "PLOMERO JUAN", matchNames: "JUAN|EL PLOMERO",
+              aliasCbu: "juan.plomero|0000003100012345678901", facturas: null, amount: 32000, invoiceUrl: "https://d/5" }),
+    ]))[0];
+    expect(sheet.others).toEqual([{
+      invoiceId: "i5", facturas: null, concepto: "PLOMERO JUAN", fantasia: "JUAN", monto: 32000,
+      aliasCbu: ["juan.plomero", "0000003100012345678901"], invoiceUrl: "https://d/5",
+      carryOverRequested: false, carriedOutTo: null, group: "PROVEEDOR",
+    }]);
+  });
+
+  it("una boleta de un gasto fijo DESACTIVADO va a 'otras', no a la tabla plegada", () => {
+    const sheet = buildSheets(withLoose([
+      loose({ invoiceId: "i6", providerId: "p2", concepto: "TECNOPAS ASC." }),
+    ]))[0];
+    expect(sheet.rows.find((r) => r.fixedExpenseId === "fx3")!.extras).toEqual([]);
+    expect(sheet.others.map((o) => o.invoiceId)).toEqual(["i6"]);
+  });
+
+  it("'otras' se ordena alfabéticamente por concepto", () => {
+    const sheet = buildSheets(withLoose([
+      loose({ invoiceId: "b", providerId: "pB", concepto: "ZETA SRL" }),
+      loose({ invoiceId: "a", providerId: "pA", concepto: "ALFA SA" }),
+    ]))[0];
+    expect(sheet.others.map((o) => o.concepto)).toEqual(["ALFA SA", "ZETA SRL"]);
+  });
+
+  it("propaga carriedOutTo en extras y en otras", () => {
+    const sheet = buildSheets(withLoose([
+      loose({ invoiceId: "e", providerId: "p1", carriedOutTo: "agosto 2026" }),
+      loose({ invoiceId: "o", providerId: "pZ", concepto: "PLOMERO", carriedOutTo: "agosto 2026" }),
+    ]))[0];
+    expect(sheet.rows.find((r) => r.fixedExpenseId === "fx1")!.extras[0].carriedOutTo).toBe("agosto 2026");
+    expect(sheet.others[0].carriedOutTo).toBe("agosto 2026");
+  });
+
+  it("una madre SKIPPED conserva sus extras", () => {
+    const skipped: OverviewPayload = {
+      ...payload,
+      consortiums: [{
+        ...payload.consortiums[0],
+        fixedExpenses: payload.consortiums[0].fixedExpenses.map((fx) =>
+          fx.id === "fx1" ? { ...fx, obligation: { ...fx.obligation!, status: "SKIPPED" as const } } : fx
+        ),
+        looseInvoices: [loose({ invoiceId: "i7", providerId: "p1" })],
+      }, payload.consortiums[1]],
+    };
+    const row = buildSheets(skipped)[0].rows.find((r) => r.fixedExpenseId === "fx1")!;
+    expect(row.status).toBe("SKIPPED");
+    expect(row.extras.map((e) => e.invoiceId)).toEqual(["i7"]);
+  });
+
+  it("sin boletas sueltas, extras y otras quedan vacías", () => {
+    const sheet = buildSheets(payload)[0];
+    expect(sheet.rows.every((r) => r.extras.length === 0)).toBe(true);
+    expect(sheet.others).toEqual([]);
+  });
+});
+
+describe("imprimibles con extras y otras", () => {
+  const base = buildSheets(payload)[0];
+  const extra = (invoiceId: string, carriedOutTo: string | null = null) =>
+    ({ invoiceId, ordinal: 2, monto: 100, invoiceUrl: null, carryOverRequested: false, carriedOutTo });
+  const other = (invoiceId: string, carriedOutTo: string | null = null) =>
+    ({ invoiceId, facturas: null, concepto: "PLOMERO", fantasia: null, monto: 100, aliasCbu: [],
+       invoiceUrl: null, carryOverRequested: false, carriedOutTo, group: "PROVEEDOR" as const });
+
+  it("printableExtras deja afuera las que pasaron a otro mes", () => {
+    const row = { ...base.rows[1], extras: [extra("a"), extra("b", "agosto 2026")] };
+    expect(printableExtras(row).map((e) => e.invoiceId)).toEqual(["a"]);
+  });
+
+  it("hasPrintableRows: un edificio con todo salteado pero con una extra o una otra se imprime", () => {
+    const todoSalteado = { ...base, rows: base.rows.map((r) => ({ ...r, status: "SKIPPED" as const })) };
+    expect(hasPrintableRows(todoSalteado)).toBe(false);
+    expect(hasPrintableRows({ ...todoSalteado, rows: [{ ...todoSalteado.rows[1], extras: [extra("a")] }] })).toBe(true);
+    expect(hasPrintableRows({ ...todoSalteado, others: [other("o")] })).toBe(true);
+    expect(hasPrintableRows({ ...todoSalteado, others: [other("o", "agosto 2026")] })).toBe(false);
+  });
+
+  it("toPrintableSheets conserva una madre salteada que tiene extras, recorta las extras que pasaron y limpia otras", () => {
+    const sheet = {
+      ...base,
+      rows: base.rows.map((r) =>
+        r.fixedExpenseId === "fx1" ? { ...r, status: "SKIPPED" as const, extras: [extra("a"), extra("b", "agosto 2026")] } : r
+      ),
+      others: [other("o1"), other("o2", "agosto 2026")],
+    };
+    const out = toPrintableSheets([sheet])[0];
+    const madre = out.rows.find((r) => r.fixedExpenseId === "fx1")!;
+    expect(madre.status).toBe("SKIPPED");
+    expect(madre.extras.map((e) => e.invoiceId)).toEqual(["a"]);
+    expect(out.others.map((o) => o.invoiceId)).toEqual(["o1"]);
+  });
+
+  it("toPrintableSheets conserva un edificio que sólo tiene otras", () => {
+    const sheet = { ...base, rows: base.rows.map((r) => ({ ...r, status: "SKIPPED" as const })), others: [other("o")] };
+    expect(toPrintableSheets([sheet])).toHaveLength(1);
+  });
+
+  it("filterSheets encuentra por concepto en otras", () => {
+    const sheet = { ...base, others: [other("o")] };
+    const out = filterSheets([sheet], "plomero");
+    expect(out).toHaveLength(1);
+    expect(out[0].rows).toEqual([]);
+    expect(out[0].others.map((o) => o.invoiceId)).toEqual(["o"]);
+  });
+});
+
+describe("orden de la hoja: dos niveles", () => {
+  const fx = (id: string, over: Partial<OverviewPayload["consortiums"][0]["fixedExpenses"][0]> = {}) => ({
+    id, providerId: null, lspServiceId: null, description: null, kind: "FACTURA" as const, active: true,
+    obligation: { id: `ob-${id}`, status: "PENDING" as const, amount: null, invoiceId: null,
+      carryOverRequested: false, carriedIn: false, invoiceUrl: null },
+    ...over,
+  });
+  const recibida = (id: string, over: Partial<OverviewPayload["consortiums"][0]["fixedExpenses"][0]> = {}) =>
+    fx(id, { ...over, obligation: { id: `ob-${id}`, status: "RECEIVED", amount: 100, invoiceId: `inv-${id}`,
+      carryOverRequested: false, carriedIn: false, invoiceUrl: null } });
+  const base: OverviewPayload = {
+    ...payload,
+    providers: [
+      { id: "emp", canonicalName: "PEREZ JUAN", paymentAlias: null, matchNames: null, providerType: "EMPLEADO" },
+      { id: "prov-a", canonicalName: "ALFA SRL", paymentAlias: null, matchNames: null, providerType: "PROVEEDOR" },
+      { id: "prov-z", canonicalName: "ZETA SA", paymentAlias: null, matchNames: null, providerType: "PROVEEDOR" },
+      { id: "p9", canonicalName: "EDESUR S.A.", paymentAlias: null, matchNames: null, providerType: "SERVICIO" },
+    ],
+    consortiums: [{
+      ...payload.consortiums[0],
+      fixedExpenses: [
+        fx("pend-prov", { providerId: "prov-a" }),
+        recibida("rec-prov-z", { providerId: "prov-z" }),
+        fx("pend-lsp", { lspServiceId: "l1" }),
+        recibida("rec-emp", { providerId: "emp" }),
+        fx("skipped", { providerId: "prov-z", obligation: { id: "ob-s", status: "SKIPPED", amount: null, invoiceId: null,
+          carryOverRequested: false, carriedIn: false, invoiceUrl: null } }),
+        recibida("rec-lsp", { lspServiceId: "l1" }),
+        fx("inactivo", { providerId: "emp", active: false }),
+        recibida("rec-prov-a", { providerId: "prov-a" }),
+        fx("pend-emp", { providerId: "emp" }),
+      ],
+    }],
+  };
+
+  it("1° con boleta, 2° empleados → servicios → proveedores, alfabético; sin boleta igual; salteadas y desactivadas al final", () => {
+    const ids = buildSheets(base)[0].rows.map((r) => r.fixedExpenseId);
+    expect(ids).toEqual([
+      "rec-emp", "rec-lsp", "rec-prov-a", "rec-prov-z",
+      "pend-emp", "pend-lsp", "pend-prov",
+      "skipped",
+      "inactivo",
+    ]);
+  });
+
+  it("cada fila dice su grupo", () => {
+    const rows = buildSheets(base)[0].rows;
+    const g = (id: string) => rows.find((r) => r.fixedExpenseId === id)!.group;
+    expect(g("rec-emp")).toBe("EMPLEADO");
+    expect(g("rec-lsp")).toBe("SERVICIO");
+    expect(g("rec-prov-a")).toBe("PROVEEDOR");
+  });
+
+  it("un proveedor sin providerType cuenta como PROVEEDOR", () => {
+    expect(buildSheets(payload)[0].rows.find((r) => r.fixedExpenseId === "fx1")!.group).toBe("PROVEEDOR");
+  });
+
+  it("'otras' también: empleados → servicios → proveedores, alfabético", () => {
+    const loose = (invoiceId: string, over: Partial<OverviewLooseInvoice>): OverviewLooseInvoice => ({
+      invoiceId, providerId: null, lspServiceId: null, docKind: "FACTURA", concepto: "X", matchNames: null,
+      facturas: null, aliasCbu: null, amount: 1, invoiceUrl: null, carryOverRequested: false,
+      createdAt: "2026-07-01T00:00:00.000Z", carriedOutTo: null, ...over,
+    });
+    const withOthers: OverviewPayload = {
+      ...base,
+      consortiums: [{
+        ...base.consortiums[0],
+        fixedExpenses: [],
+        looseInvoices: [
+          loose("z", { providerId: "prov-z", concepto: "ZETA SA" }),
+          loose("s", { providerId: "p9", lspServiceId: "l-otro", concepto: "EDESUR S.A.", facturas: "99" }),
+          loose("a", { providerId: "prov-a", concepto: "ALFA SRL" }),
+          loose("e", { providerId: "emp", concepto: "PEREZ JUAN" }),
+        ],
+      }],
+    };
+    const others = buildSheets(withOthers)[0].others;
+    expect(others.map((o) => o.invoiceId)).toEqual(["e", "s", "a", "z"]);
+    expect(others.map((o) => o.group)).toEqual(["EMPLEADO", "SERVICIO", "PROVEEDOR", "PROVEEDOR"]);
+  });
+});
+
+describe("shortClientNumber", () => {
+  it("deja pasar los cortos y recorta los largos con puntos suspensivos", () => {
+    expect(shortClientNumber(null)).toBeNull();
+    expect(shortClientNumber("4804882")).toBe("4804882");
+    expect(shortClientNumber("123456789012")).toBe("123456789012");
+    expect(shortClientNumber("1234567890123")).toBe("123456789012…");
+    expect(shortClientNumber("1234567890123", 5)).toBe("12345…");
   });
 });

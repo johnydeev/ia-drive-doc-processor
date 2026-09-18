@@ -4,6 +4,8 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import styles from "./page.module.css";
 import { AsyncButton } from "@/components/AsyncButton";
+import { useThemeMode } from "@/hooks/useThemeMode";
+import { ThemeToggle } from "@/components/ThemeToggle";
 import { useObligationsOverview } from "./hooks/useObligationsOverview";
 import { useCarryOverRun } from "./hooks/useCarryOverRun";
 import { SheetCard } from "./components/SheetCard";
@@ -33,6 +35,7 @@ export default function ObligacionesPage() {
   // Traslados marcados: se ejecutan por tandas DESPUÉS de cerrar el período.
   const carryRun = useCarryOverRun(reload);
   const [query, setQuery] = useState("");
+  const { theme, toggleTheme } = useThemeMode();
 
   // Al cambiar de mes se pregunta qué quedó marcado sin mover: es lo que sostiene
   // el "continuar" cuando el cliente cerró la pestaña a mitad de camino.
@@ -42,6 +45,8 @@ export default function ObligacionesPage() {
     if (month) void loadPendingCarry(month);
   }, [month, loadPendingCarry]);
   const [addingFor, setAddingFor] = useState<string | null>(null);
+  // Acordeón: una sola hoja abierta por vez; todas plegadas al entrar.
+  const [openSheetId, setOpenSheetId] = useState<string | null>(null);
 
   const visible = useMemo(() => filterSheets(sheets, query), [sheets, query]);
   const groups = useMemo(() => groupSheetsByBank(visible), [visible]);
@@ -150,6 +155,7 @@ export default function ObligacionesPage() {
           >
             Imprimir
           </button>
+          <ThemeToggle theme={theme} onToggle={toggleTheme} />
           <Link href="/admin/consortiums" className={styles.ghostBtn}>
             Volver
           </Link>
@@ -186,6 +192,8 @@ export default function ObligacionesPage() {
                 onToggleCarryOver={toggleCarryOver}
                 onUndoCarryOver={undoCarryOver}
                 onSetLateAmount={setLateAmount}
+                open={openSheetId === sheet.consortiumId}
+                onToggleOpen={(id) => setOpenSheetId((prev) => (prev === id ? null : id))}
               />
             ))}
           </section>

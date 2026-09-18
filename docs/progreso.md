@@ -1,6 +1,11 @@
 # Progreso del proyecto — drive-doc-processor
 
-Actualizado al 17/09/2026 (sesión 67 — la retención como gasto fijo propio, con migración `DocKind`).
+Actualizado al 18/09/2026 (sesión 69 — adicionales y "Otras boletas del mes" en la hoja de
+obligaciones, derivado en lectura, sin migración; orden, columnas, acordeón y ficha compacta de la
+hoja; modo claro/oscuro unificado con interruptor en todas las páginas).
+Sesión 68 (18/09): padrón de gastos fijos armado desde las rendiciones de los 47 edificios; sin código;
+base al cierre: 281 proveedores, 144 servicios, ~720 gastos fijos activos.
+Sesión 67 (17/09): la retención como gasto fijo propio, con migración `DocKind`.
 Sesión 66 (14/09): nombre de fantasía en Obligaciones; `scripts/preflight-drive.ts`; plan de rendiciones faltantes en `INFO PROVEEDORES\_analisis`).
 Sesión 65: liquidación de retenciones como paquete; retiro del camino LspService del día anterior.
 Sesión 64: VEP de retención (commiteado en `a9de5c0`).
@@ -19,6 +24,138 @@ VEP, y el LSD abierto en una boleta por empleado.
 > Las secciones de la **sesión 61** (instrumentación de requests, triage de no-boletas, LSD) y la del
 > **VEP** (sesión 62) dicen "implementado": las primeras entraron en `ae31c15` y `e3551a7`, el VEP en
 > `add4e11`. Lo que sigue abierto en todas ellas es el **smoke en producción**, no el commit.
+
+## 📄 Adicionales y "Otras boletas del mes" en la hoja de obligaciones (2026-09-18)
+
+**Estado:** implementado y revisado por el owner en local; 1061 tests verdes, typecheck y lint limpios.
+Commit del owner al cierre de la sesión 69.
+Spec: `docs/superpowers/specs/2026-09-18-boletas-adicionales-y-otras-del-mes-design.md`. Plan:
+`docs/superpowers/plans/2026-09-18-boletas-adicionales-y-otras-del-mes.md`.
+
+**Problema.** Una obligación tiene UNA boleta (`invoiceId` unique) y `linkInvoiceToObligation` sólo
+vincula a una PENDING: la 2ª boleta del mes de QBICAR / OLIVERI / CIMEX quedaba en DB y Sheets pero
+no aparecía en Obligaciones ni en el PDF del banco. Lo mismo toda boleta de un proveedor sin gasto
+fijo en el edificio (ticket, plomero eventual).
+
+**Decisión del owner.** Cada boleta es otro gasto a pagar, con su recibo propio: no se suma en la
+fila, se lista aparte. Y hay que diferenciar bien dos cosas: boletas de un proveedor que ya es gasto
+fijo (pegadas a su fila) y eventuales (bloque aparte). Ninguna tiene estado propio: existe porque
+llegó la boleta; lo que se pide al inicio del mes siguen siendo los gastos fijos PENDING.
+
+**Qué se ve ahora.**
+- Debajo de cada fila madre, una subfila por boleta adicional: `↳ 2ª boleta`, monto propio, alias
+  de la madre, ojo del PDF, botón "Mes siguiente". Sin saltear / desactivar / estado.
+- Bloque "Otras boletas del mes" entre la tabla y "Vienen del mes anterior": razón social + fantasía,
+  nro. de cliente si es LSP, monto, alias, PDF, arrastre.
+- Una adicional u otra que se empujó al mes siguiente sigue en el mes de origen, gris, con badge
+  `pasó a octubre 2026`, sin acciones (rendición ante los inquilinos). No va al papel.
+- El PDF del banco imprime las adicionales indentadas bajo su madre (o con concepto completo si la
+  madre está salteada) y el bloque `OTRAS BOLETAS DEL MES` antes de `VIENEN DEL MES ANTERIOR`.
+
+**Cómo está hecho (derivado, sin tocar el modelo).** El overview trae las boletas del período con
+`obligation: null` (más las que nacieron acá y viven en otro mes, también con `obligation: null` para
+no duplicar la principal arrastrada) y `sheetModel.buildSheets` las cruza contra los gastos fijos
+**activos** con `obligationMatchesInvoice` (el del pipeline): match → `row.extras[]`; sin match →
+`sheet.others[]`. Un gasto fijo desactivado no cuenta (su tabla está plegada y no se imprime).
+`syncObligationsForClient` hace ahora el vínculo retroactivo en TODOS los períodos activos: si se
+borra la principal, la siguiente adicional sube al sincronizar.
+
+**Orden y columnas (misma sesión, pedido del owner al ver la hoja).**
+- Orden en dos niveles (`compareRows` en `sheetModel`): 1° las filas CON boleta (hay monto que pagar),
+  2° las que hay que pedir (PENDING); salteadas debajo, desactivadas al fondo. Dentro de cada nivel:
+  **empleados → servicios → proveedores**, alfabético. `RowGroup` sale de `Provider.providerType`
+  (el overview ahora lo manda) o de que la fila sea LSP. "Otras boletas del mes" usa el mismo grupo.
+- Encabezados cortos en pantalla y PDF: `FACTURA/NRO CLIENTE`, `PROVEEDOR/SERVICIO`.
+- Las tres tablas de la hoja comparten `<colgroup>` con anchos fijos (`table-layout: fixed`): FACTURA,
+  MONTO y ALIAS caen en la misma vertical en la tabla del mes, en "Otras" y en "Vienen del mes
+  anterior". El nro. de cliente se recorta a 12 caracteres + `…` (`shortClientNumber`), completo en el
+  tooltip y en el PDF. En impresión la tabla vuelve a layout automático (sin columna de acciones).
+  Los `th` ya no llevan `nowrap` (se pisaban entre sí con el ancho fijo).
+- Encabezado de la hoja: `BANCO: CREDICOP` arriba del nombre (`Sin banco` si no tiene) y **acordeón**:
+  todas las hojas plegadas al entrar, click en el encabezado abre una y cierra la anterior
+  (`openSheetId` en `page.tsx`; `open`/`onToggleOpen` en `SheetCard`, por defecto abierta). El `+`
+  queda fuera del botón. La impresión ignora el plegado (`.sheetBody[hidden] { display: block }`).
+- Título del grupo de banco (`CREDICOP`) centrado.
+- Acciones en una línea: rótulos cortos (`Mes siguiente`, `Devolver`, `Monto vencido`; `Saltear
+  periodo` queda) con `title` completo; `.colActions` 330px; `.page` a 1440px. Sin `aria-label`: pisaba el
+  nombre accesible durante el pending ("Salteando…").
+- Fix paleta: `sheetCard[data-bank-color]` con los ocho slugs de `bankPalette` (antes `blue`/`green`).
+- Ficha compacta: `padding 10px 16px`, separación con la tabla en `.sheetBody` (desaparece plegada).
+
+**Modo claro / oscuro en todas las páginas (misma sesión).** Antes cada página tenía su copia del
+estado (`admin`, `boletas`, `invoices`, `clients/[id]`), sólo el panel admin persistía, `consortiums`
+leía `data-theme` sin botón y `obligaciones` seguía el tema del sistema. Ahora hay una sola fuente:
+`src/hooks/useThemeMode.ts` (localStorage `dpp_admin_theme` + `data-theme` en `<html>`) y el botón
+`src/components/ThemeToggle.tsx`. `globals.css` pisa `--background/--foreground` según `data-theme`,
+así las páginas que sólo usan esas variables (obligaciones, login) responden al mismo botón. Botón
+en: barra de Obligaciones, sidebar de Consorcios (☀️/🌙), y donde ya estaba. Se borró
+`consortiums/hooks/useTheme.ts`. Rediseñado como interruptor (`ThemeToggle.module.css`): pista con
+sol y luna, perilla que muestra el modo destino. Ubicación definitiva pendiente (lo elige el owner).
+
+**Fuera de scope.** CUITs hermanos (Fumigaciones Miguel, CORTES BRUNO): hoy caen en "Otras". Es el
+ítem 9 de la lista de abajo.
+
+**Smoke:** hecho por el owner en `localhost:3100/admin/obligaciones` con datos reales (BOEDO 414:
+OLIVERI con `↳ 2ª boleta`); de ahí salieron los ajustes de orden, columnas, acordeón y ficha.
+Queda por decidir la ubicación definitiva del interruptor de tema.
+
+## 📚 Padrón de gastos fijos armado desde las rendiciones (2026-09-14 → 2026-09-18)
+
+**Sin código.** Ocho tandas de PDFs de rendición mensual (jul + ago 2026; CABRERA jun + jul), 47 de los
+49 edificios de MorinigoAdm. ACEVEDO 450 no tiene PDF (corre en Consorcio Abierto) y CORONEL DIAZ 1503
+existe en la base pero nunca llegó su rendición (verificar si es real o duplicado de 1714).
+
+**Cadena de trabajo por PDF** (scratchpad `rend2/`…`rend9/`, fuera del repo): PyMuPDF a PNG 1.6× gris →
+tesseract.js `spa` → `analizar.py` (tags por palabra clave + CUITs con checksum) → `cuits.py` contra un
+volcado `db.json` de la base → `sheet2.py` (tiras de recorte para leer a ojo lo que el OCR no saca:
+transferencias Galicia/Ciudad, encabezados de servicios, recibos apaisados). Por edificio se extrajo:
+servicios con **número de cliente** (EDESUR/EDENOR/METROGAS/AYSA/AGIP partida/FLOW/TELECENTRO/IPLAN),
+**empleados con CUIL** (del recibo, y del pago del banco cuando el recibo no lo trae o lo trae mal),
+proveedores **fijos** (evidencia en los dos meses) vs **eventuales**, VEP de SICOSS y de retenciones,
+paquetes de retención, **seguro del edificio** (débito bancario o póliza) y ART/vida colectivo del F931.
+
+**Resultado, todo en `INFO PROVEEDORES\_analisis\PLAN-rendiciones-faltantes.md`** §2 (cobertura),
+§10–§18 (un bloque por edificio, con las tablas que se le mostraron al owner) y §19 (consolidado). El
+owner cargó `_Proveedores`, `_LspServices` y los gastos fijos desde el panel a medida que salía cada tanda.
+
+**Auditoría DB vs PDFs** (script `scratchpad/audit.py`: cruza cada CUIT y nro. de cliente del PLAN contra
+los gastos fijos activos): al 2026-09-18 todo cargado salvo HOCH ASCENSORES en BONIFACIO, `ORIANA
+ESTEFANIA BAEZ` como gasto fijo en FRIAS y JUNIN (es la CVU de cobro de MYN, nunca factura → sacar),
+ROMERO ALMADA (CABRERA) con tipo PROVEEDOR en vez de EMPLEADO, y dos razones sociales con salto de línea
+desde el ALTA (LIMPIOMAX, ASCENSORES INGARO).
+
+**Borrados en producción durante la sesión** (siempre verificando 0 boletas vinculadas antes):
+- 8 gastos fijos apuntados a un proveedor genérico tipo SERVICIO sin nro. de cliente (METROGAS S.A.,
+  EDESUR S.A., AGIP en BROWN, ARAOZ, ARENALES, BELGRANO 1429 ×2, CARLOS CALVO, FRIAS, ACEVEDO).
+- Proveedor `SALAS JULIA ALICIA` (duplicado por CUIL de `SALAS JULIA`, que es la fila del ALTA) + su GF
+  en VILLARROEL. Causa del 500 del sync: fila 25 del tablero.
+- SUELDO / SUTERH / ARCA EMPLEADO en CORRIENTES 4815 (sin empleado en la base ni en los PDFs).
+
+**Reglas que quedaron fijadas** (ver `decisiones.md` 2026-09-18):
+- Un servicio público sin número de cliente **no** es gasto fijo: va como `LspService` o no va.
+- El CUIT al que se le transfiere (alias de cobro: SOUNCH por LIBRES, BAEZ por MYN, DRAGO por LA POPULAR,
+  BUDAN por CALVO AGUSTIN…) **no se carga como proveedor**; va en ALIAS DE PAGO del proveedor que factura.
+- Cablevisión = Telecom Argentina S.A. (mismo CUIT `30-63945373-8`); el `providerName` del LSP tiene que
+  ser exactamente `TELECOM ARGENTINA S.A.` (`LSP_ROUTER_TO_CANONICAL`).
+- Una persona puede tener CUIL `20-` y CUIT `24-` (CORTES BRUNO): se carga el de la factura.
+- Una obligación recibe **una** boleta por período; la 2ª del mismo proveedor en el mes se guarda pero no
+  se ve en Obligaciones (comportamiento actual, confirmado en `linkInvoiceToObligation`; cambio pendiente).
+
+**Dudas para el administrador** (consolidadas en PLAN §19): edificios sin F931/VEP en la rendición (MITRE
+jul y ago; BONIFACIO jul; FRIAS jul; GARAY ago; EVA PERON ago; JUNIN jul y ago; CABRERA jun); BROWN con
+dos VEP 07/26; DEAN FUNES sin ART declarada en ago y VEP consolidado de ART $437k; ARAOZ sin seguro de
+vida colectivo; SCHUCHARA (CALLAO) despedido el 24/08; SERVIN AVALOS cobrando obras sin factura en JUFRE
+21, CASTILLO, EVA PERON, CALLAO; facturas de PUENTE y PEREIRA a nombre de la administración en CALLAO;
+seguros sin evidencia en 17 edificios (pagan por bancos cuyo extracto no viene).
+
+**Próximas funcionalidades, en el orden propuesto al owner** (2026-09-18):
+1. ✅ (2026-09-18) Adicionales del mismo proveedor bajo su fila + "Otras boletas del mes". Ver sección de arriba.
+2. Sync robusto: CUIT duplicado / rename ambiguo reportados en el modal, no 500 (fila 25).
+3. Capa 0 para los acuses F.744/F.996 (fila 24, en standby con el administrador).
+4. ABM de `LspService` desde el panel.
+5. Alias de cobro visible en Obligaciones al pagar.
+6. Rendición mensual por edificio generada desde la app.
+7. Router + prompt para IPLAN y TELECENTRO cuando haya facturas (fila 26).
 
 ## 👁 Vista previa del PDF desde la planilla de Obligaciones (2026-09-16)
 
@@ -735,7 +872,10 @@ Todo lo de acá lo hace el owner; nada requiere cambios de código.
 | 18 | Revisar `scripts/metrics-cuota.sql` tras unos días de producción | ❌ | Decidir si vale adelantar el descarte por CUIT antes de la IA |
 | 19 | Smoke del **VEP**: confirmar `[NO BOLETA - VEP]` en Sin Asignar con `aiRequests = 0` | ❌ | Prueba de que el triage ahorra cuota |
 | 20 | Smoke del **LSD**: un libro de 2 empleados → 2 gastos en la hoja, montos contra el PDF | ❌ | Es donde se detectaría un `Total Neto` mal extraído |
-| 21 | **Pedir las rendiciones (jul + ago 2026) de los 38 edificios que faltan** y volcarlas: LSP, partidas AGIP, empleados, proveedores fijos. Plan, prioridades y scripts en `INFO PROVEEDORES\_analisis\PLAN-rendiciones-faltantes.md` (fuera del repo) | ❌ | Padrón fehaciente por edificio; hoy `_LspServices` sale de la planilla del administrador, que ya mostró 3 errores |
+| 21 | **Rendiciones jul + ago 2026 de los 47 edificios volcadas** (2026-09-14 → 2026-09-18, 8 tandas; CABRERA jun + jul; ACEVEDO 450 sin PDF, corre en Consorcio Abierto). Por edificio: LSP con nro. de cliente, partidas AGIP, empleados con CUIL, proveedores fijos vs eventuales, VEP, retenciones y seguro. El owner cargó `_Proveedores`, `_LspServices` y los gastos fijos desde el panel. Auditoría DB vs PDFs (2ª corrida 2026-09-18, tanda 6 ya cargada): 725 GF activos; quedan HOCH ASCENSORES en BONIFACIO, ORIANA BAEZ (alias de cobro de MYN, no factura) como GF en FRIAS y JUNIN, ROMERO ALMADA (CABRERA) con tipo PROVEEDOR en vez de EMPLEADO, y dos razones sociales con salto de línea pegado desde el ALTA (LIMPIOMAX, ASCENSORES INGARO). Todo en `INFO PROVEEDORES\_analisis\PLAN-rendiciones-faltantes.md` §10–§18 | ✅ | Padrón fehaciente por edificio |
+| 24 | **Acuses de DJ de retenciones (F.744 SICORE y F.996 SIRE) pasan el triage como boleta.** Verificado el 2026-09-17 con los de CALLAO 1441 08/2026: `detectDecisiveNotBoleta` → null, `classifyDocumentType` → boleta, router → null. Van a la IA como factura común y el único CUIT ajeno al consorcio es el de la administradora (`Presentada por el Usuario`) → riesgo de boleta falsa de MORINIGO por $838k. Regla de capa 0 pendiente: `Acuse de recibo de DJ` + `Formulario: 744\|996\|997` → `[NO BOLETA - DJ RETENCIONES]` (excluir 931). Aplica a los 4 edificios que retienen (CALLAO, RIVADAVIA, PUEYRREDON, RIOBAMBA). Detalle en `INFO PROVEEDORES\_analisis\PLAN-rendiciones-faltantes.md` §12. **En standby por decisión del owner (2026-09-17): se analiza con el administrador** (qué hace con los acuses, si alguna vez irían a Pendientes, y la multa 220 de RIVADAVIA) | ⏸ | Un acuse subido a Pendientes gasta requests y puede entrar como boleta |
+| 25 | **El sync de directorio devuelve 500 ante un CUIT duplicado en `_Proveedores`.** Caso real 2026-09-18: la hoja traía `SALAS JULIA \| 27-94039786-9` y la base ya tenía `SALAS JULIA ALICIA` con ese CUIL → el `UPDATE ... FROM (VALUES ...)` de `bulkUpdate` rompe con `23505` (`uq (clientId, cuit)`), el endpoint explota y el front redirige al panel. `directorySyncPlan` sólo detecta el conflicto por CUIT cuando el nombre NO está en la base; si el nombre existe y el CUIT nuevo pertenece a otra fila, no lo ve. Falta: detectar en el plan la colisión de CUIT entre un update y otra fila existente, reportarla como `ambiguous`/conflicto y no emitirla en el lote. Workaround: dejar una sola fila por persona en la hoja y borrar el duplicado desde el panel | ⏳ | Un CUIT repetido en la hoja tumba toda la sincronización |
+| 26 | **Router LSP para IPLAN (NSS SA) y TELECENTRO.** Ambos están cargados como `LspService` (MITRE 1225 `664688`, GUALEGUAYCHU 2040 `10992114`, CASTRO BARROS 1310 `10369334`, ORO 2178 `9722825`) pero `identifyLSPProvider` no los conoce: la factura entra como común por CUIT y la obligación del LSP nunca se cumple sola. Falta prompt + entrada en `LSP_ROUTER_TO_CANONICAL`. **Se hace cuando el owner tenga una factura real de cada uno** (2026-09-18) — sin el papel no hay con qué calibrar el prompt ni dónde está el nro. de cliente | ⏸ | 4 edificios con internet/cable como gasto fijo que hoy no se vincula |
 | 23 | **CANELO OSCAR `23-13428278-9`** (SAN JUAN 4125): transferencia judicial de $1.500.000/mes (juzgado 63, autos CANELO c/ CONSORCIO), jul y ago 2026. No es proveedor; sin alta en `_Proveedores` ni gasto fijo. **En espera por decisión del owner (2026-09-16)** | ⏸ | Mientras tanto el comprobante BBVA rebota como `CUIT DE PROVEEDOR NO REGISTRADO` |
 | 22 | Sin Asignar al 2026-09-13 (6 archivos, `scripts/preflight-drive.ts`): alta de **MAPFRE ARGENTINA SEG. VIDA** `33-70089372-9`; confirmar CUIT `30-71573334-6` ("ORO 2178 S.R.L.", factura Subito) y consorcio **AV. CÓRDOBA 6235** `30-71617051-5` (Neme); AySA cuenta `488240` (Culpina 388, ¿JOSE BONIFACIO 720?); `CCD_00001606` es un estado de deuda de Manutenzione, no la factura | ❌ | Esas 6 no entran hasta resolverlo |
 

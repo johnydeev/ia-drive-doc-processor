@@ -1,12 +1,12 @@
 // Import de SÓLO TIPOS: se borra al compilar, así que no rompe el `import()`
 // dinámico de la librería (que es lo que la mantiene fuera del bundle).
 import type { UserOptions } from "jspdf-autotable";
-import { toPrintableSheets, type SheetData } from "./sheetModel";
+import { isPrintableRow, toPrintableSheets, type SheetData, type SheetRow } from "./sheetModel";
 
-/** Las seis columnas de la planilla que el administrador ya usaba. */
+/** Las seis columnas de la planilla que el administrador ya usaba (rótulos cortos desde 2026-09-18). */
 export const PDF_COLUMNS = [
-  "FACTURAS",
-  "PROVEEDORES Y SERVICIOS",
+  "FACTURA/NRO CLIENTE",
+  "PROVEEDOR/SERVICIO",
   "MONTO",
   "ALIAS - CBU",
   "TÉCNICO O GESTOR",
@@ -18,12 +18,16 @@ export type PdfTable = {
   subtitle: string;
   head: string[][];
   body: string[][];
+  /** Bloque "Otras boletas del mes", entre la tabla del mes y las impagas. */
+  others: string[][];
   /** Bloque "Vienen del mes anterior", debajo de la tabla del mes. */
   carried: string[][];
 };
 
 /** Título del bloque de impagas dentro de la hoja del edificio. */
 export const CARRIED_TITLE = "VIENEN DEL MES ANTERIOR";
+/** Título del bloque de boletas de proveedores que no son gasto fijo del edificio. */
+export const OTHERS_TITLE = "OTRAS BOLETAS DEL MES";
 
 const money = new Intl.NumberFormat("es-AR", { style: "currency", currency: "ARS" });
 
@@ -47,6 +51,34 @@ function formatBankName(value: string): string {
 }
 
 /**
+ * Una fila madre y sus adicionales. Si la madre no se imprime (salteada), las
+ * adicionales llevan el concepto completo: no hay línea a la que indentarse.
+ */
+function rowLines(row: SheetRow): string[][] {
+  const madre = isPrintableRow(row);
+  const extras = row.extras.map((e) => [
+    "",
+    madre ? `   ↳ ${e.ordinal}ª boleta` : `${row.concepto} — ${e.ordinal}ª boleta`,
+    e.monto != null ? money.format(e.monto) : "",
+    row.aliasCbu.join("\n"),
+    "",
+    "",
+  ]);
+  if (!madre) return extras;
+  return [
+    [
+      row.facturas ?? "",
+      row.concepto,
+      row.monto != null ? money.format(row.monto) : "",
+      row.aliasCbu.join("\n"),
+      "", // TÉCNICO O GESTOR — se completa a mano
+      "", // TEL. CONTACTO — se completa a mano
+    ],
+    ...extras,
+  ];
+}
+
+/**
  * Convierte las hojas en tablas listas para `autoTable`. Puro: es lo que se
  * testea. El filtro de qué se imprime vive en `toPrintableSheets`, no acá.
  */
@@ -61,13 +93,14 @@ export function toPdfTables(sheets: SheetData[]): PdfTable[] {
       .filter(Boolean)
       .join("   ·   "),
     head: [PDF_COLUMNS],
-    body: sheet.rows.map((row) => [
+    body: sheet.rows.flatMap(rowLines),
+    others: sheet.others.map((row) => [
       row.facturas ?? "",
-      row.concepto,
+      row.fantasia ? `${row.concepto} (${row.fantasia})` : row.concepto,
       row.monto != null ? money.format(row.monto) : "",
       row.aliasCbu.join("\n"),
-      "", // TÉCNICO O GESTOR — se completa a mano
-      "", // TEL. CONTACTO — se completa a mano
+      "",
+      "",
     ]),
     // El monto de una impaga es el saldo (sobre el 2° vencimiento si se cargó);
     // el 1° pago va en el concepto para no meter dos números en la celda MONTO.
@@ -154,29 +187,26 @@ export async function downloadSheetsPdf(
       margin: { left: 14, right: 14 },
     };
 
-    autoTable(doc, { startY: 30, head: table.head, body: table.body, ...tableStyles });
-
-    // Lo arrastrado va en una segunda tabla de la MISMA hoja, debajo de la del
-    // mes: el administrador ve primero lo corriente y después lo que viene
-    // atrasado, distinguible de un vistazo.
-    if (table.carried.length > 0) {
-      // `lastAutoTable` existe en runtime (verificado con jspdf-autotable 5.0.8:
-      // devuelve `{ finalY }`), pero la v5 no lo declara en sus tipos — el
-      // plugin lo agrega al documento sin augmentar la interfaz de jsPDF.
+    // Un bloque = título + otra tabla en la MISMA hoja, debajo de la anterior.
+    // `lastAutoTable` existe en runtime (verificado con jspdf-autotable 5.0.8:
+    // devuelve `{ finalY }`), pero la v5 no lo declara en sus tipos — el plugin
+    // lo agrega al documento sin augmentar la interfaz de jsPDF.
+    const appendBlock = (title: string, body: string[][]) => {
+      if (body.length === 0) return;
       const withLast = doc as unknown as { lastAutoTable?: { finalY?: number } };
       const finalY = withLast.lastAutoTable?.finalY ?? 30;
-
       doc.setFontSize(10);
       doc.setTextColor(60);
-      doc.text(CARRIED_TITLE, 14, finalY + 10);
+      doc.text(title, 14, finalY + 10);
+      autoTable(doc, { startY: finalY + 13, head: table.head, body, ...tableStyles });
+    };
 
-      autoTable(doc, {
-        startY: finalY + 13,
-        head: table.head,
-        body: table.carried,
-        ...tableStyles,
-      });
-    }
+    autoTable(doc, { startY: 30, head: table.head, body: table.body, ...tableStyles });
+    // Primero lo que llegó este mes fuera del padrón, después lo que viene
+    // atrasado: el administrador lee de lo corriente a lo viejo, distinguible
+    // de un vistazo.
+    appendBlock(OTHERS_TITLE, table.others);
+    appendBlock(CARRIED_TITLE, table.carried);
 
     doc.setFontSize(8);
     doc.setTextColor(140);

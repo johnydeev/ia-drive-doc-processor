@@ -1,10 +1,10 @@
 "use client";
 
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import styles from "../page.module.css";
 import { AsyncButton } from "@/components/AsyncButton";
 import { PdfPreviewModal, type PdfPreview } from "@/components/PdfPreviewModal";
-import { hasPrintableRows, type SheetData, type SheetRow } from "../lib/sheetModel";
+import { hasPrintableRows, shortClientNumber, type ExtraRow, type SheetData, type SheetRow } from "../lib/sheetModel";
 
 type Props = {
   sheet: SheetData;
@@ -18,6 +18,10 @@ type Props = {
   /** Devuelve al mes de origen una boleta que YA se trasladó. */
   onUndoCarryOver: (invoiceId: string) => void | Promise<void>;
   onSetLateAmount: (invoiceId: string, lateAmount: number) => void | Promise<void>;
+  /** Acordeón: la hoja está desplegada. Por defecto sí (tests, impresión). */
+  open?: boolean;
+  /** Click en el encabezado. El padre decide cuál queda abierta (una por vez). */
+  onToggleOpen?: (consortiumId: string) => void;
 };
 
 const money = new Intl.NumberFormat("es-AR", { style: "currency", currency: "ARS" });
@@ -41,6 +45,7 @@ const money = new Intl.NumberFormat("es-AR", { style: "currency", currency: "ARS
  */
 export function SheetCard({
   sheet, onAdd, onToggle, onSetStatus, onToggleCarryOver, onUndoCarryOver, onSetLateAmount,
+  open = true, onToggleOpen,
 }: Props) {
   const [lateFor, setLateFor] = useState<string | null>(null);
   const [lateValue, setLateValue] = useState("");
@@ -77,12 +82,34 @@ export function SheetCard({
   const activeRows = sheet.rows.filter((r) => r.active);
   const inactiveRows = sheet.rows.filter((r) => !r.active);
 
+  /** Nro. de cliente recortado, con el completo en el tooltip (y en el PDF). */
+  const facturasCell = (value: string | null) => (
+    <td className={styles.facturasCell}>
+      {value && <span title={value}>{shortClientNumber(value)}</span>}
+    </td>
+  );
+
+  // Las tres tablas de la hoja (mes, otras, arrastradas) comparten colgroup y
+  // encabezado con anchos fijos: así las columnas coinciden verticalmente
+  // aunque una tenga tres botones de acción y otra uno. Las acciones no van
+  // al papel, y ahí la tabla vuelve a layout automático (ver @media print).
   const columns = (
+    <>
+      <colgroup>
+        <col className={styles.colPreview} />
+        <col className={styles.colFacturas} />
+        <col className={styles.colConcepto} />
+        <col className={styles.colMonto} />
+        <col className={styles.colAlias} />
+        <col className={styles.colTecnico} />
+        <col className={styles.colTel} />
+        <col className={styles.colActions} />
+      </colgroup>
     <thead>
       <tr>
         <th className={styles.previewCell} aria-label="Vista previa" />
-        <th>FACTURAS</th>
-        <th>PROVEEDORES Y SERVICIOS</th>
+        <th>FACTURA/NRO CLIENTE</th>
+        <th>PROVEEDOR/SERVICIO</th>
         <th>MONTO</th>
         <th>ALIAS - CBU</th>
         <th>TÉCNICO O GESTOR</th>
@@ -90,14 +117,56 @@ export function SheetCard({
         <th className={styles.actionsHeader} aria-label="Acciones" />
       </tr>
     </thead>
+    </>
+  );
+
+  /** Marcar / desmarcar una boleta para pasar al mes siguiente. NO la mueve: el
+      traslado real ocurre al ejecutar las tandas, después de cerrar el período.
+      Es la única acción de una boleta sin obligación (adicional u otra). */
+  const carryBtn = (invoiceId: string, requested: boolean) => (
+    <AsyncButton
+      type="button"
+      className={requested ? styles.actionBtnMarked : styles.actionBtn}
+      pendingLabel={requested ? "Quitando…" : "Marcando…"}
+      onClick={() => onToggleCarryOver(invoiceId, !requested)}
+      title={requested ? "Marcada para pasar al mes siguiente (click para quitar)" : "Pasar al mes siguiente"}
+    >
+      {requested ? "Mes siguiente ✓" : "Mes siguiente"}
+    </AsyncButton>
+  );
+
+  /** Adicional: otra boleta del mismo proveedor en el mes, colgada de su fila.
+      Sin estado, sin saltear ni desactivar (eso es de la obligación y del gasto
+      fijo): si no corresponde, se borra desde Boletas. Concepto y alias son los
+      de la madre. */
+  const renderExtra = (row: SheetRow, extra: ExtraRow) => (
+    <tr
+      key={extra.invoiceId}
+      className={extra.carriedOutTo ? `${styles.rowExtra} ${styles.rowCarriedOut}` : styles.rowExtra}
+    >
+      {previewCell(extra.invoiceUrl, `${row.concepto} — ${extra.ordinal}ª boleta`)}
+      <td />
+      <td>
+        <span className={styles.extraLabel}>↳ {extra.ordinal}ª boleta</span>
+        {extra.carriedOutTo && <span className={styles.carriedBadge}>pasó a {extra.carriedOutTo}</span>}
+      </td>
+      <td>{extra.monto != null ? money.format(extra.monto) : ""}</td>
+      <td>{row.aliasCbu.map((a) => (<div key={a}>{a}</div>))}</td>
+      <td />
+      <td />
+      <td className={styles.rowActions}>
+        {!extra.carriedOutTo && carryBtn(extra.invoiceId, extra.carryOverRequested)}
+      </td>
+    </tr>
   );
 
   const renderRow = (row: SheetRow) => {
     const isSkipped = Boolean(row.obligationId) && row.status === "SKIPPED";
     return (
-      <tr key={row.fixedExpenseId} className={rowClass(row)}>
+      <Fragment key={row.fixedExpenseId}>
+      <tr className={rowClass(row)}>
         {previewCell(row.invoiceUrl, row.concepto)}
-        <td>{row.facturas ?? ""}</td>
+        {facturasCell(row.facturas)}
         <td>
           {row.concepto}
           {row.fantasia && <strong className={styles.fantasia}>{row.fantasia}</strong>}
@@ -124,23 +193,13 @@ export function SheetCard({
             <>
               {row.obligationId && row.status === "PENDING" && (
                 <AsyncButton type="button" className={styles.actionBtn} pendingLabel="Salteando…"
-                  onClick={() => onSetStatus(row.obligationId!, "SKIPPED")}>
+                  onClick={() => onSetStatus(row.obligationId!, "SKIPPED")}
+                  title="No se espera boleta este mes">
                   Saltear periodo
                 </AsyncButton>
               )}
-              {/* Sólo si llegó la boleta: es lo que se puede pasar. El
-                  traslado real ocurre al ejecutar las tandas, después de
-                  cerrar el período. */}
-              {row.invoiceId && (
-                <AsyncButton
-                  type="button"
-                  className={row.carryOverRequested ? styles.actionBtnMarked : styles.actionBtn}
-                  pendingLabel={row.carryOverRequested ? "Quitando…" : "Marcando…"}
-                  onClick={() => onToggleCarryOver(row.invoiceId!, !row.carryOverRequested)}
-                >
-                  {row.carryOverRequested ? "Pasa al mes siguiente ✓" : "Pasar al mes siguiente"}
-                </AsyncButton>
-              )}
+              {/* Sólo si llegó la boleta: es lo que se puede pasar. */}
+              {row.invoiceId && carryBtn(row.invoiceId, row.carryOverRequested)}
               <AsyncButton type="button" className={styles.actionBtn} pendingLabel="Desactivando…"
                 onClick={() => onToggle(sheet.consortiumId, row.fixedExpenseId, false)}>
                 Desactivar
@@ -149,6 +208,8 @@ export function SheetCard({
           )}
         </td>
       </tr>
+      {row.extras.map((extra) => renderExtra(row, extra))}
+      </Fragment>
     );
   };
 
@@ -160,11 +221,25 @@ export function SheetCard({
       data-bank-color={sheet.bankColor ?? "slate"}
       data-printable={hasPrintableRows(sheet) ? "true" : "false"}
     >
+      {/* El encabezado entero pliega/despliega la hoja (acordeón: el padre deja
+          una sola abierta). El + queda afuera del botón para no plegarla al
+          agregar. La hoja de impresión ignora el plegado y muestra todo. */}
       <header className={styles.sheetHeader}>
-        <div>
-          <span className={styles.sheetBank}>{sheet.bankName}</span>
-          <h2 className={styles.sheetTitle}>{sheet.consortiumName}</h2>
-        </div>
+        <button
+          type="button"
+          className={styles.sheetToggle}
+          aria-expanded={open}
+          aria-controls={`sheet-body-${sheet.consortiumId}`}
+          onClick={() => onToggleOpen?.(sheet.consortiumId)}
+        >
+          <span className={styles.sheetChevron} aria-hidden="true">{open ? "▾" : "▸"}</span>
+          <span>
+            <span className={styles.sheetBank}>
+              {sheet.bankId ? `BANCO: ${sheet.bankName}` : sheet.bankName}
+            </span>
+            <span className={styles.sheetTitle}>{sheet.consortiumName}</span>
+          </span>
+        </button>
         <div className={styles.sheetHeaderRight}>
           <span className={styles.sheetPeriod}>
             {sheet.periodLabel ?? "sin período abierto"}
@@ -181,11 +256,13 @@ export function SheetCard({
         </div>
       </header>
 
+      <div id={`sheet-body-${sheet.consortiumId}`} className={styles.sheetBody} hidden={!open}>
       {activeRows.length === 0 ? (
         <p className={styles.emptyNote}>
           {inactiveRows.length === 0
-            ? "Este edificio está sin gastos fijos cargados: no se va a imprimir."
-            : "Este edificio está sin gastos fijos activos: no se va a imprimir."}
+            ? "Este edificio está sin gastos fijos cargados"
+            : "Este edificio está sin gastos fijos activos"}
+          {hasPrintableRows(sheet) ? "." : ": no se va a imprimir."}
         </p>
       ) : (
         <table className={styles.sheetTable}>
@@ -207,6 +284,41 @@ export function SheetCard({
         </details>
       )}
 
+      {/* Otras boletas del mes: proveedores que no son gasto fijo del edificio
+          (ticket, trabajo eventual, razón social hermana). Bloque propio para
+          que la tabla de arriba siga siendo "el padrón del edificio". */}
+      {sheet.others.length > 0 && (
+        <div className={styles.othersBlock}>
+          <h3 className={styles.othersTitle}>Otras boletas del mes</h3>
+          <table className={styles.sheetTable}>
+            {columns}
+            <tbody>
+              {sheet.others.map((row) => (
+                <tr
+                  key={row.invoiceId}
+                  className={row.carriedOutTo ? `${styles.rowOther} ${styles.rowCarriedOut}` : styles.rowOther}
+                >
+                  {previewCell(row.invoiceUrl, row.concepto)}
+                  {facturasCell(row.facturas)}
+                  <td>
+                    {row.concepto}
+                    {row.fantasia && <strong className={styles.fantasia}>{row.fantasia}</strong>}
+                    {row.carriedOutTo && <span className={styles.carriedBadge}>pasó a {row.carriedOutTo}</span>}
+                  </td>
+                  <td>{row.monto != null ? money.format(row.monto) : ""}</td>
+                  <td>{row.aliasCbu.map((a) => (<div key={a}>{a}</div>))}</td>
+                  <td />
+                  <td />
+                  <td className={styles.rowActions}>
+                    {!row.carriedOutTo && carryBtn(row.invoiceId, row.carryOverRequested)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
       {/* Vienen del mes anterior: bloque propio, para que la tabla de arriba siga
           significando "los gastos fijos de este edificio" y para distinguir de un
           vistazo qué es del mes y qué viene atrasado. */}
@@ -219,7 +331,7 @@ export function SheetCard({
               {sheet.carried.map((row) => (
                 <tr key={row.invoiceId} className={styles.rowCarried}>
                   {previewCell(row.invoiceUrl, row.concepto)}
-                  <td>{row.facturas ?? ""}</td>
+                  {facturasCell(row.facturas)}
                   <td>
                     {row.concepto}
                     {row.fromLabel && <span className={styles.carriedBadge}>de {row.fromLabel}</span>}
@@ -237,22 +349,16 @@ export function SheetCard({
                     {/* Puede volver a pasarse: si vino de julio y en agosto tampoco
                         se paga, tiene que poder ir a septiembre. El origen que se
                         muestra sigue siendo el ORIGINAL. */}
-                    <AsyncButton
-                      type="button"
-                      className={row.carryOverRequested ? styles.actionBtnMarked : styles.actionBtn}
-                      pendingLabel={row.carryOverRequested ? "Quitando…" : "Marcando…"}
-                      onClick={() => onToggleCarryOver(row.invoiceId, !row.carryOverRequested)}
-                    >
-                      {row.carryOverRequested ? "Pasa al mes siguiente ✓" : "Pasar al mes siguiente"}
-                    </AsyncButton>
+                    {carryBtn(row.invoiceId, row.carryOverRequested)}
 
                     <AsyncButton
                       type="button"
                       className={styles.actionBtn}
                       pendingLabel="Devolviendo…"
                       onClick={() => onUndoCarryOver(row.invoiceId)}
+                      title={`Devolver a ${row.fromLabel ?? "su mes"}`}
                     >
-                      Devolver a {row.fromLabel ?? "su mes"}
+                      Devolver
                     </AsyncButton>
 
                     {lateFor === row.invoiceId ? (
@@ -289,8 +395,9 @@ export function SheetCard({
                           setLateFor(row.invoiceId);
                           setLateValue(row.lateAmount != null ? String(row.lateAmount) : "");
                         }}
+                        title="Cargar el monto del 2° vencimiento"
                       >
-                        Cargar monto vencido
+                        Monto vencido
                       </button>
                     )}
                   </td>
@@ -300,6 +407,8 @@ export function SheetCard({
           </table>
         </div>
       )}
+
+      </div>
 
       <PdfPreviewModal preview={preview} onClose={() => setPreview(null)} />
     </section>

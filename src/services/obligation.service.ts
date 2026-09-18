@@ -155,10 +155,13 @@ export interface SyncResult {
  * Es la versión set-based de `generateObligationsForPeriod`: la vista global la
  * llama al montar con decenas de edificios, así que no puede hacer una query por
  * gasto fijo (ese patrón produjo el 524 del túnel en `close-all`, ver
- * `docs/decisiones.md` 2026-07-12). Son ~5 queries en total, sin importar el
+ * `docs/decisiones.md` 2026-07-12). Son ~6 queries en total, sin importar el
  * tamaño de la cartera.
  *
- * Idempotente: correrla dos veces seguidas no crea nada.
+ * Además del alta, hace el vínculo retroactivo de boletas sueltas a obligaciones
+ * PENDING en todos los períodos activos (spec 2026-09-18).
+ *
+ * Idempotente: correrla dos veces seguidas no crea ni vincula nada.
  */
 export async function syncObligationsForClient(
   clientId: string,
@@ -206,23 +209,26 @@ export async function syncObligationsForClient(
       }))
   );
 
-  if (toCreate.length === 0) return { created: 0, linked: 0, periods: periods.length };
+  if (toCreate.length > 0) {
+    await prisma.expenseObligation.createMany({ data: toCreate, skipDuplicates: true });
+  }
 
-  await prisma.expenseObligation.createMany({ data: toCreate, skipDuplicates: true });
-
-  // Vínculo retroactivo, acotado a los períodos donde efectivamente se creó algo:
-  // en régimen normal esto no hace ningún update.
-  const touchedPeriodIds = [...new Set(toCreate.map((o) => o.periodId))];
-
+  // Vínculo retroactivo en TODOS los períodos activos, no sólo donde se creó
+  // algo: si la principal se borró, la obligación volvió a PENDING y la
+  // siguiente boleta del proveedor (que estaba como adicional) tiene que subir
+  // acá, porque el pipeline no la reprocesa (spec 2026-09-18). En régimen
+  // normal no hay PENDING con boleta suelta y esto no hace ningún update.
   const fresh = await prisma.expenseObligation.findMany({
-    where: { periodId: { in: touchedPeriodIds }, status: "PENDING", invoiceId: null },
+    where: { periodId: { in: periodIds }, status: "PENDING", invoiceId: null },
     select: { id: true, periodId: true, fixedExpenseId: true },
   });
+
+  if (fresh.length === 0) return { created: toCreate.length, linked: 0, periods: periods.length };
 
   const invoices = await prisma.invoice.findMany({
     // Mismo motivo que en `generateObligationsForPeriod`: una boleta arrastrada
     // ya tiene su obligación en el período de origen.
-    where: { periodId: { in: touchedPeriodIds }, carriedFromPeriodId: null },
+    where: { periodId: { in: periodIds }, carriedFromPeriodId: null },
     select: { id: true, periodId: true, providerId: true, lspServiceId: true, docKind: true },
   });
 

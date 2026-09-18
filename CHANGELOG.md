@@ -3,6 +3,41 @@
 ## [Unreleased]
 
 ### Added
+- **Hoja de obligaciones: boletas adicionales y "Otras boletas del mes" (2026-09-18, sin migración).**
+  La 2ª, 3ª… boleta del mes de un proveedor que es gasto fijo se cuelga de su fila como subfila
+  `↳ 2ª boleta` (monto y PDF propios, alias de la madre, arrastre); las boletas de proveedores sin
+  gasto fijo en el edificio van a un bloque "Otras boletas del mes". El PDF del banco imprime ambas.
+  Se derivan en lectura (`obligation: null` + `obligationMatchesInvoice` en `sheetModel`): sin estado
+  propio, sin cambios de schema. `Sincronizar obligaciones` revincula ahora en todos los períodos
+  activos (si se borra la principal, la siguiente sube). Spec
+  `docs/superpowers/specs/2026-09-18-boletas-adicionales-y-otras-del-mes-design.md`.
+  - Orden de la hoja en dos niveles: con boleta arriba, después lo que hay que pedir; dentro,
+    empleados → servicios → proveedores. Encabezados `FACTURA/NRO CLIENTE` y `PROVEEDOR/SERVICIO`
+    (pantalla y PDF). Columnas de ancho fijo compartidas por las tres tablas de la hoja; nro. de
+    cliente recortado a 12 caracteres con tooltip.
+  - Hojas en acordeón (todas plegadas al entrar, una abierta por vez; la impresión muestra todo) y
+    rótulo `BANCO: <nombre>` en el encabezado; título del banco centrado.
+  - Fix: el borde de color de la hoja usaba slugs viejos (`blue`, `green`); ahora los ocho de
+    `bankPalette` (`sky`, `emerald`, `teal`, `rose`…), así CIUDAD y PROVINCIA muestran su color.
+  - Acciones de fila en una sola línea: rótulos cortos con tooltip completo (`Mes siguiente`,
+    `Devolver`, `Monto vencido`; `Saltear periodo` queda), columna de acciones de 330px y la
+    página a 1440px (el administrador trabaja en notebook / escritorio).
+- **Modo claro/oscuro en todas las páginas (2026-09-18).** Hook único `useThemeMode` (persistido en
+  `localStorage`, `data-theme` en `<html>`) + `ThemeToggle`. Botón nuevo en Obligaciones y en el
+  sidebar de Consorcios; las demás páginas pasan a la fuente compartida (antes cada una tenía su
+  copia y el tema se perdía al cambiar de página). El botón es un interruptor (`role="switch"`):
+  sol en la perilla en modo oscuro, luna en modo claro.
+- **Padrón de gastos fijos armado desde las rendiciones (2026-09-14 → 2026-09-18, sin código).** 8
+  tandas, 47 edificios, jul + ago 2026 (CABRERA jun + jul): números de cliente de servicios, partidas
+  AGIP, empleados con CUIL, proveedores fijos vs eventuales, retenciones y seguros, edificio por
+  edificio. El owner cargó proveedores, `_LspServices` y gastos fijos desde el panel. Detalle en
+  `INFO PROVEEDORES\_analisis\PLAN-rendiciones-faltantes.md` §10–§18 (fuera del repo). Base al cierre:
+  49 consorcios, 281 proveedores, 144 servicios, 725 gastos fijos activos.
+  - Borrados en producción (0 boletas vinculadas en todos): 8 gastos fijos sobre proveedores genéricos
+    de servicio sin nro. de cliente; proveedor duplicado `SALAS JULIA ALICIA` (causa del 500 del sync);
+    SUELDO/SUTERH/ARCA de CORRIENTES 4815 (sin empleado).
+  - Reglas fijadas en `docs/decisiones.md` 2026-09-18: servicio sin nro. de cliente ≠ gasto fijo; el
+    CUIT cobrador no se carga (va en ALIAS DE PAGO); CUIL válido sobre el del recibo.
 - **La retención como gasto fijo propio (2026-09-17)** — migración `20260917000000_doc_kind_retencion`.
   Enum `DocKind { FACTURA, RETENCION }` en `Invoice.docKind` y `FixedExpense.kind`; unique de gasto
   fijo `(consortiumId, providerId, kind)`. Una obligación sólo acepta boletas de su tipo: la factura

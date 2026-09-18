@@ -1,6 +1,10 @@
 /* Vista global de obligaciones. En la Parte 2 se suma el bloque @media print. */
 
-.page { padding: 24px; max-width: 1200px; margin: 0 auto; }
+/* Tope de 1440px: entra la planilla con las acciones en una sola línea sin que
+   PROVEEDOR/SERVICIO (la única columna elástica) quede con un hueco enorme
+   hasta MONTO en un monitor ancho. El administrador trabaja en notebook o
+   escritorio. */
+.page { padding: 20px 28px; max-width: 1440px; margin: 0 auto; }
 
 .toolbar {
   display: flex; gap: 16px; align-items: center; flex-wrap: wrap;
@@ -19,25 +23,42 @@
 }
 
 .bankGroup { margin-bottom: 28px; }
-.bankTitle { font-size: 14px; text-transform: uppercase; letter-spacing: 0.08em; opacity: 0.7; margin: 0 0 10px; }
+.bankTitle { font-size: 14px; text-transform: uppercase; letter-spacing: 0.08em; opacity: 0.7; margin: 0 0 10px; text-align: center; }
 
 .sheetCard {
   border: 1px solid rgba(127, 127, 127, 0.25);
-  border-radius: 10px; padding: 16px; margin-bottom: 16px;
+  border-radius: 10px; padding: 10px 16px; margin-bottom: 10px;
   border-left-width: 4px;
 }
 /* El color del banco tiñe sólo el borde izquierdo. Todo selector lleva la clase
    local: CSS Modules corre en modo `pure` y un [data-*] suelto rompe el build. */
-.sheetCard[data-bank-color="red"] { border-left-color: #dc2626; }
-.sheetCard[data-bank-color="blue"] { border-left-color: #2563eb; }
-.sheetCard[data-bank-color="green"] { border-left-color: #16a34a; }
-.sheetCard[data-bank-color="amber"] { border-left-color: #d97706; }
-.sheetCard[data-bank-color="violet"] { border-left-color: #7c3aed; }
+/* Mismos slugs que `consortiums/lib/bankPalette.ts` (fuente única de la paleta):
+   slate, red, amber, emerald, teal, sky, violet, rose. Un slug que no esté acá
+   cae en el gris del borde por defecto. */
 .sheetCard[data-bank-color="slate"] { border-left-color: #64748b; }
+.sheetCard[data-bank-color="red"] { border-left-color: #dc2626; }
+.sheetCard[data-bank-color="amber"] { border-left-color: #d97706; }
+.sheetCard[data-bank-color="emerald"] { border-left-color: #059669; }
+.sheetCard[data-bank-color="teal"] { border-left-color: #0d9488; }
+.sheetCard[data-bank-color="sky"] { border-left-color: #0284c7; }
+.sheetCard[data-bank-color="violet"] { border-left-color: #7c3aed; }
+.sheetCard[data-bank-color="rose"] { border-left-color: #e11d48; }
 
-.sheetHeader { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 12px; }
-.sheetBank { font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; opacity: 0.6; }
-.sheetTitle { font-size: 17px; margin: 2px 0 0; }
+/* Plegada, la ficha es sólo el encabezado con el mismo aire arriba y abajo: la
+   separación con la tabla vive en `.sheetBody`, que desaparece con `hidden`. */
+.sheetHeader { display: flex; justify-content: space-between; align-items: center; }
+.sheetBody { margin-top: 12px; }
+/* El encabezado es el control del acordeón: botón sin cromo, con chevron. */
+.sheetToggle {
+  display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0;
+  padding: 0; border: 0; background: none; color: inherit; text-align: left; cursor: pointer;
+}
+.sheetToggle:hover .sheetTitle { text-decoration: underline; }
+.sheetChevron { font-size: 14px; opacity: 0.6; width: 12px; }
+.sheetBank { display: block; font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; opacity: 0.6; }
+.sheetTitle { display: block; font-size: 17px; font-weight: 700; margin: 2px 0 0; }
+/* Plegada: `hidden` (atributo) manda en pantalla; la impresión lo pisa. */
+.sheetCard[data-printable] .sheetBody[hidden] { display: none; }
 .sheetHeaderRight { display: flex; align-items: center; gap: 10px; }
 .sheetPeriod { font-size: 13px; opacity: 0.75; text-transform: capitalize; }
 
@@ -47,10 +68,24 @@
 }
 .addBtn:hover { background: rgba(127, 127, 127, 0.12); }
 
-.sheetTable { width: 100%; border-collapse: collapse; font-size: 13px; }
+.sheetTable { width: 100%; border-collapse: collapse; font-size: 13px; table-layout: fixed; }
+/* Anchos fijos compartidos por las tres tablas de la hoja: así FACTURA, MONTO y
+   ALIAS caen en la misma vertical en la tabla del mes, en "Otras boletas del
+   mes" y en "Vienen del mes anterior". PROVEEDOR/SERVICIO absorbe el resto. */
+.colPreview { width: 34px; }
+.colFacturas { width: 128px; }
+.colConcepto { width: auto; }
+.colMonto { width: 124px; }
+.colAlias { width: 168px; }
+.colTecnico { width: 104px; }
+.colTel { width: 96px; }
+/* Entra la combinación más larga (arrastradas: Mes siguiente · Devolver · Monto vencido). */
+.colActions { width: 330px; }
+.facturasCell { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.sheetTable td { overflow-wrap: anywhere; }
 .sheetTable th {
-  text-align: left; font-size: 11px; letter-spacing: 0.04em;
-  padding: 4px 8px; border-bottom: 1px solid rgba(127, 127, 127, 0.3); white-space: nowrap;
+  text-align: left; font-size: 11px; letter-spacing: 0.04em; line-height: 1.2; vertical-align: bottom;
+  padding: 4px 8px; border-bottom: 1px solid rgba(127, 127, 127, 0.3);
 }
 .sheetTable td { padding: 3px 8px; border-bottom: 1px solid rgba(127, 127, 127, 0.12); }
 
@@ -63,7 +98,7 @@
 }
 .previewBtn:hover { opacity: 1; border-color: rgba(127, 127, 127, 0.4); }
 .actionsHeader { width: 1%; }
-.rowActions { display: flex; gap: 8px; justify-content: flex-end; white-space: nowrap; }
+.rowActions { display: flex; flex-wrap: nowrap; gap: 6px; justify-content: flex-end; white-space: nowrap; }
 
 /* El atenuado y el tachado son de los DATOS, no de las acciones: los botones de
    una fila omitida o desactivada tienen que seguir legibles y clickeables (son
@@ -80,7 +115,7 @@
    chicas (recomendación de tamaño de target táctil). */
 .actionBtn {
   display: inline-flex; align-items: center; justify-content: center; gap: 6px;
-  min-height: 32px; padding: 0 12px; border-radius: 6px;
+  min-height: 30px; padding: 0 10px; border-radius: 6px;
   font-size: 12px; line-height: 1; white-space: nowrap; cursor: pointer;
   background: transparent; border: 1px solid rgba(127, 127, 127, 0.4); color: inherit;
 }
@@ -94,6 +129,21 @@
   opacity: 0.75; margin: 0 0 6px;
 }
 .rowCarried td { background: rgba(217, 119, 6, 0.06); }
+
+/* Adicional: otra boleta del mismo proveedor, colgada de su fila. */
+.rowExtra td { background: rgba(127, 127, 127, 0.05); }
+.rowExtra td:nth-child(3) { padding-left: 22px; }
+.extraLabel { opacity: 0.8; }
+
+/* Otras boletas del mes: proveedores que no son gasto fijo del edificio. */
+.othersBlock { margin-top: 18px; border-top: 1px dashed rgba(127, 127, 127, 0.45); padding-top: 10px; }
+.othersTitle {
+  font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em;
+  opacity: 0.75; margin: 0 0 6px;
+}
+.rowOther td { background: rgba(37, 99, 235, 0.05); }
+/* Nació este mes y ya pasó al siguiente: se ve (rendición), no se paga acá. */
+.rowCarriedOut td { opacity: 0.55; }
 
 /* Bloque plegado de gastos fijos desactivados. */
 .inactiveBlock { margin-top: 14px; border-top: 1px dashed rgba(127, 127, 127, 0.45); padding-top: 8px; }
@@ -181,11 +231,18 @@
   /* Salteadas y desactivadas no son parte de lo que hay que pagar. */
   .sheetTable .rowSkipped,
   .sheetTable .rowInactive { display: none; }
+  .sheetTable .rowCarriedOut { display: none; }
   .inactiveBlock { display: none; }
   .previewCell { display: none; }
-  .sheetTable { min-width: 0; font-size: 10pt; }
+  /* Sin la columna de acciones el ancho fijo sobra: el papel vuelve a auto. */
+  .sheetTable { min-width: 0; font-size: 10pt; table-layout: auto; }
+  .colPreview,
+  .colActions { display: none; }
   .sheetTable td,
   .sheetTable th { border-bottom: 1px solid #999; }
+  /* El acordeón es de pantalla: en papel se imprime todo. */
+  .sheetCard[data-printable] .sheetBody[hidden] { display: block; }
+  .sheetChevron { display: none; }
   .sheetTitle { font-size: 16pt; }
   .sheetBank,
   .sheetPeriod { color: #444; }

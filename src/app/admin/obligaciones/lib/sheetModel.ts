@@ -5,9 +5,16 @@
  * PDF: si un edificio deja de aparecer, deja de aparecer en los dos lados a la
  * vez. Sin React, sin fetch — se testea sin montar nada.
  */
+import { obligationMatchesInvoice } from "@/lib/fixedExpense";
 import { parsePaymentAliases } from "@/lib/paymentAliases";
 
 export type ObligationStatus = "PENDING" | "RECEIVED" | "SKIPPED" | "NOT_RECEIVED";
+/**
+ * Grupo de una fila, para el orden de la hoja: los sueldos primero, después los
+ * servicios (número de cliente), después el resto. Sale del `providerType` del
+ * proveedor o de que la fila sea un LSP.
+ */
+export type RowGroup = "EMPLEADO" | "SERVICIO" | "PROVEEDOR";
 /** `NO_PERIOD` = el edificio no tiene período activo, así que no hay obligación posible. */
 export type SheetStatus = ObligationStatus | "NO_PERIOD";
 
@@ -59,6 +66,29 @@ export type OverviewCarried = {
   invoiceUrl?: string | null;
 };
 
+/**
+ * Boleta del mes que NO ocupa ninguna obligación: la 2ª del mismo proveedor, o
+ * la de un proveedor que no es gasto fijo del edificio. `carriedOutTo` la marca
+ * si nació acá y el owner la empujó al mes siguiente (el origen la sigue
+ * mostrando, sin acciones). `buildSheets` decide en cuál de los dos casos está.
+ */
+export type OverviewLooseInvoice = {
+  invoiceId: string;
+  providerId: string | null;
+  lspServiceId: string | null;
+  docKind: "FACTURA" | "RETENCION";
+  concepto: string;
+  matchNames: string | null;
+  facturas: string | null;
+  /** Alias de pago crudo del proveedor (`A|B|C`); se parsea acá. */
+  aliasCbu: string | null;
+  amount: number | null;
+  invoiceUrl: string | null;
+  carryOverRequested: boolean;
+  createdAt: string;
+  carriedOutTo: string | null;
+};
+
 export type OverviewConsortium = {
   consortiumId: string;
   consortiumName: string;
@@ -72,6 +102,7 @@ export type OverviewConsortium = {
   lspServices: OverviewLspService[];
   fixedExpenses: OverviewFixedExpense[];
   carried?: OverviewCarried[];
+  looseInvoices?: OverviewLooseInvoice[];
 };
 
 export type OverviewPayload = {
@@ -79,8 +110,49 @@ export type OverviewPayload = {
   month: number | null;
   year: number | null;
   monthLabel: string | null;
-  providers: Array<{ id: string; canonicalName: string; paymentAlias: string | null; matchNames: string | null }>;
+  providers: Array<{
+    id: string;
+    canonicalName: string;
+    paymentAlias: string | null;
+    matchNames: string | null;
+    /** Tipo del ALTA. Ausente en payloads viejos → PROVEEDOR. */
+    providerType?: RowGroup;
+  }>;
   consortiums: OverviewConsortium[];
+};
+
+/**
+ * Boleta ADICIONAL de un gasto fijo: la 2ª, 3ª… del mismo proveedor en el mes.
+ * No es una obligación (no se omite, no vence): es otro gasto a pagar, con su
+ * PDF, su recibo y su arrastre. Concepto y alias los hereda de la fila madre.
+ */
+export type ExtraRow = {
+  invoiceId: string;
+  /** 2, 3, … (la principal, vinculada a la obligación, es la 1ª). */
+  ordinal: number;
+  monto: number | null;
+  invoiceUrl: string | null;
+  carryOverRequested: boolean;
+  /** "octubre 2026" si el owner la empujó al mes siguiente; null si vive acá. */
+  carriedOutTo: string | null;
+};
+
+/**
+ * Boleta de un proveedor que NO es gasto fijo del edificio (ticket, trabajo
+ * eventual, razón social hermana de un proveedor cargado). Bloque propio,
+ * "Otras boletas del mes".
+ */
+export type OtherRow = {
+  invoiceId: string;
+  facturas: string | null;
+  concepto: string;
+  fantasia: string | null;
+  monto: number | null;
+  aliasCbu: string[];
+  invoiceUrl: string | null;
+  carryOverRequested: boolean;
+  carriedOutTo: string | null;
+  group: RowGroup;
 };
 
 export type SheetRow = {
@@ -113,6 +185,9 @@ export type SheetRow = {
   carriedIn: boolean;
   /** Link de Drive del PDF de la boleta, para la vista previa. Null si no llegó. */
   invoiceUrl: string | null;
+  /** Las demás boletas del mes de este mismo gasto fijo, en orden de llegada. */
+  extras: ExtraRow[];
+  group: RowGroup;
 };
 
 /**
@@ -153,6 +228,8 @@ export type SheetData = {
   rows: SheetRow[];
   /** Bloque aparte, debajo de la tabla de gastos fijos. */
   carried: CarriedRow[];
+  /** Bloque "Otras boletas del mes": proveedores que no son gasto fijo del edificio. */
+  others: OtherRow[];
 };
 
 /** Etiqueta del grupo de edificios sin banco asignado. Va último en el orden. */
@@ -166,6 +243,47 @@ function norm(value: string): string {
     .trim();
 }
 
+/** Rango del grupo para ordenar: EMPLEADO < SERVICIO < PROVEEDOR. */
+const GROUP_RANK: Record<RowGroup, number> = { EMPLEADO: 0, SERVICIO: 1, PROVEEDOR: 2 };
+
+function groupOf(isLsp: boolean, providerType: RowGroup | undefined): RowGroup {
+  if (isLsp) return "SERVICIO";
+  return providerType === "EMPLEADO" ? "EMPLEADO" : "PROVEEDOR";
+}
+
+/**
+ * Orden de la hoja, en dos niveles (pedido del owner, 2026-09-18):
+ * 1. Las filas CON boleta (hay monto que pagar) van arriba de las que hay que
+ *    pedir. Las salteadas debajo de todo lo activo; los desactivados al fondo
+ *    (no son parte de lo que hay que pagar, y desactivar es también el camino
+ *    para un alta cargada por error).
+ * 2. Dentro de cada nivel: empleados → servicios → proveedores, y alfabético.
+ */
+function compareRows(a: SheetRow, b: SheetRow): number {
+  const tier = (r: SheetRow) => {
+    if (!r.active) return 3;
+    if (r.status === "SKIPPED") return 2;
+    return r.invoiceId || r.monto != null ? 0 : 1;
+  };
+  const byTier = tier(a) - tier(b);
+  if (byTier !== 0) return byTier;
+  const byGroup = GROUP_RANK[a.group] - GROUP_RANK[b.group];
+  if (byGroup !== 0) return byGroup;
+  return a.concepto.localeCompare(b.concepto, "es");
+}
+
+/** Tope de caracteres del nro. de cliente en pantalla; el completo va en el tooltip y en el PDF. */
+export const CLIENT_NUMBER_MAX = 12;
+
+/**
+ * Recorta un número de cliente largo para que la columna FACTURA/NRO CLIENTE no
+ * empuje a las demás y las dos tablas de la hoja queden alineadas.
+ */
+export function shortClientNumber(value: string | null, max = CLIENT_NUMBER_MAX): string | null {
+  if (value == null) return null;
+  return value.length > max ? `${value.slice(0, max)}…` : value;
+}
+
 /** Primer nombre de fantasía de `matchNames` (`A|B|C`), o null si no hay ninguno. */
 export function firstMatchName(matchNames: string | null | undefined): string | null {
   const first = (matchNames ?? "").split("|").map((n) => n.trim()).find(Boolean);
@@ -177,6 +295,56 @@ export function buildSheets(payload: OverviewPayload): SheetData[] {
 
   const sheets = payload.consortiums.map((c) => {
     const lspById = new Map(c.lspServices.map((l) => [l.id, l]));
+
+    // Boletas del mes que no ocupan ninguna obligación: si el edificio tiene un
+    // gasto fijo ACTIVO que matchee (mismo criterio que el pipeline), cuelgan de
+    // esa fila como adicionales; si no, van a "Otras boletas del mes". Un gasto
+    // fijo desactivado no cuenta: su tabla está plegada y no se imprime, y la
+    // boleta hay que pagarla igual.
+    const extrasByFx = new Map<string, ExtraRow[]>();
+    const others: OtherRow[] = [];
+    const looseSorted = [...(c.looseInvoices ?? [])].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+    for (const inv of looseSorted) {
+      const fx = c.fixedExpenses.find(
+        (f) =>
+          f.active &&
+          obligationMatchesInvoice(
+            { providerId: f.providerId, lspServiceId: f.lspServiceId, kind: f.kind },
+            { providerId: inv.providerId, lspServiceId: inv.lspServiceId, docKind: inv.docKind }
+          )
+      );
+      if (fx) {
+        const list = extrasByFx.get(fx.id) ?? [];
+        list.push({
+          invoiceId: inv.invoiceId,
+          ordinal: list.length + 2,
+          monto: inv.amount,
+          invoiceUrl: inv.invoiceUrl,
+          carryOverRequested: inv.carryOverRequested,
+          carriedOutTo: inv.carriedOutTo,
+        });
+        extrasByFx.set(fx.id, list);
+      } else {
+        others.push({
+          invoiceId: inv.invoiceId,
+          facturas: inv.facturas,
+          concepto: inv.concepto,
+          fantasia: firstMatchName(inv.matchNames),
+          group: groupOf(
+            Boolean(inv.lspServiceId),
+            inv.providerId ? providerById.get(inv.providerId)?.providerType : undefined
+          ),
+          monto: inv.amount,
+          aliasCbu: parsePaymentAliases(inv.aliasCbu),
+          invoiceUrl: inv.invoiceUrl,
+          carryOverRequested: inv.carryOverRequested,
+          carriedOutTo: inv.carriedOutTo,
+        });
+      }
+    }
+    others.sort(
+      (a, b) => GROUP_RANK[a.group] - GROUP_RANK[b.group] || a.concepto.localeCompare(b.concepto, "es")
+    );
 
     const rows: SheetRow[] = c.fixedExpenses.map((fx) => {
       const lsp = fx.lspServiceId ? lspById.get(fx.lspServiceId) ?? null : null;
@@ -206,24 +374,12 @@ export function buildSheets(payload: OverviewPayload): SheetData[] {
         carryOverRequested: fx.obligation?.carryOverRequested ?? false,
         carriedIn: fx.obligation?.carriedIn ?? false,
         invoiceUrl: fx.obligation?.invoiceUrl ?? null,
+        extras: extrasByFx.get(fx.id) ?? [],
+        group: groupOf(Boolean(lsp), provider?.providerType),
       };
     });
 
-    // Orden: los desactivados al fondo (no son parte de lo que hay que pagar, y
-    // desactivar es también el camino para un alta cargada por error); entre los
-    // activos, los LSP primero porque son los que llevan número de cliente; y
-    // dentro de cada grupo, alfabético.
-    rows.sort((a, b) => {
-      const aOff = a.active ? 0 : 1;
-      const bOff = b.active ? 0 : 1;
-      if (aOff !== bOff) return aOff - bOff;
-
-      const aLsp = a.lspServiceId ? 0 : 1;
-      const bLsp = b.lspServiceId ? 0 : 1;
-      if (aLsp !== bLsp) return aLsp - bLsp;
-
-      return a.concepto.localeCompare(b.concepto, "es");
-    });
+    rows.sort(compareRows);
 
     // Lo que vino del mes anterior, alfabético.
     const carried: CarriedRow[] = [...(c.carried ?? [])]
@@ -253,6 +409,7 @@ export function buildSheets(payload: OverviewPayload): SheetData[] {
       periodStatus: c.periodStatus,
       rows,
       carried,
+      others,
     };
   });
 
@@ -282,25 +439,44 @@ export function isPrintableRow(row: SheetRow): boolean {
   return true;
 }
 
+/** Las adicionales que van al papel: las que siguen viviendo en este mes. */
+export function printableExtras(row: SheetRow): ExtraRow[] {
+  return row.extras.filter((e) => !e.carriedOutTo);
+}
+
 /**
- * ¿Esta hoja tiene algo que imprimir? Cuenta tanto los gastos del mes como las
- * impagas arrastradas: un edificio sin gastos fijos pero con una deuda vieja
- * igual tiene que salir en el papel.
+ * ¿Esta hoja tiene algo que imprimir? Cuenta los gastos del mes, las adicionales
+ * (aunque su madre esté salteada: llegó una boleta, hay que pagarla), las
+ * impagas arrastradas y las otras boletas del mes: un edificio sin gastos fijos
+ * pero con una deuda vieja o una boleta eventual igual tiene que salir en el papel.
  */
 export function hasPrintableRows(sheet: SheetData): boolean {
-  return sheet.rows.some(isPrintableRow) || sheet.carried.length > 0;
+  return (
+    sheet.rows.some(isPrintableRow) ||
+    sheet.rows.some((r) => printableExtras(r).length > 0) ||
+    sheet.carried.length > 0 ||
+    sheet.others.some((o) => !o.carriedOutTo)
+  );
 }
 
 /**
  * Las hojas tal como salen impresas: sin filas salteadas ni desactivadas, sin
  * edificios sin período activo y sin edificios que quedarían en blanco (no se
- * gasta papel en una hoja vacía). El bloque de impagas viaja intacto. No muta la
- * entrada.
+ * gasta papel en una hoja vacía). Una madre no imprimible con adicionales
+ * QUEDA: el PDF decide con `isPrintableRow` si imprime su línea o sólo las
+ * adicionales. Lo que pasó a otro mes no va. El bloque de impagas viaja
+ * intacto. No muta la entrada.
  */
 export function toPrintableSheets(sheets: SheetData[]): SheetData[] {
   return sheets
-    .map((sheet) => ({ ...sheet, rows: sheet.rows.filter(isPrintableRow) }))
-    .filter((sheet) => sheet.rows.length > 0 || sheet.carried.length > 0);
+    .map((sheet) => ({
+      ...sheet,
+      rows: sheet.rows
+        .filter((row) => isPrintableRow(row) || printableExtras(row).length > 0)
+        .map((row) => ({ ...row, extras: printableExtras(row) })),
+      others: sheet.others.filter((o) => !o.carriedOutTo),
+    }))
+    .filter((sheet) => sheet.rows.length > 0 || sheet.carried.length > 0 || sheet.others.length > 0);
 }
 
 /**
@@ -321,7 +497,8 @@ export function filterSheets(sheets: SheetData[], query: string): SheetData[] {
       continue;
     }
     const rows = sheet.rows.filter((r) => norm(r.concepto).includes(q));
-    if (rows.length > 0) out.push({ ...sheet, rows });
+    const others = sheet.others.filter((o) => norm(o.concepto).includes(q));
+    if (rows.length > 0 || others.length > 0) out.push({ ...sheet, rows, others });
   }
   return out;
 }

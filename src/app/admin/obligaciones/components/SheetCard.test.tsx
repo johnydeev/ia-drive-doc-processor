@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { act, render, screen, within } from "@testing-library/react";
+import { act, cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { SheetCard } from "./SheetCard";
 import type { SheetData } from "../lib/sheetModel";
@@ -17,15 +17,16 @@ const sheet: SheetData = {
     { fixedExpenseId: "fx1", obligationId: "ob1", providerId: null, lspServiceId: "l1",
       facturas: "4804882", concepto: "EDESUR", fantasia: null, monto: 118000, aliasCbu: ["edesur.pago"],
       status: "RECEIVED", active: true, invoiceId: "inv1", carryOverRequested: false, carriedIn: false,
-      invoiceUrl: "https://drive.google.com/file/d/ABC123/view?usp=drivesdk" },
+      invoiceUrl: "https://drive.google.com/file/d/ABC123/view?usp=drivesdk", extras: [], group: "SERVICIO" },
     { fixedExpenseId: "fx2", obligationId: "ob2", providerId: "p1", lspServiceId: null,
       facturas: null, concepto: "SEGURO LA CAJA", fantasia: null, monto: null, aliasCbu: [],
-      status: "PENDING", active: true, invoiceId: null, carryOverRequested: false, carriedIn: false, invoiceUrl: null },
+      status: "PENDING", active: true, invoiceId: null, carryOverRequested: false, carriedIn: false, invoiceUrl: null, extras: [], group: "PROVEEDOR" },
     { fixedExpenseId: "fx3", obligationId: "ob3", providerId: "p2", lspServiceId: null,
       facturas: null, concepto: "N.G. FUMIGACION", fantasia: "FUMIGACIONES MIGUEL", monto: null, aliasCbu: [],
-      status: "SKIPPED", active: true, invoiceId: null, carryOverRequested: false, carriedIn: false, invoiceUrl: null },
+      status: "SKIPPED", active: true, invoiceId: null, carryOverRequested: false, carriedIn: false, invoiceUrl: null, extras: [], group: "PROVEEDOR" },
   ],
   carried: [],
+  others: [],
 };
 
 function renderCard(overrides: Partial<React.ComponentProps<typeof SheetCard>> = {}) {
@@ -37,6 +38,7 @@ function renderCard(overrides: Partial<React.ComponentProps<typeof SheetCard>> =
     onToggleCarryOver: vi.fn(),
     onUndoCarryOver: vi.fn(),
     onSetLateAmount: vi.fn(),
+    onToggleOpen: vi.fn(),
     ...overrides,
   };
   render(<SheetCard {...props} />);
@@ -74,7 +76,7 @@ describe("SheetCard", () => {
 
   it("dibuja las seis columnas de la planilla", () => {
     renderCard();
-    for (const header of ["FACTURAS", "PROVEEDORES Y SERVICIOS", "MONTO", "ALIAS - CBU", "TÉCNICO O GESTOR", "TEL. CONTACTO"]) {
+    for (const header of ["FACTURA/NRO CLIENTE", "PROVEEDOR/SERVICIO", "MONTO", "ALIAS - CBU", "TÉCNICO O GESTOR", "TEL. CONTACTO"]) {
       expect(screen.getByRole("columnheader", { name: header })).toBeInTheDocument();
     }
   });
@@ -311,7 +313,7 @@ describe("SheetCard", () => {
     const props = renderCard();
 
     // Sólo la fila que YA tiene boleta ofrece la acción.
-    await user.click(screen.getByRole("button", { name: "Pasar al mes siguiente" }));
+    await user.click(screen.getByRole("button", { name: "Mes siguiente" }));
 
     expect(props.onToggleCarryOver).toHaveBeenCalledWith("inv1", true);
   });
@@ -320,7 +322,7 @@ describe("SheetCard", () => {
     renderCard();
 
     // EDESUR tiene boleta; SEGURO LA CAJA no.
-    expect(screen.getAllByRole("button", { name: "Pasar al mes siguiente" })).toHaveLength(1);
+    expect(screen.getAllByRole("button", { name: "Mes siguiente" })).toHaveLength(1);
   });
 
   it("una boleta ya marcada ofrece quitar la marca", async () => {
@@ -331,7 +333,7 @@ describe("SheetCard", () => {
     };
     const props = renderCard({ sheet: marked });
 
-    await user.click(screen.getByRole("button", { name: /pasa al mes siguiente/i }));
+    await user.click(screen.getByRole("button", { name: /mes siguiente ✓/i }));
 
     expect(props.onToggleCarryOver).toHaveBeenCalledWith("inv1", false);
   });
@@ -348,7 +350,7 @@ describe("SheetCard", () => {
       },
     });
 
-    await user.click(screen.getByRole("button", { name: "Cargar monto vencido" }));
+    await user.click(screen.getByRole("button", { name: "Monto vencido" }));
     await user.type(screen.getByLabelText(/monto vencido de ASCENSORES POTENZA/i), "130000");
     await user.click(screen.getByRole("button", { name: "Guardar" }));
 
@@ -390,7 +392,7 @@ describe("SheetCard", () => {
     });
 
     const bloque = screen.getByText("Vienen del mes anterior").closest("div")!;
-    await user.click(within(bloque).getByRole("button", { name: "Pasar al mes siguiente" }));
+    await user.click(within(bloque).getByRole("button", { name: "Mes siguiente" }));
 
     expect(props.onToggleCarryOver).toHaveBeenCalledWith("inv9", true);
   });
@@ -408,8 +410,125 @@ describe("SheetCard", () => {
       },
     });
 
-    await user.click(screen.getByRole("button", { name: "Devolver a junio 2026" }));
+    await user.click(screen.getByRole("button", { name: "Devolver" }));
 
     expect(props.onUndoCarryOver).toHaveBeenCalledWith("inv9");
+  });
+});
+
+describe("adicionales y otras boletas del mes", () => {
+  const extra = (over: Partial<SheetData["rows"][number]["extras"][number]> = {}) => ({
+    invoiceId: "inv2", ordinal: 2, monto: 54000, invoiceUrl: "https://drive.google.com/file/d/X2/view",
+    carryOverRequested: false, carriedOutTo: null, ...over,
+  });
+  const other = (over: Partial<SheetData["others"][number]> = {}) => ({
+    invoiceId: "o1", facturas: null, concepto: "PLOMERO JUAN", fantasia: "JUAN", monto: 32000,
+    aliasCbu: ["juan.plomero"], invoiceUrl: "https://drive.google.com/file/d/O1/view",
+    carryOverRequested: false, carriedOutTo: null, group: "PROVEEDOR" as const, ...over,
+  });
+
+  it("una adicional se dibuja debajo de su madre con su monto y ofrece pasarla al mes siguiente", async () => {
+    const props = renderCard({ sheet: { ...sheet, rows: [{ ...sheet.rows[0], extras: [extra()] }] } });
+    const fila = screen.getByText("↳ 2ª boleta").closest("tr")!;
+    expect(within(fila).getByText(/54\.000/)).toBeInTheDocument();
+    expect(within(fila).getByText("edesur.pago")).toBeInTheDocument();
+    expect(within(fila).queryByRole("button", { name: /saltear/i })).toBeNull();
+    expect(within(fila).queryByRole("button", { name: /desactivar/i })).toBeNull();
+    await userEvent.click(within(fila).getByRole("button", { name: /mes siguiente/i }));
+    expect(props.onToggleCarryOver).toHaveBeenCalledWith("inv2", true);
+  });
+
+  it("una adicional ofrece la vista previa de SU pdf", () => {
+    renderCard({ sheet: { ...sheet, rows: [{ ...sheet.rows[0], extras: [extra()] }] } });
+    expect(screen.getByRole("button", { name: /vista previa de la boleta de edesur — 2ª boleta/i })).toBeInTheDocument();
+  });
+
+  it("una adicional que pasó a otro mes lo dice y no tiene acciones", () => {
+    renderCard({ sheet: { ...sheet, rows: [{ ...sheet.rows[0], extras: [extra({ carriedOutTo: "agosto 2026" })] }] } });
+    const fila = screen.getByText("↳ 2ª boleta").closest("tr")!;
+    expect(within(fila).getByText(/pasó a agosto 2026/i)).toBeInTheDocument();
+    expect(within(fila).queryByRole("button", { name: /mes siguiente/i })).toBeNull();
+  });
+
+  it("las otras boletas del mes van en su bloque, con fantasía y alias, y se pueden pasar", async () => {
+    const props = renderCard({ sheet: { ...sheet, others: [other()] } });
+    const bloque = screen.getByRole("heading", { name: /otras boletas del mes/i }).parentElement!;
+    expect(within(bloque).getByText("PLOMERO JUAN")).toBeInTheDocument();
+    expect(within(bloque).getByText("JUAN")).toBeInTheDocument();
+    expect(within(bloque).getByText(/32\.000/)).toBeInTheDocument();
+    expect(within(bloque).getByText("juan.plomero")).toBeInTheDocument();
+    await userEvent.click(within(bloque).getByRole("button", { name: /mes siguiente/i }));
+    expect(props.onToggleCarryOver).toHaveBeenCalledWith("o1", true);
+  });
+
+  it("sin otras no dibuja el bloque", () => {
+    renderCard();
+    expect(screen.queryByRole("heading", { name: /otras boletas del mes/i })).toBeNull();
+  });
+
+  it("un edificio sin gastos fijos pero con otras boletas no dice que no se va a imprimir", () => {
+    const { container } = render(
+      <SheetCard sheet={{ ...sheet, rows: [], others: [other()] }} onAdd={vi.fn()} onToggle={vi.fn()}
+        onSetStatus={vi.fn()} onToggleCarryOver={vi.fn()} onUndoCarryOver={vi.fn()} onSetLateAmount={vi.fn()} />
+    );
+    expect(screen.getByText(/sin gastos fijos cargados/i)).toBeInTheDocument();
+    expect(screen.queryByText(/no se va a imprimir/i)).toBeNull();
+    expect(container.querySelector("section")?.getAttribute("data-printable")).toBe("true");
+  });
+});
+
+describe("columnas alineadas entre la tabla del mes y los bloques", () => {
+  it("un nro. de cliente largo se recorta y el completo queda en el tooltip", () => {
+    renderCard({ sheet: { ...sheet, rows: [{ ...sheet.rows[0], facturas: "0048198374000123" }] } });
+    const celda = screen.getByText("004819837400…");
+    expect(celda).toHaveAttribute("title", "0048198374000123");
+  });
+
+  it("las tablas comparten el mismo colgroup, así las columnas coinciden verticalmente", () => {
+    const { container } = render(
+      <SheetCard sheet={{ ...sheet, others: [{ invoiceId: "o1", facturas: "77", concepto: "PLOMERO", fantasia: null,
+        monto: 1, aliasCbu: [], invoiceUrl: null, carryOverRequested: false, carriedOutTo: null, group: "PROVEEDOR" }] }}
+        onAdd={vi.fn()} onToggle={vi.fn()} onSetStatus={vi.fn()} onToggleCarryOver={vi.fn()}
+        onUndoCarryOver={vi.fn()} onSetLateAmount={vi.fn()} />
+    );
+    const groups = container.querySelectorAll("table colgroup");
+    expect(groups).toHaveLength(2);
+    expect(groups[0].innerHTML).toBe(groups[1].innerHTML);
+  });
+});
+
+describe("encabezado: banco rotulado y acordeón", () => {
+  it("rotula el banco como BANCO: <nombre>, y SIN BANCO si no tiene", () => {
+    renderCard();
+    expect(screen.getByText("BANCO: Santander")).toBeInTheDocument();
+    cleanup();
+    renderCard({ sheet: { ...sheet, bankId: null, bankName: "Sin banco" } });
+    expect(screen.getByText("Sin banco")).toBeInTheDocument();
+    expect(screen.queryByText(/BANCO:/)).toBeNull();
+  });
+
+  it("cerrada, esconde las tablas y el encabezado dice que está plegada", () => {
+    renderCard({ open: false });
+    expect(screen.queryByRole("table")).toBeNull();
+    expect(screen.getByRole("button", { name: /santander.*franklin 25/i })).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("abierta, muestra las tablas", () => {
+    renderCard({ open: true });
+    expect(screen.getAllByRole("table").length).toBeGreaterThan(0);
+    expect(screen.getByRole("button", { name: /santander.*franklin 25/i })).toHaveAttribute("aria-expanded", "true");
+  });
+
+  it("el click en el encabezado avisa al padre con el consorcio (el padre decide cuál queda abierta)", async () => {
+    const props = renderCard({ open: false });
+    await userEvent.click(screen.getByRole("button", { name: /santander.*franklin 25/i }));
+    expect(props.onToggleOpen).toHaveBeenCalledWith("c1");
+  });
+
+  it("el botón + no pliega ni despliega la hoja", async () => {
+    const props = renderCard({ open: true });
+    await userEvent.click(screen.getByRole("button", { name: /agregar gasto fijo/i }));
+    expect(props.onAdd).toHaveBeenCalledWith("c1");
+    expect(props.onToggleOpen).not.toHaveBeenCalled();
   });
 });

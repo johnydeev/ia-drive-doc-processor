@@ -1,0 +1,50 @@
+/* Interruptor de tema: pista con sol y luna en los extremos y una perilla que
+   se desliza. La perilla lleva el ícono del modo al que se pasa (sol en modo
+   oscuro, luna en modo claro), que es lo que el usuario está eligiendo. */
+.switch {
+  --track-w: 56px;
+  --track-h: 28px;
+  --knob: 22px;
+  position: relative;
+  display: inline-flex; align-items: center;
+  width: var(--track-w); height: var(--track-h);
+  padding: 0; border-radius: 999px; cursor: pointer;
+  border: 1px solid rgba(127, 127, 127, 0.45);
+  background: rgba(127, 127, 127, 0.18);
+  transition: background 0.2s ease, border-color 0.2s ease;
+  flex-shrink: 0;
+}
+.switch:hover { border-color: rgba(127, 127, 127, 0.8); }
+.switch:focus-visible { outline: 2px solid #2563eb; outline-offset: 2px; }
+.switch:disabled { opacity: 0.5; cursor: default; }
+
+/* Íconos fijos de la pista, apagados: marcan qué hay en cada punta. */
+.trackIcon {
+  position: absolute; top: 50%; transform: translateY(-50%);
+  width: 14px; height: 14px; opacity: 0.45; pointer-events: none;
+}
+.trackSun { left: 7px; }
+.trackMoon { right: 7px; }
+
+/* Perilla: a la izquierda en modo oscuro (sobre el sol), a la derecha en modo
+   claro (sobre la luna). Lleva el ícono del modo destino. */
+.knob {
+  position: absolute; top: 50%; left: 2px;
+  width: var(--knob); height: var(--knob);
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 50%; background: #fff; color: #0f172a;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+  transform: translateY(-50%);
+  transition: transform 0.2s ease, background 0.2s ease;
+}
+.knob svg { width: 14px; height: 14px; }
+.switch[aria-checked="false"] .knob {
+  transform: translate(calc(var(--track-w) - var(--knob) - 6px), -50%);
+  background: #1e293b; color: #fde68a;
+}
+
+/* Pista teñida según el modo: cálida en claro, fría en oscuro. */
+.switch[aria-checked="true"] { background: #1e293b; border-color: #334155; }
+.switch[aria-checked="false"] { background: #fde68a; border-color: #f59e0b; }
+.switch[aria-checked="true"] .trackIcon { color: #fde68a; }
+.switch[aria-checked="false"] .trackIcon { color: #92400e; }

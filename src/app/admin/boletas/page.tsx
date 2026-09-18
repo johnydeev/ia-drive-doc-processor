@@ -1,6 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useThemeMode } from "@/hooks/useThemeMode";
+import { ThemeToggle } from "@/components/ThemeToggle";
 import { useRouter } from "next/navigation";
 // Reutiliza los estilos de la vista admin de invoices (tabla, panel, paginación).
 import styles from "../invoices/page.module.css";
@@ -12,8 +14,6 @@ import { adaptDeleteResponse, adaptMoveResponse, SKIP_LABELS } from "./lib/batch
 import { formatDateOnly, formatDateTime } from "./lib/format";
 import type { BatchItemResult } from "./lib/batchProgress";
 
-type ThemeMode = "dark" | "light";
-const THEME_STORAGE_KEY = "dpp_admin_theme";
 /**
  * Tamaño de tanda del PREVIEW de "mover" (read-only: no toca Drive ni Sheets,
  * por eso puede ser mayor que el de ejecución, que vive en `useBatchRunner`).
@@ -66,7 +66,7 @@ export default function BoletasEntrantesPage() {
   const router = useRouter();
   const { guardedFetch } = useAuthGuard();
 
-  const [theme, setTheme] = useState<ThemeMode>("dark");
+  const { theme, toggleTheme } = useThemeMode();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [invoices, setInvoices] = useState<InvoiceRow[]>([]);
@@ -85,13 +85,6 @@ export default function BoletasEntrantesPage() {
   const [periodFilter, setPeriodFilter] = useState("");
   // Modal de vista previa de boleta (iframe de Drive, sin salir de la pestaña).
   const [preview, setPreview] = useState<PdfPreview | null>(null);
-
-  useEffect(() => {
-    try {
-      const stored = window.localStorage.getItem(THEME_STORAGE_KEY);
-      if (stored === "dark" || stored === "light") setTheme(stored);
-    } catch { /* no-op */ }
-  }, []);
 
   const fetchInvoices = useCallback(async () => {
     setLoading(true);
@@ -286,10 +279,7 @@ export default function BoletasEntrantesPage() {
             <button type="button" className={styles.ghostBtn} onClick={() => router.push("/admin/consortiums")}>
               Volver a Consorcios
             </button>
-            <button type="button" className={styles.ghostBtn}
-              onClick={() => setTheme((t) => t === "dark" ? "light" : "dark")}>
-              {theme === "dark" ? "Modo claro" : "Modo oscuro"}
-            </button>
+            <ThemeToggle theme={theme} onToggle={toggleTheme} />
           </div>
         </header>
 

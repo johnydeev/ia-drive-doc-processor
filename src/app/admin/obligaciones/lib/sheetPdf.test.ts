@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { PDF_COLUMNS, pdfFileName, toPdfTables } from "./sheetPdf";
+import { OTHERS_TITLE, PDF_COLUMNS, pdfFileName, toPdfTables } from "./sheetPdf";
 import type { SheetData } from "./sheetModel";
 
 const sheets: SheetData[] = [
@@ -15,15 +15,16 @@ const sheets: SheetData[] = [
     rows: [
       { fixedExpenseId: "fx2", obligationId: "ob2", providerId: null, lspServiceId: "l1",
         facturas: "4804882", concepto: "EDESUR", fantasia: null, monto: 118000, aliasCbu: ["edesur.pago"],
-        status: "RECEIVED", active: true, invoiceId: null, carryOverRequested: false, carriedIn: false, invoiceUrl: null },
+        status: "RECEIVED", active: true, invoiceId: null, carryOverRequested: false, carriedIn: false, invoiceUrl: null, extras: [], group: "SERVICIO" },
       { fixedExpenseId: "fx1", obligationId: "ob1", providerId: "p1", lspServiceId: null,
         facturas: null, concepto: "SEGURO LA CAJA", fantasia: null, monto: null, aliasCbu: [],
-        status: "PENDING", active: true, invoiceId: null, carryOverRequested: false, carriedIn: false, invoiceUrl: null },
+        status: "PENDING", active: true, invoiceId: null, carryOverRequested: false, carriedIn: false, invoiceUrl: null, extras: [], group: "PROVEEDOR" },
       { fixedExpenseId: "fx9", obligationId: "ob9", providerId: "p9", lspServiceId: null,
         facturas: null, concepto: "FUMIGACION", fantasia: null, monto: null, aliasCbu: [],
-        status: "SKIPPED", active: true, invoiceId: null, carryOverRequested: false, carriedIn: false, invoiceUrl: null },
+        status: "SKIPPED", active: true, invoiceId: null, carryOverRequested: false, carriedIn: false, invoiceUrl: null, extras: [], group: "PROVEEDOR" },
     ],
     carried: [],
+    others: [],
   },
 ];
 
@@ -58,6 +59,7 @@ describe("toPdfTables", () => {
   it("usa las seis columnas de la planilla", () => {
     expect(toPdfTables(sheets)[0].head).toEqual([PDF_COLUMNS]);
     expect(PDF_COLUMNS).toHaveLength(6);
+    expect(PDF_COLUMNS.slice(0, 2)).toEqual(["FACTURA/NRO CLIENTE", "PROVEEDOR/SERVICIO"]);
   });
 
   it("aplica el filtro de impresión: la salteada no viaja", () => {
@@ -155,5 +157,66 @@ describe("pdfFileName", () => {
 
   it("saca acentos y mayúsculas del nombre del archivo", () => {
     expect(pdfFileName("Diciembre 2026")).toBe("obligaciones-diciembre-2026.pdf");
+  });
+});
+
+describe("adicionales y otras boletas del mes", () => {
+  const extra = (invoiceId: string, ordinal: number, monto: number, carriedOutTo: string | null = null) =>
+    ({ invoiceId, ordinal, monto, invoiceUrl: null, carryOverRequested: false, carriedOutTo });
+  // Intl separa "$" del número con un espacio duro (U+00A0).
+  const ars = (n: number) => new Intl.NumberFormat("es-AR", { style: "currency", currency: "ARS" }).format(n);
+
+  it("una adicional sale indentada debajo de su madre, con el alias de la madre", () => {
+    const withExtra = [{
+      ...sheets[0],
+      rows: [{ ...sheets[0].rows[0], extras: [extra("i2", 2, 54000)] }, sheets[0].rows[1]],
+    }];
+    const body = toPdfTables(withExtra)[0].body;
+    expect(body[0][1]).toBe("EDESUR");
+    expect(body[1]).toEqual(["", "   ↳ 2ª boleta", ars(54000), "edesur.pago", "", ""]);
+    expect(body[2][1]).toBe("SEGURO LA CAJA");
+  });
+
+  it("si la madre está salteada, imprime sólo la adicional con el concepto completo", () => {
+    const withExtra = [{
+      ...sheets[0],
+      rows: [{ ...sheets[0].rows[2], extras: [extra("i9", 2, 1000)] }],
+    }];
+    const body = toPdfTables(withExtra)[0].body;
+    expect(body).toEqual([["", "FUMIGACION — 2ª boleta", ars(1000), "", "", ""]]);
+  });
+
+  it("las otras boletas del mes van en su bloque, con la fantasía entre paréntesis", () => {
+    const withOthers = [{
+      ...sheets[0],
+      others: [
+        { invoiceId: "o1", facturas: null, concepto: "PLOMERO JUAN", fantasia: "JUAN", monto: 32000,
+          aliasCbu: ["juan.plomero"], invoiceUrl: null, carryOverRequested: false, carriedOutTo: null, group: "PROVEEDOR" as const },
+        { invoiceId: "o2", facturas: "77", concepto: "AYSA", fantasia: null, monto: 500,
+          aliasCbu: [], invoiceUrl: null, carryOverRequested: false, carriedOutTo: null, group: "SERVICIO" as const },
+      ],
+    }];
+    const table = toPdfTables(withOthers)[0];
+    expect(table.others).toEqual([
+      ["", "PLOMERO JUAN (JUAN)", ars(32000), "juan.plomero", "", ""],
+      ["77", "AYSA", ars(500), "", "", ""],
+    ]);
+    expect(OTHERS_TITLE).toBe("OTRAS BOLETAS DEL MES");
+  });
+
+  it("lo que pasó a otro mes no va al papel", () => {
+    const moved = [{
+      ...sheets[0],
+      rows: [{ ...sheets[0].rows[0], extras: [extra("i2", 2, 54000, "agosto 2026")] }],
+      others: [{ invoiceId: "o1", facturas: null, concepto: "PLOMERO", fantasia: null, monto: 1,
+                 aliasCbu: [], invoiceUrl: null, carryOverRequested: false, carriedOutTo: "agosto 2026", group: "PROVEEDOR" as const }],
+    }];
+    const table = toPdfTables(moved)[0];
+    expect(table.body).toHaveLength(1);
+    expect(table.others).toEqual([]);
+  });
+
+  it("sin adicionales ni otras, el bloque queda vacío", () => {
+    expect(toPdfTables(sheets)[0].others).toEqual([]);
   });
 });

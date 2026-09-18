@@ -4,6 +4,77 @@ Registro de decisiones tomadas ante problemas reales encontrados en producción.
 
 ---
 
+## 2026-09-18 — Las boletas de más se derivan en lectura, no se registran
+
+**Problema.** `ExpenseObligation.invoiceId` es unique y `linkInvoiceToObligation` sólo toma
+obligaciones PENDING. La 2ª boleta del mismo proveedor en el mes (QBICAR, OLIVERI, CIMEX en varios
+edificios) se guardaba en DB y Sheets pero no tenía dónde mostrarse en Obligaciones ni en el PDF del
+banco. Toda boleta de un proveedor sin gasto fijo en el edificio, tampoco.
+
+**Decisión.** No se registra nada nuevo: la boleta ya existe en `Invoice` con `periodId`,
+`providerId`/`lspServiceId` y `docKind`. El overview trae las boletas del período con
+`obligation: null` y `sheetModel.buildSheets` las reparte con el mismo `obligationMatchesInvoice`
+que usa el pipeline para vincular:
+- match con un gasto fijo **activo** → `row.extras[]` (subfila `↳ 2ª boleta` bajo su madre; concepto y
+  alias heredados; ordenadas por `createdAt`);
+- sin match → `sheet.others[]` (bloque "Otras boletas del mes").
+Ninguna tiene estado: existe porque llegó la boleta. Lo que se hace (pagar, arrastrar, borrar) se hace
+sobre la boleta. Las que nacieron en el mes y se empujaron al siguiente se traen aparte
+(`carriedFromPeriodId in periodIds` + `obligation: null`, para no duplicar la principal arrastrada, que
+conserva su obligación CARRIED_OVER) y se muestran en origen sin acciones ni papel.
+
+La regla "cuál es la principal" vive en lectura: es la vinculada a la obligación (la primera que llegó).
+Para que al borrar la principal la siguiente suba, `syncObligationsForClient` pasa a revincular en todos
+los períodos activos, no sólo donde creó obligaciones.
+
+Un gasto fijo desactivado no recibe adicionales: su boleta va a "Otras", porque la tabla de desactivados
+está plegada y no se imprime, y la boleta hay que pagarla igual.
+
+**Alternativas descartadas.**
+- Una obligación por boleta extra (relajar el unique + flag): migración, y blindar cierre
+  (`NOT_RECEIVED`), sync y omitir/reactivar para algo sin ciclo de vida.
+- Tabla puente obligación → N boletas: migración, backfill, reescribir todo lo que lee
+  `obligation.invoiceId`. Encajaba con "varios comprobantes del mismo gasto", que no es el caso: el
+  owner fue claro en que cada boleta es otro gasto con su propio recibo.
+
+**Impacto.** `overview/route.ts` (+2 queries), `sheetModel.ts` (tipos `ExtraRow`/`OtherRow`,
+`printableExtras`, `hasPrintableRows`, `toPrintableSheets`, `filterSheets`), `sheetPdf.ts`
+(`rowLines`, `OTHERS_TITLE`, `appendBlock`), `SheetCard.tsx` + `page.module.css`,
+`obligation.service.ts`. Sin migración. Spec `docs/superpowers/specs/2026-09-18-boletas-adicionales-y-otras-del-mes-design.md`.
+
+## 2026-09-18 — El padrón sale de la rendición, no de la planilla; y tres reglas de carga
+
+**Problema.** `_LspServices` y los gastos fijos venían de la planilla del administrador, que ya había
+mostrado errores (partidas AGIP inventadas, EDENOR con un dígito de más). Sin padrón fehaciente, las
+boletas de servicios rebotaban a Sin Asignar y las obligaciones nunca se cumplían.
+
+**Decisión.** Levantar el padrón de los PDFs de rendición mensual (lo que el administrador efectivamente
+pagó, con el papel adelante), edificio por edificio, y cargarlo a mano desde el panel. 47 edificios,
+jul + ago 2026, ocho tandas (2026-09-14 → 18). Detalle en `INFO PROVEEDORES\_analisis\PLAN-rendiciones-faltantes.md`.
+
+Tres reglas que salieron del cruce y quedan fijadas:
+
+1. **Un servicio sin número de cliente no es gasto fijo.** Los 8 gastos fijos que apuntaban a
+   `METROGAS S.A.` / `EDESUR S.A.` / `AGIP` como proveedor genérico se borraron (0 boletas vinculadas).
+   El pipeline resuelve servicios por `LspService.clientNumber`; un gasto fijo sobre el proveedor
+   genérico jamás se cumple y sólo ensucia Obligaciones.
+2. **El CUIT que cobra no se carga.** LIBRES cobra por SOUNCH SRL, MYN por ORIANA BAEZ, LA POPULAR por
+   DRAGO, CALVO AGUSTIN por BUDAN, AKIL por MOURLAAS, DRAIVE por DRAIYE MIGUEL. El matching es por el
+   CUIT del emisor de la factura; el destino de la transferencia va en `ALIAS DE PAGO` (alias/CBU) del
+   proveedor que factura. Cargar al cobrador como proveedor o como gasto fijo (pasó con BAEZ en FRIAS y
+   JUNIN) genera obligaciones que nunca se cumplen.
+3. **CUIL del recibo vs CUIL del banco.** Cuando difieren (SILVERO CABALLERO: `27-…` inválido en el
+   recibo, `20-…` válido en el pago) se carga el que pasa checksum; el pipeline no extrae CUITs inválidos.
+   Cuando una persona factura con `24-` y cobra con `20-` (CORTES BRUNO), se carga el de la factura.
+
+**Alternativas descartadas.** `matchNames` con CUITs alternativos en `Provider` (existe sólo para
+`Consortium`; abrirlo al proveedor habilitaría matches por el CUIT del cobrador, que nunca aparece en una
+factura). Un proveedor "familia" que agrupe CUITs (caso Fumigaciones Miguel / Aseclim-Budan-Calvo) sigue
+pendiente como feature aparte.
+
+**Impacto.** Sin cambios de código. Base: 281 proveedores, 144 `LspService`, ~720 gastos fijos activos.
+Tablero: filas 21 (✅), 25 (sync 500 por CUIT duplicado), 26 (router IPLAN/TELECENTRO ⏸).
+
 ## 2026-09-17 — Una obligación sólo acepta boletas de su tipo
 
 ### Problema

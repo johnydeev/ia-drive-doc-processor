@@ -60,7 +60,7 @@ export type InvoiceForm = {
 export type LspService = {
   id: string; providerName: string; clientNumber: string; description: string | null;
 };
-export type ThemeMode = "dark" | "light";
+export type { ThemeMode } from "@/hooks/useThemeMode";
 export type CloseAllPreview = {
   majorityMonth: string | null;
   nextMonth: string | null;

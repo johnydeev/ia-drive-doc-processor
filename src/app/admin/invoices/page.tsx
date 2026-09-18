@@ -1,12 +1,12 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { useThemeMode } from "@/hooks/useThemeMode";
+import { ThemeToggle } from "@/components/ThemeToggle";
 import { useRouter } from "next/navigation";
 import styles from "./page.module.css";
 import { useAuthGuard } from "@/lib/useAuthGuard";
 
-type ThemeMode = "dark" | "light";
-const THEME_STORAGE_KEY = "dpp_admin_theme";
 
 type InvoiceRow = {
   id: string;
@@ -46,7 +46,7 @@ export default function AdminInvoicesPage() {
   const router = useRouter();
   const { guardedFetch } = useAuthGuard();
 
-  const [theme, setTheme] = useState<ThemeMode>("dark");
+  const { theme, toggleTheme } = useThemeMode();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [invoices, setInvoices] = useState<InvoiceRow[]>([]);
@@ -55,13 +55,6 @@ export default function AdminInvoicesPage() {
   const [pageSize] = useState(50);
   const [clientFilter, setClientFilter] = useState("");
   const [clients, setClients] = useState<ClientOption[]>([]);
-
-  useEffect(() => {
-    try {
-      const stored = window.localStorage.getItem(THEME_STORAGE_KEY);
-      if (stored === "dark" || stored === "light") setTheme(stored);
-    } catch { /* no-op */ }
-  }, []);
 
   const fetchClients = useCallback(async () => {
     try {
@@ -112,10 +105,7 @@ export default function AdminInvoicesPage() {
             <button type="button" className={styles.ghostBtn} onClick={() => router.push("/admin")}>
               Volver al panel
             </button>
-            <button type="button" className={styles.ghostBtn}
-              onClick={() => setTheme((t) => t === "dark" ? "light" : "dark")}>
-              {theme === "dark" ? "Modo claro" : "Modo oscuro"}
-            </button>
+            <ThemeToggle theme={theme} onToggle={toggleTheme} />
           </div>
         </header>
 
