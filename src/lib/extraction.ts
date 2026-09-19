@@ -1230,9 +1230,13 @@ function buildTelecentroPrompt(relevantText: string): string {
     "- amount: el 'TOTAL A PAGAR' del recuadro del encabezado (igual al 'Total a Pagar' del estado de cuentas).",
     "  Formato numérico. NO usar 'Unitario' ni el subtotal de un servicio.",
 
-    "- dueDate: la fecha de 'VENCIMIENTO' del recuadro del encabezado. YYYY-MM-DD.",
-    "  NO usar 'Fecha:' (emisión), ni 'FECHA VTO:' junto al CAE, ni 'Aviso de Deuda al', ni 'Estado de cuentas al'.",
+    "- dueDate: la fecha bajo 'VENCIMIENTO' (recuadro del encabezado) o 'Vencimiento:' (talones al pie). YYYY-MM-DD.",
+    "  En el recuadro los valores vienen listados DESPUÉS de los rótulos, en orden: nro. de cliente, monto, FECHA, clave.",
+    "  ⚠️ En Telecentro el 'FECHA VTO' del CAE COINCIDE con el vencimiento de pago. Que la misma fecha aparezca",
+    "  junto al CAE NO la invalida: si está bajo 'VENCIMIENTO' o 'Vencimiento:', es el vencimiento de pago. Devolverla.",
+    "  NO usar 'Fecha:' (emisión), ni 'Aviso de Deuda al', ni 'Estado de cuentas al'.",
     INVALID_DATE_RULES,
+    "    (Excepción Telecentro, arriba: la fecha del CAE repetida bajo VENCIMIENTO sí vale.)",
 
     "- detail: 'Internet' / 'Internet y TV' según los 'Servicios Principales' (ej. 'Internet Empresas FTTH').",
 

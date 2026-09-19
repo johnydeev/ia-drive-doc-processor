@@ -641,6 +641,14 @@ describe("identifyLSPProvider — TELECENTRO", () => {
     expect(prompt).toMatch(/DEBITO CUENTA/);
   });
 
+  // Corrida real (2026-09-19): entró con dueDate null porque el 'FECHA VTO' del CAE
+  // es la misma fecha que el vencimiento y la regla general la anulaba.
+  it("el prompt aclara que la fecha del CAE repetida bajo VENCIMIENTO sí es el vencimiento", () => {
+    const prompt = buildExtractionPrompt(TELECENTRO);
+    expect(prompt).toMatch(/COINCIDE con el vencimiento/);
+    expect(prompt).toMatch(/NO la invalida/);
+  });
+
   it("no confunde una factura de IPLAN ni de Personal con Telecentro", () => {
     const personal = "TELECOM ARGENTINA S.A.\nFactura Personal\nN° de Referencia de Pago 12345";
     expect(identifyLSPProvider(personal)).toBe("PERSONAL");

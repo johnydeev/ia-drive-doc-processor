@@ -44,10 +44,12 @@ perdido; `FORMA DE PAGO: DEBITO CUENTA` → débito automático); `LSP_ROUTER_TO
 "TELECENTRO S.A."`; 3er intento del lookup de `LspService` por el nombre corto del router (lo que
 guarda el ABM del panel); `TELECENTRO` en `LSP_PROVIDERS` (UI) y `VALID_PROVIDERS` (API).
 
-**Verificado** con el PDF real y el extractor del proyecto: router → `TELECENTRO`; el texto que ve la IA
-trae `10992114`, `$83.621,59`, `17/09/2026` y `GUALEGUAYCHU 2040`. Falta la corrida real: el owner
-vuelve a subir el PDF a Pendientes (o lo mueve desde Sin Asignar) y confirma que entra a GUALEGUAYCHU
-2040 con el servicio y cumple el gasto fijo.
+**Corrida real (2026-09-19, tras el deploy):** entró a GUALEGUAYCHU 2040, período 09/2026, proveedor
+`TELECENTRO S.A.` 30-64089726-7, nro. `0070-00932441`, $83.621,59, débito automático, `gemini-2.5-flash-lite`,
+obligación `RECEIVED`. Un defecto: `dueDate` null — el `FECHA VTO` del CAE es la misma fecha que el
+vencimiento (17/09) y la regla general "fecha junto al CAE → null" la anuló. Prompt corregido con la
+excepción explícita (la fecha repetida bajo VENCIMIENTO sí vale); se confirma con la factura de octubre.
+La boleta de septiembre queda sin vencimiento (se puede corregir a mano desde Boletas).
 
 ## 📄 Adicionales y "Otras boletas del mes" en la hoja de obligaciones (2026-09-18)
 
