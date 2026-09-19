@@ -164,6 +164,7 @@ export function createBaseSummary(totalFound: number): ProcessJobSummary {
 /** Traduce el nombre corto del router LSP al nombre canónico (razón social) en DB */
 const LSP_ROUTER_TO_CANONICAL: Record<string, string> = {
   "PERSONAL":    "TELECOM ARGENTINA S.A.",
+  "TELECENTRO":  "TELECENTRO S.A.",
   "EDESUR":      "EDESUR S.A.",
   "EDENOR":      "EDENOR S.A.",
   "AYSA":        "AYSA S.A.",
@@ -365,6 +366,17 @@ async function resolveAssignment(
       if (!lspService) {
         lspService = await lspServiceRepository.findByProviderName(
           clientId, lspProviderCanonicalName!, normalizedClientNumber
+        );
+      }
+
+      // Intento 3: el nombre corto del router (`PERSONAL`, `TELECENTRO`…). Es lo
+      // que guarda el ABM de servicios del panel (`LSP_PROVIDERS` en la UI) a
+      // diferencia del sync del ALTA, que guarda la razón social. Sin esto un
+      // servicio cargado desde el panel sólo matchea cuando el CUIT del emisor
+      // viene en el texto, y en Telecentro va en el logo.
+      if (!lspService && lspProviderCanonicalName !== lspProvider) {
+        lspService = await lspServiceRepository.findByProviderName(
+          clientId, lspProvider, normalizedClientNumber
         );
       }
 

@@ -5,7 +5,7 @@ import { getPrismaClient } from "@/lib/prisma";
 
 const VALID_PROVIDERS = [
   "EDESUR", "AYSA", "EDENOR", "METROGAS",
-  "NATURGY", "CAMUZZI", "LITORAL_GAS", "PERSONAL",
+  "NATURGY", "CAMUZZI", "LITORAL_GAS", "PERSONAL", "TELECENTRO",
 ] as const;
 
 function stripLeadingZeros(value: string): string {

@@ -1,6 +1,7 @@
 # Progreso del proyecto — drive-doc-processor
 
-Actualizado al 18/09/2026 (sesión 69 — adicionales y "Otras boletas del mes" en la hoja de
+Actualizado al 19/09/2026 (sesión 70 — router + prompt TELECENTRO con la primera factura real, GUALEGUAYCHU).
+Sesión 69 (18/09): adicionales y "Otras boletas del mes" en la hoja de
 obligaciones, derivado en lectura, sin migración; orden, columnas, acordeón y ficha compacta de la
 hoja; modo claro/oscuro unificado con interruptor en todas las páginas).
 Sesión 68 (18/09): padrón de gastos fijos armado desde las rendiciones de los 47 edificios; sin código;
@@ -24,6 +25,29 @@ VEP, y el LSD abierto en una boleta por empleado.
 > Las secciones de la **sesión 61** (instrumentación de requests, triage de no-boletas, LSD) y la del
 > **VEP** (sesión 62) dicen "implementado": las primeras entraron en `ae31c15` y `e3551a7`, el VEP en
 > `add4e11`. Lo que sigue abierto en todas ellas es el **smoke en producción**, no el commit.
+
+## 📡 Router + prompt TELECENTRO (2026-09-19)
+
+**Estado:** implementado; 77 tests de `extraction` verdes, pipeline verde, typecheck y lint limpios.
+Sin commitear. Cierra la mitad Telecentro de la fila 26; IPLAN/NSS sigue esperando una factura.
+
+**Caso.** `job010QPUE0CYOMX660933080_0006` rebotó como "CUIT DE CONSORCIO INEXISTENTE EN BOLETA": el
+router devolvía `null` (no era LSP para él), la trataba como factura común y el CUIT del consorcio no
+está en el papel (ni el de Telecentro: va en el logo, imagen). En la base ya estaba todo: proveedor
+`TELECENTRO S.A.` (30-64089726-7, tipo SERVICIO), `LspService` `10992114` en GUALEGUAYCHU 2040 con
+gasto fijo, más ORO 2178 y CASTRO BARROS 1310.
+
+**Qué se hizo.** `"TELECENTRO"` en `LSPProvider`, `isUtilityBill` e `identifyLSPProvider` (marca en
+`www.telecentro.com.ar` / `Talón para Telecentro S.A.`); `buildTelecentroPrompt` (N° DE CLIENTE ≠ CLAVE
+DE PAGO ≠ Documento; TOTAL A PAGAR y VENCIMIENTO del recuadro; `Nro: 0070 00932441` con el guion
+perdido; `FORMA DE PAGO: DEBITO CUENTA` → débito automático); `LSP_ROUTER_TO_CANONICAL.TELECENTRO =
+"TELECENTRO S.A."`; 3er intento del lookup de `LspService` por el nombre corto del router (lo que
+guarda el ABM del panel); `TELECENTRO` en `LSP_PROVIDERS` (UI) y `VALID_PROVIDERS` (API).
+
+**Verificado** con el PDF real y el extractor del proyecto: router → `TELECENTRO`; el texto que ve la IA
+trae `10992114`, `$83.621,59`, `17/09/2026` y `GUALEGUAYCHU 2040`. Falta la corrida real: el owner
+vuelve a subir el PDF a Pendientes (o lo mueve desde Sin Asignar) y confirma que entra a GUALEGUAYCHU
+2040 con el servicio y cumple el gasto fijo.
 
 ## 📄 Adicionales y "Otras boletas del mes" en la hoja de obligaciones (2026-09-18)
 
@@ -155,7 +179,7 @@ seguros sin evidencia en 17 edificios (pagan por bancos cuyo extracto no viene).
 4. ABM de `LspService` desde el panel.
 5. Alias de cobro visible en Obligaciones al pagar.
 6. Rendición mensual por edificio generada desde la app.
-7. Router + prompt para IPLAN y TELECENTRO cuando haya facturas (fila 26).
+7. Router + prompt para IPLAN y TELECENTRO cuando haya facturas (fila 26). TELECENTRO ✅ 2026-09-19; IPLAN espera factura.
 
 ## 👁 Vista previa del PDF desde la planilla de Obligaciones (2026-09-16)
 
@@ -875,7 +899,7 @@ Todo lo de acá lo hace el owner; nada requiere cambios de código.
 | 21 | **Rendiciones jul + ago 2026 de los 47 edificios volcadas** (2026-09-14 → 2026-09-18, 8 tandas; CABRERA jun + jul; ACEVEDO 450 sin PDF, corre en Consorcio Abierto). Por edificio: LSP con nro. de cliente, partidas AGIP, empleados con CUIL, proveedores fijos vs eventuales, VEP, retenciones y seguro. El owner cargó `_Proveedores`, `_LspServices` y los gastos fijos desde el panel. Auditoría DB vs PDFs (2ª corrida 2026-09-18, tanda 6 ya cargada): 725 GF activos; quedan HOCH ASCENSORES en BONIFACIO, ORIANA BAEZ (alias de cobro de MYN, no factura) como GF en FRIAS y JUNIN, ROMERO ALMADA (CABRERA) con tipo PROVEEDOR en vez de EMPLEADO, y dos razones sociales con salto de línea pegado desde el ALTA (LIMPIOMAX, ASCENSORES INGARO). Todo en `INFO PROVEEDORES\_analisis\PLAN-rendiciones-faltantes.md` §10–§18 | ✅ | Padrón fehaciente por edificio |
 | 24 | **Acuses de DJ de retenciones (F.744 SICORE y F.996 SIRE) pasan el triage como boleta.** Verificado el 2026-09-17 con los de CALLAO 1441 08/2026: `detectDecisiveNotBoleta` → null, `classifyDocumentType` → boleta, router → null. Van a la IA como factura común y el único CUIT ajeno al consorcio es el de la administradora (`Presentada por el Usuario`) → riesgo de boleta falsa de MORINIGO por $838k. Regla de capa 0 pendiente: `Acuse de recibo de DJ` + `Formulario: 744\|996\|997` → `[NO BOLETA - DJ RETENCIONES]` (excluir 931). Aplica a los 4 edificios que retienen (CALLAO, RIVADAVIA, PUEYRREDON, RIOBAMBA). Detalle en `INFO PROVEEDORES\_analisis\PLAN-rendiciones-faltantes.md` §12. **En standby por decisión del owner (2026-09-17): se analiza con el administrador** (qué hace con los acuses, si alguna vez irían a Pendientes, y la multa 220 de RIVADAVIA) | ⏸ | Un acuse subido a Pendientes gasta requests y puede entrar como boleta |
 | 25 | **El sync de directorio devuelve 500 ante un CUIT duplicado en `_Proveedores`.** Caso real 2026-09-18: la hoja traía `SALAS JULIA \| 27-94039786-9` y la base ya tenía `SALAS JULIA ALICIA` con ese CUIL → el `UPDATE ... FROM (VALUES ...)` de `bulkUpdate` rompe con `23505` (`uq (clientId, cuit)`), el endpoint explota y el front redirige al panel. `directorySyncPlan` sólo detecta el conflicto por CUIT cuando el nombre NO está en la base; si el nombre existe y el CUIT nuevo pertenece a otra fila, no lo ve. Falta: detectar en el plan la colisión de CUIT entre un update y otra fila existente, reportarla como `ambiguous`/conflicto y no emitirla en el lote. Workaround: dejar una sola fila por persona en la hoja y borrar el duplicado desde el panel | ⏳ | Un CUIT repetido en la hoja tumba toda la sincronización |
-| 26 | **Router LSP para IPLAN (NSS SA) y TELECENTRO.** Ambos están cargados como `LspService` (MITRE 1225 `664688`, GUALEGUAYCHU 2040 `10992114`, CASTRO BARROS 1310 `10369334`, ORO 2178 `9722825`) pero `identifyLSPProvider` no los conoce: la factura entra como común por CUIT y la obligación del LSP nunca se cumple sola. Falta prompt + entrada en `LSP_ROUTER_TO_CANONICAL`. **Se hace cuando el owner tenga una factura real de cada uno** (2026-09-18) — sin el papel no hay con qué calibrar el prompt ni dónde está el nro. de cliente | ⏸ | 4 edificios con internet/cable como gasto fijo que hoy no se vincula |
+| 26 | **Router LSP para IPLAN (NSS SA) y TELECENTRO.** Ambos están cargados como `LspService` (MITRE 1225 `664688`, GUALEGUAYCHU 2040 `10992114`, CASTRO BARROS 1310 `10369334`, ORO 2178 `9722825`) pero `identifyLSPProvider` no los conoce: la factura entra como común por CUIT y la obligación del LSP nunca se cumple sola. Falta prompt + entrada en `LSP_ROUTER_TO_CANONICAL`. **Se hace cuando el owner tenga una factura real de cada uno** (2026-09-18). **TELECENTRO hecho el 2026-09-19** con la factura de GUALEGUAYCHU (ver sección 📡); queda IPLAN | ◐ | 3 edificios con Telecentro ya se vinculan; MITRE 1225 (IPLAN) espera factura |
 | 23 | **CANELO OSCAR `23-13428278-9`** (SAN JUAN 4125): transferencia judicial de $1.500.000/mes (juzgado 63, autos CANELO c/ CONSORCIO), jul y ago 2026. No es proveedor; sin alta en `_Proveedores` ni gasto fijo. **En espera por decisión del owner (2026-09-16)** | ⏸ | Mientras tanto el comprobante BBVA rebota como `CUIT DE PROVEEDOR NO REGISTRADO` |
 | 22 | Sin Asignar al 2026-09-13 (6 archivos, `scripts/preflight-drive.ts`): alta de **MAPFRE ARGENTINA SEG. VIDA** `33-70089372-9`; confirmar CUIT `30-71573334-6` ("ORO 2178 S.R.L.", factura Subito) y consorcio **AV. CÓRDOBA 6235** `30-71617051-5` (Neme); AySA cuenta `488240` (Culpina 388, ¿JOSE BONIFACIO 720?); `CCD_00001606` es un estado de deuda de Manutenzione, no la factura | ❌ | Esas 6 no entran hasta resolverlo |
 

@@ -119,6 +119,7 @@ export type LSPProvider =
   | "LITORAL_GAS"
   | "ABSA"
   | "PERSONAL"
+  | "TELECENTRO"
   | "SUTERH"
   | "FATERYH"
   | "SERACARH"
@@ -137,6 +138,7 @@ export const LSP_FALLBACK_NAMES: Partial<Record<LSPProvider, string>> = {
   LITORAL_GAS: "LITORAL GAS S.A.",
   ABSA: "ABSA",
   PERSONAL: "PERSONAL",
+  TELECENTRO: "TELECENTRO S.A.",
   SUTERH: "SUTERH",
   FATERYH: "FATERYH",
   SERACARH: "SERACARH",
@@ -319,6 +321,11 @@ export function identifyLSPProvider(text: string): LSPProvider | null {
 
   if (isPersonalTelecom(upper)) return "PERSONAL";
 
+  // Telecentro: el nombre y el CUIT van en el logo (imagen); el texto extraíble
+  // sólo trae la marca en 'www.telecentro.com.ar' y en 'Talón para Telecentro
+  // S.A.'. Alcanza: no hay otra empresa de la cartera con esa palabra.
+  if (upper.includes("TELECENTRO")) return "TELECENTRO";
+
   return "GENERIC_LSP";
 }
 
@@ -406,7 +413,8 @@ function isUtilityBill(textOrUpper: string): boolean {
     upper.includes("LITORAL GAS") ||
     upper.includes("ABSA") ||
     (upper.includes("AGUAS") && upper.includes("ARGENTINAS")) ||
-    isPersonalTelecom(upper)
+    isPersonalTelecom(upper) ||
+    upper.includes("TELECENTRO")
   );
 }
 
@@ -471,6 +479,8 @@ export function buildExtractionPrompt(text: string): string {
       return buildGasPrompt(relevantText, lspProvider);
     case "PERSONAL":
       return buildPersonalPrompt(relevantText);
+    case "TELECENTRO":
+      return buildTelecentroPrompt(relevantText);
     case "SUTERH":
     case "FATERYH":
     case "SERACARH":
@@ -1180,6 +1190,65 @@ function buildPersonalPrompt(relevantText: string): string {
     ALL_TAX_IDS_RULES,
 
     "Texto de la factura Personal:",
+    relevantText,
+  ].join("\n\n");
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// TELECENTRO prompt
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * Factura de Telecentro S.A. (internet / TV del edificio). Calibrado con la
+ * factura real de GUALEGUAYCHU 2040 (sep 2026): el encabezado con el nombre y
+ * el CUIT de la empresa es una imagen, así que providerTaxId suele ser null y
+ * la asignación la resuelve el N° DE CLIENTE contra `LspService`. El papel trae
+ * tres números parecidos: 'N° DE CLIENTE' (el que sirve), 'CLAVE DE PAGO'
+ * (nro. de cliente + dígito, para pagar) y 'Documento' (DNI del titular).
+ */
+function buildTelecentroPrompt(relevantText: string): string {
+  return [
+    "Extrae datos de una factura de TELECENTRO (internet / televisión por cable).",
+    JSON_RESPONSE_INSTRUCTION,
+
+    "=== REGLAS ESPECÍFICAS TELECENTRO ===",
+
+    "- provider: siempre 'TELECENTRO'.",
+    PROVIDER_NAME_RULES,
+
+    LSP_PROVIDER_TAX_ID_RULES,
+    "  ⚠️ EN ESTA EMPRESA el CUIT del emisor (30-64089726-7) suele estar SOLO en el logo y no en el texto:",
+    "  si no aparece, providerTaxId: null. NUNCA usar el número de 'Documento:' (es un DNI del titular).",
+
+    "- boletaNumber: buscar 'Nro: XXXX - XXXXXXXX' junto a 'Factura B' y 'Fecha:' (el guion puede venir como",
+    "  espacio: 'Nro: 0070 00932441'). Devolver 'XXXX-XXXXXXXX' (punto de venta y número). También en los talones.",
+
+    CONSORTIUM_ADDRESS_RULES,
+    "  En Telecentro la dirección del inmueble va debajo del nombre del consorcio, con piso/depto y 'LOCAL'",
+    "  (ej. 'GUALEGUAYCHU 2040 P PB D LOCAL' → 'GUALEGUAYCHU 2040').",
+
+    "- amount: el 'TOTAL A PAGAR' del recuadro del encabezado (igual al 'Total a Pagar' del estado de cuentas).",
+    "  Formato numérico. NO usar 'Unitario' ni el subtotal de un servicio.",
+
+    "- dueDate: la fecha de 'VENCIMIENTO' del recuadro del encabezado. YYYY-MM-DD.",
+    "  NO usar 'Fecha:' (emisión), ni 'FECHA VTO:' junto al CAE, ni 'Aviso de Deuda al', ni 'Estado de cuentas al'.",
+    INVALID_DATE_RULES,
+
+    "- detail: 'Internet' / 'Internet y TV' según los 'Servicios Principales' (ej. 'Internet Empresas FTTH').",
+
+    "- clientNumber: el número bajo 'N° DE CLIENTE' (ej. 10992114). Mantener todos los dígitos.",
+    "  ✗ NO usar 'CLAVE DE PAGO' (es el nro. de cliente con un dígito más).",
+    "  ✗ NO usar 'Documento:' ni 'Código Nro'.",
+    "  Los valores del recuadro pueden venir listados DESPUÉS de los rótulos, en el mismo orden:",
+    "  N° DE CLIENTE, TOTAL A PAGAR, VENCIMIENTO, CLAVE DE PAGO.",
+
+    "- paymentMethod:",
+    "  • 'FORMA DE PAGO: DEBITO CUENTA' o 'será debitada automáticamente' → DEBITO_AUTOMATICO",
+    "  • Sin mención → null",
+
+    ALL_TAX_IDS_RULES,
+
+    "Texto de la factura Telecentro:",
     relevantText,
   ].join("\n\n");
 }

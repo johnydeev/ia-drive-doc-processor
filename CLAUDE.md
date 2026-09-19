@@ -172,7 +172,7 @@ Client          → Tenant. Roles: ADMIN / CLIENT / VIEWER. consortiumsEnabled (
 - `paymentMethod` → enum nullable: DEBITO_AUTOMATICO / TRANSFERENCIA / EFECTIVO
 - `receiptDriveFileId` / `receiptDriveFileUrl` → recibo de pago adjunto manualmente desde UI
 ### Campos importantes en LspService
-- `provider` → nombre normalizado de la empresa (EDESUR, AYSA, EDENOR, METROGAS, NATURGY, CAMUZZI, LITORAL_GAS, PERSONAL)
+- `provider` → nombre normalizado de la empresa (EDESUR, AYSA, EDENOR, METROGAS, NATURGY, CAMUZZI, LITORAL_GAS, PERSONAL, TELECENTRO)
 - `clientNumber` → número de cliente/cuenta en esa empresa
 - `description` → opcional (ej: "Edificio", "Local 1", "Encargado")
 - Unique constraint: `(consortiumId, provider, clientNumber)`
@@ -353,7 +353,10 @@ Niveles 1-3, **sólo para boletas LSP** (servicios, sindicales, GENERIC_LSP), do
 El sistema detecta automáticamente el tipo de documento con `identifyLSPProvider()` y rutea al prompt específico de cada empresa.
 ### Router LSP: `identifyLSPProvider(text)`
 Analiza los primeros 4000 caracteres y retorna:
-- `"EDESUR"` / `"EDENOR"` / `"AYSA"` / `"METROGAS"` / `"NATURGY"` / `"CAMUZZI"` / `"LITORAL_GAS"` / `"ABSA"` / `"PERSONAL"` → prompt específico
+- `"EDESUR"` / `"EDENOR"` / `"AYSA"` / `"METROGAS"` / `"NATURGY"` / `"CAMUZZI"` / `"LITORAL_GAS"` / `"ABSA"` / `"PERSONAL"` / `"TELECENTRO"` → prompt específico
+  - `TELECENTRO` (2026-09-19): nombre y CUIT van en el logo (imagen); el texto sólo trae `www.telecentro.com.ar` y
+    `Talón para Telecentro S.A.`. La asignación la resuelve el `N° DE CLIENTE` contra `LspService` (providerName
+    `TELECENTRO S.A.`, o el nombre corto `TELECENTRO` si se cargó desde el panel: 3er intento del lookup).
 - `"SUTERH"` / `"FATERYH"` / `"SERACARH"` / `"ARCA"` / `"VEP"` → prompt específico del grupo "CUIT del papel = consorcio" (proveedor por NOMBRE, sin CUIT propio; ver helper `usesConsortiumCuit`)
 - `"LIQ_RETENCION"` → **paquete de liquidación de retenciones** (2026-09-12): planilla de la administración + certificados + VEP consolidado. Se evalúa **primero de todo** (termina en un VEP y contiene certificados) por `SUBTOTAL RETENCIONES` + `IMPORTE NETO` + `NOMBRE DEL PROVEEDOR`. No usa prompt: `lib/liqRetencion.ts` lo resuelve por regex (ver pipeline 3c). Conserva el texto completo (no se recorta a página 1).
 - `"VEP"` / `"VEP_RETENCION"` / `"VEP_MIXTO"` → **Volante Electrónico de Pago de ARCA** (2026-09-03, tipos 2026-09-11): el cupón con el que el consorcio paga las cargas sociales de su encargado **o ingresa retenciones a un tercero**. Se detecta por los marcadores del encabezado en los **primeros 200 caracteres** — es lo único que lo separa de un F931, que trae su propio VEP en la página 2. Va ANTES de la regla del `931` (un VEP de SICOSS no imprime ese número).
@@ -379,6 +382,7 @@ Analiza los primeros 4000 caracteres y retorna:
 | Camuzzi | `buildGasPrompt()` |
 | Litoral Gas | `buildGasPrompt()` |
 | Personal | `buildPersonalPrompt()` |
+| Telecentro | `buildTelecentroPrompt()` — `N° DE CLIENTE` (no `CLAVE DE PAGO` ni `Documento`), `TOTAL A PAGAR`, `VENCIMIENTO` del recuadro |
 | Sindicales (SUTERH/FATERYH/SERACARH) | `buildSindicalPrompt()` |
 | ABL / Inmobiliario (AGIP) | `buildAblPrompt()` |
 | ARCA F931 (SUSS) | `buildArcaPrompt()` |

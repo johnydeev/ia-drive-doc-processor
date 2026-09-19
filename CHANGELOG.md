@@ -3,6 +3,13 @@
 ## [Unreleased]
 
 ### Added
+- **Router + prompt TELECENTRO (2026-09-19).** Primera factura real (GUALEGUAYCHU 2040): el nombre y el
+  CUIT de la empresa van en el logo, así que entraba como factura común y rebotaba "CUIT DE CONSORCIO
+  INEXISTENTE". Ahora `identifyLSPProvider` la detecta por la marca en el texto (`www.telecentro.com.ar`,
+  talones), `buildTelecentroPrompt` apunta al `N° DE CLIENTE` (no `CLAVE DE PAGO` ni `Documento`), al
+  `TOTAL A PAGAR` y al `VENCIMIENTO` del recuadro, y la asignación sale por `LspService`
+  (`TELECENTRO S.A.`). El lookup de `LspService` suma un 3er intento por el nombre corto del router, para
+  servicios cargados desde el panel. `TELECENTRO` en el selector del panel y en la API de servicios.
 - **Hoja de obligaciones: boletas adicionales y "Otras boletas del mes" (2026-09-18, sin migración).**
   La 2ª, 3ª… boleta del mes de un proveedor que es gasto fijo se cuelga de su fila como subfila
   `↳ 2ª boleta` (monto y PDF propios, alias de la madre, arrastre); las boletas de proveedores sin

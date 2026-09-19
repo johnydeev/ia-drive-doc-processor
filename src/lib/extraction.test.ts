@@ -596,3 +596,53 @@ Nro. VEP: 1
 (216) $1`)).toBe("VEP_RETENCION");
   });
 });
+
+describe("identifyLSPProvider — TELECENTRO", () => {
+  // Factura real (GUALEGUAYCHU 2040, sep 2026). El nombre y el CUIT de la empresa
+  // van en el logo (imagen): el texto extraíble sólo trae la marca en la URL y en
+  // los talones. El nro. de cliente está bajo 'N° DE CLIENTE'; 'CLAVE DE PAGO' y
+  // 'Documento' son otros números y no deben confundirse.
+  const TELECENTRO = [
+    "B",
+    "Código Nro: 06",
+    "CONSORCIO PROPIETARIOS GUALEGUAYCHU",
+    "2038-2040-2042",
+    "CONSUMIDOR FINAL  - Documento: 71676421",
+    "GUALEGUAYCHU 2040 P PB D LOCAL",
+    "Factura B",
+    "Fecha: 07/09/2026",
+    "Nro: 0070 - 00932441",
+    "N° DE CLIENTE",
+    "TOTAL A PAGAR",
+    "VENCIMIENTO",
+    "CLAVE DE PAGO",
+    "10992114",
+    "$83.621,59",
+    "17/09/2026",
+    "109921145",
+    "FORMA DE PAGO: DEBITO CUENTA",
+    "Periodo: Septiembre 2026",
+    "Internet Empresas FTTH",
+    "CAE: 86372368200058  FECHA VTO:17/09/2026",
+    "Talón para Telecentro S.A.",
+    "www.telecentro.com.ar",
+  ].join("\n");
+
+  it("detecta TELECENTRO aunque la marca sólo aparezca en la URL y el talón", () => {
+    expect(identifyLSPProvider(TELECENTRO)).toBe("TELECENTRO");
+  });
+
+  it("el prompt fija el proveedor, apunta al N° DE CLIENTE y descarta CLAVE DE PAGO y Documento", () => {
+    const prompt = buildExtractionPrompt(TELECENTRO);
+    expect(prompt).toContain("provider: siempre 'TELECENTRO'");
+    expect(prompt).toMatch(/N° DE CLIENTE/);
+    expect(prompt).toMatch(/CLAVE DE PAGO/);
+    expect(prompt).toMatch(/Documento/);
+    expect(prompt).toMatch(/DEBITO CUENTA/);
+  });
+
+  it("no confunde una factura de IPLAN ni de Personal con Telecentro", () => {
+    const personal = "TELECOM ARGENTINA S.A.\nFactura Personal\nN° de Referencia de Pago 12345";
+    expect(identifyLSPProvider(personal)).toBe("PERSONAL");
+  });
+});

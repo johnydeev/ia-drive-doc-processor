@@ -21,6 +21,7 @@ export const LSP_PROVIDERS = [
   { value: "CAMUZZI",     label: "Camuzzi" },
   { value: "LITORAL_GAS", label: "Litoral Gas" },
   { value: "PERSONAL",    label: "Personal" },
+  { value: "TELECENTRO",  label: "Telecentro" },
 ] as const;
 
 export const EMPTY_INVOICE_FORM: InvoiceForm = {
