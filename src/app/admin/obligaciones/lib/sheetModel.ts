@@ -284,6 +284,20 @@ export function shortClientNumber(value: string | null, max = CLIENT_NUMBER_MAX)
   return value.length > max ? `${value.slice(0, max)}…` : value;
 }
 
+/** Rótulo de la columna FACTURA/NRO CLIENTE de una fila de sueldo. */
+export const EMPLOYEE_LABEL = "Empleado";
+
+/**
+ * Qué va en la columna FACTURA/NRO CLIENTE. El nro. de cliente sólo existe en
+ * las filas LSP; en un sueldo la celda quedaba vacía y no se distinguía de un
+ * proveedor sin factura. Los encargados se cargan como `EMPLEADO`, así que la
+ * fila se rotula "Empleado". Fuente única de pantalla y PDF.
+ */
+export function facturasLabel(row: { facturas: string | null; group: RowGroup }): string | null {
+  if (row.facturas) return row.facturas;
+  return row.group === "EMPLEADO" ? EMPLOYEE_LABEL : null;
+}
+
 /** Primer nombre de fantasía de `matchNames` (`A|B|C`), o null si no hay ninguno. */
 export function firstMatchName(matchNames: string | null | undefined): string | null {
   const first = (matchNames ?? "").split("|").map((n) => n.trim()).find(Boolean);

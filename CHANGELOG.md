@@ -3,6 +3,13 @@
 ## [Unreleased]
 
 ### Added
+- **"Empleado" en la columna FACTURA/NRO CLIENTE de los sueldos (2026-09-23, sin migración).**
+  Esa columna sólo se llena en las filas LSP (nro. de cliente), así que la fila de un encargado quedaba
+  vacía y no se distinguía de un proveedor al que todavía no le llegó la factura. Ahora las filas del
+  grupo `EMPLEADO` (los encargados se cargan como `EMPLEADO` en `_Proveedores`) se rotulan `Empleado`.
+  Helper `facturasLabel` en `sheetModel`: fuente única de la pantalla y del PDF del banco. Aplica a la
+  tabla del mes y a "Otras boletas del mes"; las arrastradas no traen el tipo de proveedor y quedan
+  como estaban.
 - **Router + prompt TELECENTRO (2026-09-19).** Primera factura real (GUALEGUAYCHU 2040): el nombre y el
   CUIT de la empresa van en el logo, así que entraba como factura común y rebotaba "CUIT DE CONSORCIO
   INEXISTENTE". Ahora `identifyLSPProvider` la detecta por la marca en el texto (`www.telecentro.com.ar`,

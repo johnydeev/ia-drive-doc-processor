@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildSheets,
+  facturasLabel,
   filterSheets,
   hasPrintableRows,
   isPrintableRow,
@@ -630,5 +631,17 @@ describe("shortClientNumber", () => {
     expect(shortClientNumber("123456789012")).toBe("123456789012");
     expect(shortClientNumber("1234567890123")).toBe("123456789012…");
     expect(shortClientNumber("1234567890123", 5)).toBe("12345…");
+  });
+});
+
+describe("facturasLabel", () => {
+  it("rotula 'Empleado' la fila de un sueldo, que nunca trae nro. de cliente", () => {
+    expect(facturasLabel({ facturas: null, group: "EMPLEADO" })).toBe("Empleado");
+  });
+
+  it("deja el nro. de cliente cuando lo hay y vacía el resto", () => {
+    expect(facturasLabel({ facturas: "4804882", group: "SERVICIO" })).toBe("4804882");
+    expect(facturasLabel({ facturas: null, group: "SERVICIO" })).toBeNull();
+    expect(facturasLabel({ facturas: null, group: "PROVEEDOR" })).toBeNull();
   });
 });

@@ -532,3 +532,25 @@ describe("encabezado: banco rotulado y acordeón", () => {
     expect(props.onToggleOpen).not.toHaveBeenCalled();
   });
 });
+
+describe("columna FACTURA/NRO CLIENTE de los sueldos", () => {
+  const conSueldo: SheetData = {
+    ...sheet,
+    rows: [
+      { fixedExpenseId: "fx9", obligationId: "ob9", providerId: "emp", lspServiceId: null,
+        facturas: null, concepto: "CASTILLO JUAN CARLOS", fantasia: "encargado perm. c/v 3ra",
+        monto: null, aliasCbu: [], status: "PENDING", active: true, invoiceId: null,
+        carryOverRequested: false, carriedIn: false, invoiceUrl: null, extras: [], group: "EMPLEADO" },
+    ],
+  };
+
+  it("rotula 'Empleado' la fila del encargado", () => {
+    renderCard({ sheet: conSueldo });
+    expect(screen.getByText("Empleado")).toBeInTheDocument();
+  });
+
+  it("no rotula nada en un proveedor sin nro. de cliente", () => {
+    renderCard();
+    expect(screen.queryByText("Empleado")).not.toBeInTheDocument();
+  });
+});

@@ -4,7 +4,14 @@ import { Fragment, useState } from "react";
 import styles from "../page.module.css";
 import { AsyncButton } from "@/components/AsyncButton";
 import { PdfPreviewModal, type PdfPreview } from "@/components/PdfPreviewModal";
-import { hasPrintableRows, shortClientNumber, type ExtraRow, type SheetData, type SheetRow } from "../lib/sheetModel";
+import {
+  facturasLabel,
+  hasPrintableRows,
+  shortClientNumber,
+  type ExtraRow,
+  type SheetData,
+  type SheetRow,
+} from "../lib/sheetModel";
 
 type Props = {
   sheet: SheetData;
@@ -82,7 +89,7 @@ export function SheetCard({
   const activeRows = sheet.rows.filter((r) => r.active);
   const inactiveRows = sheet.rows.filter((r) => !r.active);
 
-  /** Nro. de cliente recortado, con el completo en el tooltip (y en el PDF). */
+  /** Nro. de cliente recortado (o "Empleado"), con el completo en el tooltip y en el PDF. */
   const facturasCell = (value: string | null) => (
     <td className={styles.facturasCell}>
       {value && <span title={value}>{shortClientNumber(value)}</span>}
@@ -166,7 +173,7 @@ export function SheetCard({
       <Fragment key={row.fixedExpenseId}>
       <tr className={rowClass(row)}>
         {previewCell(row.invoiceUrl, row.concepto)}
-        {facturasCell(row.facturas)}
+        {facturasCell(facturasLabel(row))}
         <td>
           {row.concepto}
           {row.fantasia && <strong className={styles.fantasia}>{row.fantasia}</strong>}
@@ -299,7 +306,7 @@ export function SheetCard({
                   className={row.carriedOutTo ? `${styles.rowOther} ${styles.rowCarriedOut}` : styles.rowOther}
                 >
                   {previewCell(row.invoiceUrl, row.concepto)}
-                  {facturasCell(row.facturas)}
+                  {facturasCell(facturasLabel(row))}
                   <td>
                     {row.concepto}
                     {row.fantasia && <strong className={styles.fantasia}>{row.fantasia}</strong>}

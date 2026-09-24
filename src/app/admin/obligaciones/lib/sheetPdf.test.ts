@@ -220,3 +220,20 @@ describe("adicionales y otras boletas del mes", () => {
     expect(toPdfTables(sheets)[0].others).toEqual([]);
   });
 });
+
+describe("sueldos en el papel", () => {
+  it("la fila de un empleado sale rotulada 'Empleado' en la columna FACTURA", () => {
+    const conSueldo: SheetData[] = [
+      {
+        ...sheets[0],
+        rows: [
+          { fixedExpenseId: "fx3", obligationId: "ob3", providerId: "emp", lspServiceId: null,
+            facturas: null, concepto: "PEREZ JUAN", fantasia: null, monto: 900000, aliasCbu: [],
+            status: "RECEIVED", active: true, invoiceId: "i3", carryOverRequested: false, carriedIn: false,
+            invoiceUrl: null, extras: [], group: "EMPLEADO" },
+        ],
+      },
+    ];
+    expect(toPdfTables(conSueldo)[0].body[0][0]).toBe("Empleado");
+  });
+});

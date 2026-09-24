@@ -1,6 +1,7 @@
 # Progreso del proyecto — drive-doc-processor
 
-Actualizado al 19/09/2026 (sesión 70 — router + prompt TELECENTRO con la primera factura real, GUALEGUAYCHU).
+Actualizado al 23/09/2026 (sesión 71 — "Empleado" en la columna FACTURA/NRO CLIENTE de la hoja de obligaciones).
+Sesión 70 (19/09): router + prompt TELECENTRO con la primera factura real, GUALEGUAYCHU.
 Sesión 69 (18/09): adicionales y "Otras boletas del mes" en la hoja de
 obligaciones, derivado en lectura, sin migración; orden, columnas, acordeón y ficha compacta de la
 hoja; modo claro/oscuro unificado con interruptor en todas las páginas).
@@ -25,6 +26,23 @@ VEP, y el LSD abierto en una boleta por empleado.
 > Las secciones de la **sesión 61** (instrumentación de requests, triage de no-boletas, LSD) y la del
 > **VEP** (sesión 62) dicen "implementado": las primeras entraron en `ae31c15` y `e3551a7`, el VEP en
 > `add4e11`. Lo que sigue abierto en todas ellas es el **smoke en producción**, no el commit.
+
+## 🧑‍🔧 "Empleado" en la columna FACTURA de la hoja de obligaciones (2026-09-23)
+
+**Estado:** implementado; 152 tests de `obligaciones` verdes, typecheck y lint limpios. Sin commitear.
+
+**Caso.** La columna `FACTURA/NRO CLIENTE` sólo se llena en las filas LSP, con el número de cliente del
+servicio. En la fila de un encargado quedaba vacía, igual que en la de un proveedor al que todavía no
+le llegó la factura: leyendo la hoja no se distinguía un sueldo de un gasto pendiente de boleta.
+
+**Qué se hizo.** `facturasLabel(row)` en `sheetModel.ts`: devuelve el nro. de cliente si lo hay y, si
+no, `"Empleado"` cuando la fila es del grupo `EMPLEADO` (sale de `Provider.providerType`; los
+encargados se cargan como `EMPLEADO` en `_Proveedores`). Un sueldo nunca tiene nro. de cliente, así
+que no se pisa nada. Lo usan `SheetCard` (tabla del mes y "Otras boletas del mes") y `sheetPdf`
+(cuerpo y `others`): una sola fuente, pantalla y papel dicen lo mismo.
+
+**Fuera de scope.** Las filas de "Vienen del mes anterior" no traen el tipo de proveedor en el
+overview (`OverviewCarried` no tiene `providerType`), así que siguen mostrando sólo lo que haya.
 
 ## 📡 Router + prompt TELECENTRO (2026-09-19)
 

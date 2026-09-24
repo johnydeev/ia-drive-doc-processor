@@ -1,7 +1,7 @@
 // Import de SÓLO TIPOS: se borra al compilar, así que no rompe el `import()`
 // dinámico de la librería (que es lo que la mantiene fuera del bundle).
 import type { UserOptions } from "jspdf-autotable";
-import { isPrintableRow, toPrintableSheets, type SheetData, type SheetRow } from "./sheetModel";
+import { facturasLabel, isPrintableRow, toPrintableSheets, type SheetData, type SheetRow } from "./sheetModel";
 
 /** Las seis columnas de la planilla que el administrador ya usaba (rótulos cortos desde 2026-09-18). */
 export const PDF_COLUMNS = [
@@ -67,7 +67,7 @@ function rowLines(row: SheetRow): string[][] {
   if (!madre) return extras;
   return [
     [
-      row.facturas ?? "",
+      facturasLabel(row) ?? "",
       row.concepto,
       row.monto != null ? money.format(row.monto) : "",
       row.aliasCbu.join("\n"),
@@ -95,7 +95,7 @@ export function toPdfTables(sheets: SheetData[]): PdfTable[] {
     head: [PDF_COLUMNS],
     body: sheet.rows.flatMap(rowLines),
     others: sheet.others.map((row) => [
-      row.facturas ?? "",
+      facturasLabel(row) ?? "",
       row.fantasia ? `${row.concepto} (${row.fantasia})` : row.concepto,
       row.monto != null ? money.format(row.monto) : "",
       row.aliasCbu.join("\n"),
