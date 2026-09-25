@@ -787,7 +787,7 @@ el **servicio `db-backup`** de `docker-compose.yml` (5º servicio, imagen `postg
   3 intentos separados por 15 min si falla.
 - Destino: `backups/db_YYYY-MM-DD_HHmm.dump` (hora argentina) en la carpeta del proyecto
   (**gitignoreada**, son datos reales del cliente). Log en `backups/backup.log`. Retención: 30 días.
-- **`BACKUP_HOST_DIR`** (en el `.env` local y en el secret `PROD_ENV_FILE`): ruta absoluta del host a
+- **`BACKUP_HOST_DIR`** (en el `.env` local, y en producción en el `env:` del job `deploy` de `ci.yml`, no en el secret): ruta absoluta del host a
   esa carpeta. Es obligatoria: el deploy corre compose desde la carpeta del runner, que
   `actions/checkout` limpia en cada corrida, y un `./backups` relativo se perdería.
 - Valida cada backup (`pg_restore --list`, mínimo de tablas con datos). Escribe a `.partial` y sólo

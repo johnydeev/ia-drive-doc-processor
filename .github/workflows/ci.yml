@@ -80,6 +80,12 @@ jobs:
       # NOTA: el contexto `runner` NO está disponible en `env` a nivel de job →
       # se usa `github.workspace` (sí disponible). El dir se crea en el step de abajo.
       DOCKER_CONFIG: ${{ github.workspace }}/.docker-ci
+      # Carpeta del host donde el servicio db-backup escribe los backups diarios.
+      # Ruta ABSOLUTA a la carpeta del proyecto, no a este workspace: `actions/checkout`
+      # limpia el workspace en cada deploy y un ./backups relativo se perdería.
+      # Va acá y no en PROD_ENV_FILE porque no es un secreto; compose la toma del
+      # entorno del proceso para interpolar docker-compose.yml.
+      BACKUP_HOST_DIR: C:/Users/jony/Desktop/Proyectos Para vender/pdf-drive-procesor/ia-drive-doc-processor/backups
     steps:
       - uses: actions/checkout@v4
 
