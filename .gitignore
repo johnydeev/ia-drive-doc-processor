@@ -38,6 +38,9 @@ yarn-error.log*
 # Banco de pruebas de LLMs: boletas reales del cliente — NO versionar
 pruebas de LLMs/
 /data/
+# Backups diarios de la base de producción (scripts/backup-db.ps1): datos reales del
+# cliente — NUNCA versionar.
+/backups/
 
 # vercel
 .vercel

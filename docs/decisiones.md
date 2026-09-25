@@ -4,6 +4,132 @@ Registro de decisiones tomadas ante problemas reales encontrados en producción.
 
 ---
 
+## 2026-09-24/25 — Incidente: la base de producción se vació; backups diarios propios
+
+**Problema.** Durante la revisión de rubros y coeficientes, Claude corrió
+`npx prisma migrate diff --from-migrations prisma/migrations --to-schema-datamodel prisma/schema.prisma --shadow-database-url <DIRECT_URL>`
+para confirmar un drift de índices. `DIRECT_URL` es producción (no hay base de desarrollo) y Prisma
+**resetea la shadow database** antes de aplicar las migraciones: todas las tablas quedaron vacías y
+desapareció `_prisma_migrations`. Sin confirmación previa del owner y sin necesidad: el chequeo se
+resolvía leyendo el SQL de la migración.
+
+Supabase Free no expone backups. Soporte confirmó que igual saca uno diario "de cortesía", accesible
+sólo desde un plan pago. El owner pasó a Pro y restauró el backup del 24/09 13:37 UTC (10:37 ART).
+Verificado: 49 consorcios, 281 proveedores, 752 gastos fijos, 1317 boletas, `_prisma_migrations`
+completa (incluida `20260924120000_rubros_y_coeficientes_por_edificio`). Pérdida: lo escrito entre
+las 10:37 y el borrado (no había boletas nuevas desde el 19/09).
+
+**Decisión.**
+1. **Backup físico diario propio**: servicio `db-backup` de docker-compose con `scripts/db-backup.sh` (`pg_dump`, formato custom,
+   schema `public`, validado con `pg_restore --list`, retención 30 días) a `backups/` (gitignoreado),
+   programado dentro del propio contenedor (03:00 ART). Primero se probó una tarea del Programador de
+   tareas de Windows; se descartó a pedido del owner para que el backup viva con el resto del stack.
+   Los archivos van a la carpeta del proyecto por bind mount con ruta absoluta (`BACKUP_HOST_DIR`):
+   el deploy corre desde la carpeta del runner, que `actions/checkout` limpia en cada corrida.
+2. **Regla en `CLAUDE.md`**: Claude no ejecuta comandos de Prisma que se conecten a la base ni pasa
+   URLs del `.env` a flags; sólo `prisma validate`. Todo comando contra la base se pregunta antes.
+
+**Pendientes propuestos (no hechos):** separar `.env.production` (contenedores) del `.env` de
+desarrollo, rol de sólo lectura en Supabase para consultas locales, reglas `deny` en
+`.claude/settings.json`, conector MCP de Supabase en modo sólo lectura.
+
+**Alternativas descartadas.** Quedarse en Pro por los backups (US$ 25/mes para un sistema en una sola
+PC): el backup propio cubre lo mismo gratis; Pro queda como opción cuando haya más clientes.
+
+**Impacto.** `scripts/db-backup.sh`, `docker-compose.yml` (servicio `db-backup`), `.gitattributes` (`*.sh` con LF), `.env.example`, `.gitignore`, `CLAUDE.md`.
+
+---
+
+## 2026-09-24 — `notIn: []` de Prisma matchea cero filas, no todas
+
+**Problema.** El PUT de `/api/client/consortiums/[id]/catalogos` recibe el set completo de rubros y
+coeficientes del edificio y borra lo que sobra con
+`deleteMany({ where: { consortiumId, rubroId: { notIn: body.rubroIds } } })`. Si el usuario destildaba
+**todas** las casillas, `body.rubroIds` llegaba vacío y el borrado no hacía nada: la pantalla decía
+"Guardado" y el edificio conservaba todas sus asignaciones. El `count` de huérfanos y el `updateMany`
+que limpia los gastos fijos tenían el mismo agujero.
+
+Verificado contra la base: `count({ where: { rubroId: { not: null, notIn: [] } } })` devuelve **0**.
+
+**Decisión.** Dos helpers puros en `src/lib/rubroAssignment.ts` que arman el filtro según si la lista
+está vacía: `excludeAssigned(ids)` devuelve `undefined` (sin condición, alcanza a todas las filas) y
+`orphanedBy(ids)` devuelve `{ not: null }`. Los seis `notIn` del endpoint pasan por ellos. Están
+testeados porque el caso vacío es justo el que no se prueba a mano.
+
+**Impacto.** `catalogos/route.ts`, `rubroAssignment.ts` + 4 tests.
+
+---
+
+## 2026-09-24 — Desasignar un rubro pide confirmación antes de escribir
+
+**Problema.** Sacarle un rubro a un edificio pone en `null` el `rubroId` de todos sus gastos fijos que
+lo usaban. Volver a tildarlo **no los recupera**: hay que etiquetarlos de nuevo uno por uno. La
+primera implementación borraba y después informaba cuántos habían quedado huérfanos, que es avisar
+tarde.
+
+**Decisión.** El PUT acepta `confirm?: boolean`. Si el cambio va a desetiquetar algo y no viene
+`confirm`, responde **409** con `{ needsConfirm: true, rubrosHuerfanos, coefsHuerfanos }` **sin
+escribir nada**. El panel muestra "N gastos fijos quedarán sin rubro. Volver a asignarlos no recupera
+las etiquetas" con Guardar igual / Cancelar, el mismo patrón de confirmación en línea que usa el
+borrado de un banco.
+
+**Impacto.** `catalogos/route.ts`, `useConsortiumConfig.ts`, `ConfigModal.tsx` + 3 tests.
+
+---
+
+## 2026-09-24 — El gasto fijo es lo que lleva el rubro y el coeficiente
+
+**Problema.** `Rubro`, `Coeficiente`, `Invoice.rubroId` e `Invoice.coeficienteId` existían en el
+schema desde el principio y sólo se llenaban a mano al cargar una boleta desde `InvoiceModal`. Las
+boletas del pipeline —que son casi todas— nacían con los dos campos en `null`, y ninguna vista los
+usaba. Sin ellos la hoja de obligaciones es una lista de pagos; con ellos es el borrador de la
+liquidación.
+
+**Evidencia.** 20 liquidaciones de expensas de agosto 2026, leídas con `pdf-parse`. El rubro es el
+eje vertical (11 secciones numeradas, iguales en los 20 edificios; un edificio sin empleado propio no
+tiene el rubro 1 y arranca en el 2) y el coeficiente el horizontal (columnas `Gasto A/B/C`, 2 o 3
+según el edificio, que en el prorrateo reaparecen con un porcentaje por unidad funcional).
+
+**Decisión.** La unidad que lleva la etiqueta es el **gasto fijo**, no el proveedor. Lo decide un
+caso de Araoz 192, rubro 3:
+
+```
+Edesur C: 01048046                          406.582,47  → A
+Metrogas Consorcio C: 10971798300 Caldera 1.154.742,45  → B
+Metrogas Consorcio C: 1097199100 Porteria    58.550,40  → A
+```
+
+Mismo proveedor, dos cuentas, dos coeficientes (406.582,47 + 58.550,40 = 465.132,87, el total de A).
+`FixedExpense` ya tiene esa granularidad: un gasto fijo por cuenta LSP y uno por proveedor del
+edificio. El pipeline **copia** la etiqueta a la boleta al vincular la obligación
+(`copyLabelsToInvoice` en `obligation.service.ts`), en vez de leerla al vuelo: la liquidación de un
+mes ya emitido no tiene que moverse si mañana se cambia la regla.
+
+Tres capas encadenadas, cada una ofreciendo sólo lo que habilitó la anterior: catálogo del cliente
+(`Rubro` + `Rubro.order`, `Coeficiente`) → qué usa el edificio (`ConsortiumRubro`,
+`ConsortiumCoeficiente`) → qué lleva el gasto fijo (`FixedExpense.rubroId`, `.coeficienteId`). La
+validación de la última capa vive en `checkAssignable` (`src/lib/rubroAssignment.ts`), pura y
+testeada sin base de datos.
+
+**Alternativas descartadas.**
+- *Por proveedor, o por el `Oficio` del proveedor* (Ascensorista → 4, Fumigador → 5): más barato de
+  cargar (281 proveedores contra 725 gastos fijos) pero no distingue dos cuentas del mismo proveedor,
+  que es justamente el caso que hay que resolver.
+- *Adivinar el coeficiente con IA*: en el rubro 6 de Araoz, la reparación del 8A va a A y la del 1B a
+  B porque las paga cada unidad. No hay nada en el papel que lo diga; sólo lo sabe el administrador.
+- *Leer la etiqueta del gasto fijo en cada lectura, sin copiarla*: reescribiría la historia de los
+  meses cerrados y dejaría a las boletas eventuales sin dónde guardar la suya.
+- *`Rubro.order` con `@@unique([clientId, order])`*: bloquearía cualquier reordenamiento a mitad de
+  camino. Queda sin unique y el ABM avisa.
+
+**Impacto.** Migración `20260924120000_rubros_y_coeficientes_por_edificio` (aditiva y nullable).
+Tocados: `prisma/schema.prisma`, `src/lib/rubroAssignment.ts` (nuevo), `obligation.service.ts`,
+`fixedExpense.repository.ts`, la API de rubros (`order`), `consortiums/[id]/catalogos` (nueva),
+`consortiums/[id]/fixed-expenses/[fxId]`, y en el panel `useCatalogos` + `CatalogosModal` (nuevos),
+`useConsortiumConfig` y `ConfigModal`.
+
+---
+
 ## 2026-09-18 — Las boletas de más se derivan en lectura, no se registran
 
 **Problema.** `ExpenseObligation.invoiceId` es unique y `linkInvoiceToObligation` sólo toma

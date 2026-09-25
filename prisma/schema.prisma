@@ -224,11 +224,15 @@ model Coeficiente {
   clientId    String
   code        String
   name        String
+  /// Sin uso: el porcentaje real de un coeficiente es por unidad funcional, no
+  /// uno solo. Eso es prorrateo, y el prorrateo todavía no está modelado.
   value       Decimal?  @db.Decimal(10, 6)
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
   client      Client    @relation(fields: [clientId], references: [id], onDelete: Cascade)
   invoices    Invoice[]
+  fixedExpenses FixedExpense[]
+  consortiums   ConsortiumCoeficiente[]
 
   @@unique([clientId, code])
   @@index([clientId])
@@ -255,13 +259,49 @@ model Rubro {
   clientId    String
   name        String
   description String?
+  /// Número con el que se muestra y ordena en la liquidación (3 SERVICIOS PÚBLICOS).
+  /// Nullable y sin unique: dos rubros con el mismo número son un error de carga que
+  /// el ABM avisa, no algo que la base tenga que impedir (bloquearlo haría chocar
+  /// cualquier reordenamiento a mitad de camino). Los rubros sin número van al final.
+  order       Int?
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
   client      Client    @relation(fields: [clientId], references: [id], onDelete: Cascade)
   invoices    Invoice[]
+  fixedExpenses FixedExpense[]
+  consortiums   ConsortiumRubro[]
 
   @@unique([clientId, name])
   @@index([clientId])
+}
+
+/// Qué rubros del catálogo del cliente usa este edificio (capa 2 del spec
+/// 2026-09-24). Un edificio sin empleado propio no tiene el rubro 1 y su
+/// liquidación arranca en el 2, con los números del catálogo, sin renumerar.
+model ConsortiumRubro {
+  id           String     @id @default(cuid())
+  consortiumId String
+  rubroId      String
+  createdAt    DateTime   @default(now())
+  consortium   Consortium @relation(fields: [consortiumId], references: [id], onDelete: Cascade)
+  rubro        Rubro      @relation(fields: [rubroId], references: [id], onDelete: Cascade)
+
+  @@unique([consortiumId, rubroId])
+  @@index([consortiumId])
+}
+
+/// Qué coeficientes usa este edificio. Son las columnas de la liquidación donde
+/// se escribe el importe de cada gasto: Araoz 192 tiene A y B; Callao 1441, A, B y C.
+model ConsortiumCoeficiente {
+  id            String      @id @default(cuid())
+  consortiumId  String
+  coeficienteId String
+  createdAt     DateTime    @default(now())
+  consortium    Consortium  @relation(fields: [consortiumId], references: [id], onDelete: Cascade)
+  coeficiente   Coeficiente @relation(fields: [coeficienteId], references: [id], onDelete: Cascade)
+
+  @@unique([consortiumId, coeficienteId])
+  @@index([consortiumId])
 }
 
 model Receipt {
@@ -407,6 +447,9 @@ model Consortium {
   lspServices            LspService[]
   fixedExpenses          FixedExpense[]
   obligations            ExpenseObligation[]
+  /// Rubros y coeficientes del catálogo del cliente que este edificio usa.
+  rubros                 ConsortiumRubro[]
+  coeficientes           ConsortiumCoeficiente[]
 
   @@unique([clientId, canonicalName])
   @@unique([clientId, cuit])
@@ -546,6 +589,11 @@ model FixedExpense {
   lspServiceId String?
   description  String?
   kind         DocKind             @default(FACTURA)
+  /// Rubro y coeficiente que heredan las boletas de este gasto fijo al vincularse
+  /// a su obligación (spec 2026-09-24). SetNull: borrar un rubro del catálogo deja
+  /// al gasto fijo sin etiqueta, no lo borra.
+  rubroId       String?
+  coeficienteId String?
   active       Boolean             @default(true)
   createdAt    DateTime            @default(now())
   updatedAt    DateTime            @updatedAt
@@ -553,6 +601,8 @@ model FixedExpense {
   consortium   Consortium          @relation(fields: [consortiumId], references: [id], onDelete: Cascade)
   provider     Provider?           @relation(fields: [providerId], references: [id], onDelete: Cascade)
   lspService   LspService?         @relation(fields: [lspServiceId], references: [id], onDelete: Cascade)
+  rubro        Rubro?              @relation(fields: [rubroId], references: [id], onDelete: SetNull)
+  coeficiente  Coeficiente?        @relation(fields: [coeficienteId], references: [id], onDelete: SetNull)
   obligations  ExpenseObligation[]
 
   // Un gasto fijo por objetivo, tipo y consorcio: la factura y la retención del
@@ -563,6 +613,10 @@ model FixedExpense {
   @@unique([consortiumId, lspServiceId])
   @@index([clientId])
   @@index([consortiumId])
+  // Los crea la migración 20260924120000: declararlos acá evita que un
+  // `migrate dev` los detecte como drift y proponga borrarlos.
+  @@index([rubroId])
+  @@index([coeficienteId])
 }
 
 model ExpenseObligation {

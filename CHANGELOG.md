@@ -3,6 +3,30 @@
 ## [Unreleased]
 
 ### Added
+- **Backup físico diario de la base (2026-09-25).** Servicio `db-backup` en docker-compose (`scripts/db-backup.sh`): `pg_dump` (
+  `postgres:17`) diario a las 03:00 ART a `backups/` del proyecto (`BACKUP_HOST_DIR`), con validación y retención de 30 días. Nace del
+  incidente del 24/09, cuando un `prisma migrate diff` con la base de producción como shadow la vació
+  (se recuperó con el backup de Supabase Pro). Ver `docs/decisiones.md`.
+- **Rubros y coeficientes, parte 1: modelo y carga (2026-09-24, CON migración).** Los dos catálogos
+  existían y nadie los llenaba. Ahora cada gasto fijo puede llevar un rubro y un coeficiente, y la
+  boleta los hereda al vincularse a su obligación (`copyLabelsToInvoice`, 0 requests de IA). Tres
+  capas: catálogo del cliente (`Rubro.order` nuevo) → qué usa cada edificio (`ConsortiumRubro` y
+  `ConsortiumCoeficiente`, tablas nuevas) → qué lleva el gasto fijo (`FixedExpense.rubroId` y
+  `.coeficienteId`). ABM en el sidebar del panel y casillas por edificio en su Configuración; la
+  validación de la cadena es una función pura (`checkAssignable`). Migración
+  `20260924120000_rubros_y_coeficientes_por_edificio`, aditiva y nullable. Spec:
+  `docs/superpowers/specs/2026-09-24-rubros-y-coeficientes-design.md`. **Falta la parte 2**: la hoja
+  de obligaciones agrupada por rubro con las columnas de coeficiente.
+
+### Fixed
+- **`notIn: []` no borraba nada (2026-09-24).** Destildar todos los rubros o coeficientes de un
+  edificio dejaba las asignaciones intactas: en Prisma, `notIn: []` matchea cero filas, no todas.
+  Helpers `excludeAssigned` / `orphanedBy` con tests del caso vacío.
+- **Desasignar avisa antes, no después (2026-09-24).** Sacarle un rubro a un edificio desetiqueta sus
+  gastos fijos y volver a asignarlo no los recupera. El PUT responde 409 `needsConfirm` sin escribir
+  nada y el panel pide confirmación.
+- **El ABM de rubros y coeficientes no permitía editar (2026-09-24).** Un número mal cargado quedaba
+  clavado. Filas editables con borrador local.
 - **"Empleado" en la columna FACTURA/NRO CLIENTE de los sueldos (2026-09-23, sin migración).**
   Esa columna sólo se llena en las filas LSP (nro. de cliente), así que la fila de un encargado quedaba
   vacía y no se distinguía de un proveedor al que todavía no le llegó la factura. Ahora las filas del

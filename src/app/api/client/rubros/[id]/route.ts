@@ -6,6 +6,8 @@ import { getPrismaClient } from "@/lib/prisma";
 const updateSchema = z.object({
   name: z.string().min(1).max(100).optional(),
   description: z.string().max(255).nullable().optional(),
+  /// Número de la sección en la liquidación. `null` lo manda al final de la lista.
+  order: z.number().int().min(1).max(99).nullable().optional(),
 });
 
 export async function PATCH(
@@ -32,6 +34,7 @@ export async function PATCH(
       data: {
         ...(body.name !== undefined && { name: body.name.trim().toUpperCase() }),
         ...(body.description !== undefined && { description: body.description?.trim() ?? null }),
+        ...(body.order !== undefined && { order: body.order }),
       },
     });
 

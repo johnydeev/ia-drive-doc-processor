@@ -122,10 +122,13 @@ Client          → Tenant. Roles: ADMIN / CLIENT / VIEWER. consortiumsEnabled (
   ├── Provider    → Proveedor. canonicalName (razón social) + cuit + matchNames (nombre
   │                 fantasía) + paymentAlias (hasta 3 alias/CBU con `|`) + providerType
   │                 + oficioId? → Oficio
-  ├── Rubro       → Categoría de gasto (nivel cliente). name + description?
+  ├── Rubro       → Sección de la liquidación (nivel cliente). name + description? + order?
+  │                 `order` es el número con el que se muestra y ordena (3 SERVICIOS PÚBLICOS)
   ├── Oficio      → Oficio del proveedor (nivel cliente). name + description?
   │                 Pintor, Albañil, Energía… NO es el Rubro: el rubro agrupa oficios
-  ├── Coeficiente → Coeficiente de liquidación (nivel cliente). code + name
+  ├── Coeficiente → Columna de distribución de la liquidación (nivel cliente). code + name
+  │                 `code` (A/B/C) es la columna donde se escribe el importe del gasto.
+  │                 `value` SIN USO: el porcentaje real es por unidad funcional (prorrateo)
   ├── Invoice     → Boleta procesada. Liga a Consortium + Provider + Period + LspService?
   │                 lspServiceId / paymentMethod (nullable)
   │                 receiptDriveFileId / receiptDriveFileUrl (recibo de pago)
@@ -652,7 +655,16 @@ ficticio **"Edificio de Prueba"** en la cartera de MorinigoAdm.
 ### Features pendientes
 - [ ] UI de gestión de carpetas Drive por cliente desde el panel
 - [ ] Resincronización automática con Sheets cuando Google falla
-- [ ] UI para asignar Rubro y Coeficiente a invoices individuales desde el panel (Stage 2)
+- [x] **Rubro y Coeficiente en los gastos (2026-09-24, parte 1)** — el gasto fijo lleva la etiqueta y
+      la boleta la hereda al vincularse a su obligación. Tres capas: catálogo del cliente →
+      `ConsortiumRubro`/`ConsortiumCoeficiente` (qué usa cada edificio) → `FixedExpense.rubroId` /
+      `.coeficienteId`. ABM en el sidebar y casillas en la Configuración del consorcio.
+      **Parte 2 pendiente**: la hoja de obligaciones agrupada por rubro con las columnas de
+      coeficiente (se elimina `compareRows`/`GROUP_RANK`, "Otras boletas del mes" se disuelve en los
+      rubros, aparece un bloque `Sin rubro`, el PDF sigue a la hoja). Necesita un PATCH de `Invoice`
+      para el rubro/coeficiente de una boleta suelta — hoy el único es `late-amount`.
+      **También pendiente**: `scripts/seed-rubros.ts`, la carga inicial de los ~725 gastos fijos con
+      el mapeo sacado de las liquidaciones de expensas.
 - [ ] **UI de gestión de LspServices desde el panel** (hoy solo via archivo ALTA). **Subió de
       prioridad el 2026-08-18**: la tabla estuvo VACÍA hasta que se cargó el ALTA, y como el
       fast-path por número de cliente es terminal, mandó a Sin Asignar toda boleta de servicio del
@@ -704,13 +716,14 @@ ficticio **"Edificio de Prueba"** en la cartera de MorinigoAdm.
 - **Multi-stage:** deps → prod-deps → builder → runner
 - **Build:** `SKIP_ENV_VALIDATION=1` en builder para que no falle sin env vars
 - **Runtime:** incluye `tesseract-ocr` + idiomas `spa`/`eng`, usuario `nextjs` (no root)
-### docker-compose.yml (4 servicios)
+### docker-compose.yml (5 servicios)
 | Servicio | Comando | Descripción |
 |----------|---------|-------------|
 | `web` | `node server.js` | Next.js standalone, puerto 3000, healthcheck |
 | `scheduler` | `node dist/jobs/scheduler.js` | Escanea Drive, depende de web healthy |
 | `worker` | `node dist/jobs/jobWorkerMain.js` | Procesa cola, depende de web healthy |
 | `tunnel` | `cloudflared tunnel run` | Cloudflare Tunnel, token via env |
+| `db-backup` | `bash scripts/db-backup.sh` (imagen `postgres:17`) | Backup diario de la base a `backups/` (ver "Backups de la base") |
 Los 3 servicios comparten `image: drive-doc-processor:latest`. Solo `web` tiene `build:`.
 
 ### CI/CD (GitHub Actions) — deploy automático en la PC del owner
@@ -740,6 +753,53 @@ Cuando hay cambios en el schema de Prisma, Claude debe:
 1. Crear la carpeta de migración: `prisma/migrations/YYYYMMDDNNNNNN_nombre_descriptivo/`
 2. Crear el archivo `migration.sql` con el SQL correspondiente
 3. Avisar al owner que hay una migración pendiente y que debe ejecutar el procedimiento completo
+
+**Procedimiento del owner: `npm run db:migrate`** = `db:backup` → `prisma migrate deploy` →
+`prisma generate`, encadenados con `&&`: si uno falla, los siguientes no corren (sin backup no se
+migra; con la migración fallida no se genera). Parar `npm run dev` antes (EPERM). El orden
+migrate → generate evita que el código local corra con un cliente adelantado a la base.
+`npm run db:backup` sola hace un backup en el momento. **Claude no ejecuta ninguno de los dos.**
+
+Si el owner no la aplica a mano, el **deploy del CI la aplica igual**: el job `deploy` corre
+`prisma migrate deploy` antes del `docker compose up` (y `prisma generate` va dentro del build de la
+imagen). Aplicarla a mano antes de commitear es opcional y no choca: el CI la encuentra aplicada.
+
+### 🚫 Nunca conectar comandos de Prisma a la base (incidente 2026-09-24)
+El `.env` local apunta a **producción** (no hay base de desarrollo). El 2026-09-24 un
+`npx prisma migrate diff --from-migrations … --shadow-database-url <DIRECT_URL>`, corrido por Claude
+para "chequear drift", **vació la base de producción**: Prisma resetea la shadow database antes de
+aplicar las migraciones. Se recuperó pagando Supabase Pro para acceder al backup diario.
+
+- Claude **no ejecuta** ningún `prisma migrate` (`diff`, `dev`, `reset`, `resolve`, `deploy`),
+  `prisma db push/pull/execute/seed`, ni pasa URLs del `.env` a ningún flag o herramienta.
+- Único comando de Prisma permitido a Claude: `npx prisma validate` (no se conecta).
+- Chequear schema contra migraciones = **leer** el SQL de la migración y comparar a mano.
+- Cualquier comando que se conecte a la base, aun de sólo lectura, se le **muestra y pregunta** al
+  owner antes de correrlo.
+
+## Backups de la base
+
+Supabase Free **no da backups**. Desde el 2026-09-25 hay un backup físico diario propio, hecho por
+el **servicio `db-backup`** de `docker-compose.yml` (5º servicio, imagen `postgres:17`):
+
+- Script: `scripts/db-backup.sh` (sólo lee: `pg_dump`). Todos los días a las 03:00 ART, y al
+  arrancar el contenedor si ese día todavía no hay backup (cubre deploys y reinicios de la PC).
+  3 intentos separados por 15 min si falla.
+- Destino: `backups/db_YYYY-MM-DD_HHmm.dump` (hora argentina) en la carpeta del proyecto
+  (**gitignoreada**, son datos reales del cliente). Log en `backups/backup.log`. Retención: 30 días.
+- **`BACKUP_HOST_DIR`** (en el `.env` local y en el secret `PROD_ENV_FILE`): ruta absoluta del host a
+  esa carpeta. Es obligatoria: el deploy corre compose desde la carpeta del runner, que
+  `actions/checkout` limpia en cada corrida, y un `./backups` relativo se perdería.
+- Valida cada backup (`pg_restore --list`, mínimo de tablas con datos). Escribe a `.partial` y sólo
+  renombra si pasó la validación: nunca queda un archivo a medias con nombre de backup.
+- Backup manual en el momento: `docker compose exec db-backup bash /tmp/db-backup.sh now`.
+
+**Restaurar** (lo hace el owner, nunca Claude; **pisa los datos actuales**):
+```powershell
+docker compose stop worker scheduler
+docker compose exec db-backup bash -c 'pg_restore --dbname "${DIRECT_URL%%\?*}" --clean --if-exists --no-owner --no-privileges --schema=public /backups/db_<fecha>.dump'
+docker compose start worker scheduler
+```
 
 ## Variables de entorno requeridas
 ```env

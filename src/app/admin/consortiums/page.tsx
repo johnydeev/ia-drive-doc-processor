@@ -39,6 +39,8 @@ import { useConsortiumConfig } from "./hooks/useConsortiumConfig";
 import { ConfigModal } from "./components/ConfigModal";
 import { useBanks } from "./hooks/useBanks";
 import { BanksModal } from "./components/BanksModal";
+import { useCatalogos } from "./hooks/useCatalogos";
+import { CatalogosModal } from "./components/CatalogosModal";
 import { ManualRunModal } from "./components/ManualRunModal";
 import { useManualRun } from "./hooks/useManualRun";
 import { BankGrid } from "./components/BankGrid";
@@ -96,6 +98,7 @@ export default function ConsortiumsPage() {
   // Catálogo de bancos + navegación de 2 niveles de la vista general:
   // nivel 0 = cards de banco, nivel 1 = grilla de edificios del banco elegido.
   const banks = useBanks();
+  const catalogos = useCatalogos();
   const [manualRunOpen, setManualRunOpen] = useState(false);
   const manualRun = useManualRun(manualRunOpen);
   const [selectedBankId, setSelectedBankId] = useState<string | null>(null);
@@ -320,6 +323,10 @@ export default function ConsortiumsPage() {
           <button type="button" className={styles.navSidebarItem} onClick={() => { banks.open(); setNavMobileOpen(false); }}>
             <span className={styles.navSidebarItemIcon}>🏦</span>
             {!navCollapsed && <span className={styles.navSidebarItemLabel}>Bancos</span>}
+          </button>
+          <button type="button" className={styles.navSidebarItem} onClick={() => { catalogos.open(); setNavMobileOpen(false); }}>
+            <span className={styles.navSidebarItemIcon}>🗂️</span>
+            {!navCollapsed && <span className={styles.navSidebarItemLabel}>Rubros y coeficientes</span>}
           </button>
           {/* Navega a otra ruta, por eso es <a> y no <button>: la clase es la misma
               que la de los botones hermanos para que se vea igual. */}
@@ -958,6 +965,19 @@ export default function ConsortiumsPage() {
             onAdd: config.lsp.add,
             onDelete: config.lsp.remove,
           }}
+          catalogos={{
+            rubros: catalogos.rubros,
+            coeficientes: catalogos.coeficientes,
+            rubroIds: config.catalogos.rubroIds,
+            coeficienteIds: config.catalogos.coeficienteIds,
+            msg: config.catalogos.msg,
+            confirmMsg: config.catalogos.confirmMsg,
+            onToggleRubro: config.catalogos.toggleRubro,
+            onToggleCoeficiente: config.catalogos.toggleCoeficiente,
+            onSave: config.catalogos.save,
+            onSaveConfirmed: config.catalogos.saveConfirmed,
+            onCancelConfirm: config.catalogos.cancelConfirm,
+          }}
           fixed={{ list: config.fixed.list }}
         />
       )}
@@ -979,6 +999,33 @@ export default function ConsortiumsPage() {
           onConfirmDelete={banks.setConfirmDeleteId}
           onEdit={banks.setEditingId}
           onClose={() => { banks.close(); void fetchConsortiums(); }}
+        />
+      )}
+
+      {catalogos.isOpen && (
+        <CatalogosModal
+          rubros={catalogos.rubros}
+          coeficientes={catalogos.coeficientes}
+          rubroForm={catalogos.rubroForm}
+          coeficienteForm={catalogos.coeficienteForm}
+          error={catalogos.error}
+          confirmDeleteRubroId={catalogos.confirmDeleteRubroId}
+          confirmDeleteCoefId={catalogos.confirmDeleteCoefId}
+          editingRubroId={catalogos.editingRubroId}
+          editingCoefId={catalogos.editingCoefId}
+          onChangeRubroForm={catalogos.setRubroForm}
+          onChangeCoeficienteForm={catalogos.setCoeficienteForm}
+          onCreateRubro={catalogos.createRubro}
+          onCreateCoeficiente={catalogos.createCoeficiente}
+          onUpdateRubro={catalogos.updateRubro}
+          onUpdateCoeficiente={catalogos.updateCoeficiente}
+          onEditRubro={catalogos.setEditingRubroId}
+          onEditCoef={catalogos.setEditingCoefId}
+          onRemoveRubro={catalogos.removeRubro}
+          onRemoveCoeficiente={catalogos.removeCoeficiente}
+          onConfirmDeleteRubro={catalogos.setConfirmDeleteRubroId}
+          onConfirmDeleteCoef={catalogos.setConfirmDeleteCoefId}
+          onClose={catalogos.close}
         />
       )}
 

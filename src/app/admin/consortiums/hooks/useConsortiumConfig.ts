@@ -47,6 +47,13 @@ export function useConsortiumConfig({ consortiumId, onMatchNamesSaved, onBankSav
   // Gastos fijos: solo lectura desde acá (se administran en /admin/obligaciones).
   const [fixedExpenses, setFixedExpenses] = useState<FixedExpenseRow[]>([]);
 
+  // ── Capa 2 del spec 2026-09-24: qué rubros y coeficientes usa este edificio ──
+  const [rubroIds, setRubroIds] = useState<string[]>([]);
+  const [coeficienteIds, setCoeficienteIds] = useState<string[]>([]);
+  const [catalogosMsg, setCatalogosMsg] = useState<string | null>(null);
+  /** Aviso de lo que se va a perder; mientras esté puesto, el guardado espera el sí. */
+  const [catalogosConfirm, setCatalogosConfirm] = useState<string | null>(null);
+
   const fetchLspServices = useCallback(async (id: string) => {
     try {
       const res = await guardedFetch(`/api/client/consortiums/${id}/lsp-services`);
@@ -60,6 +67,17 @@ export function useConsortiumConfig({ consortiumId, onMatchNamesSaved, onBankSav
       const res = await guardedFetch(`/api/client/consortiums/${id}/fixed-expenses`);
       const data = await res.json();
       if (data.ok) setFixedExpenses(data.fixedExpenses ?? []);
+    } catch { /* silent */ }
+  }, [guardedFetch]);
+
+  const fetchCatalogos = useCallback(async (id: string) => {
+    try {
+      const res = await guardedFetch(`/api/client/consortiums/${id}/catalogos`);
+      const data = await res.json();
+      if (data.ok) {
+        setRubroIds(data.rubroIds ?? []);
+        setCoeficienteIds(data.coeficienteIds ?? []);
+      }
     } catch { /* silent */ }
   }, [guardedFetch]);
 
@@ -80,7 +98,8 @@ export function useConsortiumConfig({ consortiumId, onMatchNamesSaved, onBankSav
     setLspServices([]); setLspError(null); setLspForm(EMPTY_LSP_FORM);
     setConfirmDeleteLspId(null);
     setFixedExpenses([]);
-    void fetchLspServices(c.id); void fetchFixedExpenses(c.id);
+    setRubroIds([]); setCoeficienteIds([]); setCatalogosMsg(null); setCatalogosConfirm(null);
+    void fetchLspServices(c.id); void fetchFixedExpenses(c.id); void fetchCatalogos(c.id);
   };
 
   const open = (c: Consortium) => {
@@ -92,6 +111,43 @@ export function useConsortiumConfig({ consortiumId, onMatchNamesSaved, onBankSav
   };
   const close = () => setIsOpen(false);
   const toggleSection = (s: ConfigSection) => setOpenSection((prev) => (prev === s ? null : s));
+
+  // ── Rubros y coeficientes del edificio ───────────────────────────────────
+  // El PUT manda el set COMPLETO, no un delta: es lo que devuelven las casillas y
+  // hace la operación idempotente.
+  const saveCatalogos = async (confirm = false) => {
+    if (!consortiumId) return;
+    setCatalogosMsg(null);
+    setCatalogosConfirm(null);
+    try {
+      const res = await guardedFetch(`/api/client/consortiums/${consortiumId}/catalogos`, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ rubroIds, coeficienteIds, confirm }),
+      });
+      const data = await res.json();
+
+      // 409: sacar un rubro del edificio DESETIQUETA los gastos fijos que lo usaban
+      // y volver a tildarlo no los recupera. El server no escribió nada todavía.
+      if (res.status === 409 && data.needsConfirm) {
+        const detalle = [
+          data.rubrosHuerfanos > 0 ? `${data.rubrosHuerfanos} gastos fijos quedarán sin rubro` : null,
+          data.coefsHuerfanos > 0 ? `${data.coefsHuerfanos} quedarán sin coeficiente` : null,
+        ].filter(Boolean).join(" · ");
+        setCatalogosConfirm(`${detalle}. Volver a asignarlos no recupera las etiquetas.`);
+        return;
+      }
+
+      if (!res.ok || !data.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
+      const huerfanos = [
+        data.rubrosHuerfanos > 0 ? `${data.rubrosHuerfanos} gastos fijos quedaron sin rubro` : null,
+        data.coefsHuerfanos > 0 ? `${data.coefsHuerfanos} quedaron sin coeficiente` : null,
+      ].filter(Boolean).join(" · ");
+      setCatalogosMsg(huerfanos ? `Guardado. ${huerfanos}.` : "Guardado.");
+    } catch (err) {
+      setCatalogosMsg(err instanceof Error ? err.message : "Error al guardar");
+    }
+  };
 
   // ── matchNames ───────────────────────────────────────────────────────────
   const saveMatchNames = async () => {
@@ -205,6 +261,19 @@ export function useConsortiumConfig({ consortiumId, onMatchNamesSaved, onBankSav
       setConfirmDeleteId: setConfirmDeleteLspId,
       add: addLsp,
       remove: removeLsp,
+    },
+    catalogos: {
+      rubroIds,
+      coeficienteIds,
+      msg: catalogosMsg,
+      confirmMsg: catalogosConfirm,
+      cancelConfirm: () => setCatalogosConfirm(null),
+      toggleRubro: (id: string) =>
+        setRubroIds((ids) => (ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id])),
+      toggleCoeficiente: (id: string) =>
+        setCoeficienteIds((ids) => (ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id])),
+      save: () => saveCatalogos(false),
+      saveConfirmed: () => saveCatalogos(true),
     },
     fixed: {
       list: fixedExpenses,

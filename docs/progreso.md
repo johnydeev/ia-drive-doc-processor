@@ -1,6 +1,7 @@
 # Progreso del proyecto — drive-doc-processor
 
-Actualizado al 23/09/2026 (sesión 71 — "Empleado" en la columna FACTURA/NRO CLIENTE de la hoja de obligaciones).
+Actualizado al 24/09/2026 (sesión 72 — rubros y coeficientes, parte 1: modelo, carga y pipeline).
+Sesión 71 (23/09): "Empleado" en la columna FACTURA/NRO CLIENTE de la hoja de obligaciones.
 Sesión 70 (19/09): router + prompt TELECENTRO con la primera factura real, GUALEGUAYCHU.
 Sesión 69 (18/09): adicionales y "Otras boletas del mes" en la hoja de
 obligaciones, derivado en lectura, sin migración; orden, columnas, acordeón y ficha compacta de la
@@ -26,6 +27,84 @@ VEP, y el LSD abierto en una boleta por empleado.
 > Las secciones de la **sesión 61** (instrumentación de requests, triage de no-boletas, LSD) y la del
 > **VEP** (sesión 62) dicen "implementado": las primeras entraron en `ae31c15` y `e3551a7`, el VEP en
 > `add4e11`. Lo que sigue abierto en todas ellas es el **smoke en producción**, no el commit.
+
+## 🚨 Incidente: base de producción vaciada y restaurada; backups diarios (2026-09-24/25)
+
+**Estado:** base restaurada y verificada (backup Supabase del 24/09 13:37 UTC). Primer backup propio OK
+(25/09 09:40, 0,9 MB, 22 tablas). El backup pasó a un servicio `db-backup` de docker-compose, validado
+offline (sintaxis, compose); su primer arranque lo hace el owner. Detalle en `docs/decisiones.md`.
+
+**Pendiente, en orden:**
+1. Owner: `BACKUP_HOST_DIR` en el `.env` local y en el secret `PROD_ENV_FILE`; levantar `db-backup`.
+2. Owner: volver Supabase a Free una vez que haya un backup propio (el resto del mes queda como crédito).
+3. Separar `.env.production` (contenedores) del `.env` de desarrollo + reglas `deny` en
+   `.claude/settings.json` + conector MCP de Supabase en sólo lectura.
+4. Retomar las correcciones de la revisión de rubros y coeficientes (abajo): `@@index` de
+   `FixedExpense.rubroId`/`coeficienteId` en el schema (**hecho**, sólo archivo), aviso de número de
+   rubro repetido, confirmación desactualizada al seguir tildando, número inválido al editar que
+   borra el número, test del copiado en `generateObligationsForPeriod`, y decidir qué pasa al borrar
+   un rubro del catálogo que ya tiene boletas (hoy las desetiqueta sin aviso).
+
+## 🗂️ Rubros y coeficientes — parte 1: modelo y carga (2026-09-24)
+
+**Estado:** implementado y **auditado contra el spec**; 1104 tests verdes (34 nuevos), typecheck,
+lint, `build:jobs` y `next build` limpios. Migración **aplicada por el owner el 24/09**. Sin commitear.
+Spec: `docs/superpowers/specs/2026-09-24-rubros-y-coeficientes-design.md`.
+Plan: `docs/superpowers/plans/2026-09-24-rubros-y-coeficientes-modelo-y-carga.md`.
+
+**Caso.** `Rubro`, `Coeficiente`, `Invoice.rubroId` e `Invoice.coeficienteId` estaban en el schema
+desde el principio y sólo se llenaban a mano en `InvoiceModal`. Las boletas del pipeline nacían con
+los dos en `null`. El análisis de 20 liquidaciones de agosto 2026 (`pdf-parse`) mostró que el rubro
+es el eje vertical de la liquidación (11 secciones numeradas) y el coeficiente el horizontal (columnas
+`Gasto A/B/C`), y que el coeficiente es **del gasto, no del proveedor** (Araoz 192: Metrogas caldera
+va a B y Metrogas portería a A). Ver `docs/decisiones.md` 2026-09-24.
+
+**Qué se hizo.**
+- **Schema + migración** `20260924120000_rubros_y_coeficientes_por_edificio`, todo aditivo y nullable:
+  `Rubro.order`, tablas `ConsortiumRubro` y `ConsortiumCoeficiente`, y `rubroId` / `coeficienteId` en
+  `FixedExpense` (`SetNull`).
+- **`src/lib/rubroAssignment.ts`** (`checkAssignable`): decisión pura de si un rubro/coeficiente es
+  asignable a un gasto fijo. 5 tests, sin base de datos.
+- **Pipeline**: `copyLabelsToInvoice` en `obligation.service.ts`, llamado desde los tres lugares que
+  vinculan boleta y obligación (`linkInvoiceToObligation`, `generateObligationsForPeriod`,
+  `syncObligationsForClient`). No pisa con null: un gasto fijo sin etiquetar no borra un rubro cargado
+  a mano. `invoicePeriodMove` ya pasa por `linkInvoiceToObligation`, así que hereda solo.
+- **API**: `order` en `/api/client/rubros` (GET ordena por `order` con los sin número al final);
+  `/api/client/consortiums/[id]/catalogos` (GET + PUT del set completo, idempotente, informa cuántos
+  gastos fijos quedan huérfanos al desasignar); `rubroId`/`coeficienteId` en el PATCH de
+  `fixed-expenses/[fxId]`, validados contra lo que el edificio tiene asignado.
+- **Panel**: `useCatalogos` + `CatalogosModal` (ABM en el sidebar, junto a Bancos) y la sección
+  "Rubros y coeficientes" en el modal de Configuración del consorcio, con casillas en dos columnas.
+
+**Hallazgos de la verificación del plan contra el código** (antes de implementar): `withAuth` /
+`withClientAuth` **no reciben `params`** (está dicho en `apiHandler.ts:17`), así que la ruta nueva usa
+`requireClientSession` + `context.params`; y `fixed-expenses/[fxId]/route.ts` **ya tenía** un PATCH
+sobre `FixedExpenseRepository`, que se extendió en vez de reemplazarse.
+
+**Tres defectos encontrados en la auditoría final (spec contra código) y corregidos:**
+1. **`notIn: []` matchea cero filas en Prisma, no todas.** Destildar TODAS las casillas de un edificio
+   no borraba ninguna asignación: decía "Guardado" y no hacía nada. Helpers `excludeAssigned` /
+   `orphanedBy` en `rubroAssignment.ts`, con tests del caso vacío. Ver `docs/decisiones.md`.
+2. **Desasignar era destructivo sin aviso previo.** El spec pedía confirmación; la implementación
+   borraba y avisaba después, y volver a tildar el rubro no recupera las etiquetas. Ahora el PUT
+   responde 409 `needsConfirm` sin escribir y el panel pregunta.
+3. **El ABM no permitía editar.** `updateRubro` / `updateCoeficiente` existían en el hook y ningún
+   componente los llamaba: un número de rubro mal cargado quedaba clavado. Filas editables con
+   borrador local, como `BankRow`.
+
+**Pendiente de esta parte:** `scripts/seed-rubros.ts`, la carga inicial de los ~725 gastos fijos con
+el mapeo sacado de las liquidaciones. Espera los PDFs del owner.
+
+**Deuda anotada:** el spec pedía tests de endpoint ("que rechacen un rubro ajeno al edificio"). Este
+repo no tiene tests de rutas API —sólo `routeAuthGuard.test.ts` y `apiHandler.test.ts`, que prueban
+el plumbing— así que la exigencia se cubre probando `checkAssignable`, donde vive la decisión. Los
+handlers quedan sin test propio.
+
+**Parte 2 (plan aparte):** la hoja de obligaciones agrupada por rubro, con `MONTO` desdoblado en una
+columna por coeficiente y encabezado de dos niveles; se elimina `compareRows`/`GROUP_RANK`; "Otras
+boletas del mes" se disuelve en los rubros y aparece un bloque `Sin rubro` al final; el PDF sigue a la
+hoja. Necesita además un PATCH de `Invoice` para el rubro/coeficiente de una boleta suelta: hoy el
+único PATCH sobre una boleta es `/api/client/invoices/[id]/late-amount`.
 
 ## 🧑‍🔧 "Empleado" en la columna FACTURA de la hoja de obligaciones (2026-09-23)
 

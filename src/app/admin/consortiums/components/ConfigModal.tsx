@@ -1,7 +1,9 @@
 import styles from "../page.module.css";
 import { AsyncButton } from "@/components/AsyncButton";
 import { LSP_PROVIDERS } from "../lib/constants";
-import type { Bank, BankAccountForm, ConfigSection, FixedExpenseRow, LspForm, LspService } from "../lib/types";
+import type {
+  Bank, BankAccountForm, Coeficiente, ConfigSection, FixedExpenseRow, LspForm, LspService, Rubro,
+} from "../lib/types";
 
 type Props = {
   consortiumName: string;
@@ -35,6 +37,24 @@ type Props = {
     onAdd: () => void;
     onDelete: (id: string) => void;
   };
+  /**
+   * Capa 2 del spec 2026-09-24: del catálogo del cliente, cuáles usa este edificio.
+   * `rubros` / `coeficientes` son el catálogo completo; los `*Ids`, lo asignado.
+   */
+  catalogos: {
+    rubros: Rubro[];
+    coeficientes: Coeficiente[];
+    rubroIds: string[];
+    coeficienteIds: string[];
+    msg: string | null;
+    /** Si está puesto, el guardado va a desetiquetar gastos fijos y espera el sí. */
+    confirmMsg: string | null;
+    onToggleRubro: (id: string) => void;
+    onToggleCoeficiente: (id: string) => void;
+    onSave: () => void;
+    onSaveConfirmed: () => void;
+    onCancelConfirm: () => void;
+  };
   /** Solo lectura: los gastos fijos se administran en /admin/obligaciones. */
   fixed: {
     list: FixedExpenseRow[];
@@ -42,7 +62,7 @@ type Props = {
 };
 
 export function ConfigModal({
-  consortiumName, saving, openSection, onToggleSection, onClose, banks, bank, matchNames, lsp, fixed,
+  consortiumName, saving, openSection, onToggleSection, onClose, banks, bank, matchNames, catalogos, lsp, fixed,
 }: Props) {
   return (
     <div className={styles.modalOverlay} onClick={() => !saving && onClose()}>
@@ -158,6 +178,92 @@ export function ConfigModal({
                 </AsyncButton>
               </div>
               {bank.msg && <p className={styles.infoMsg} style={{ marginTop: 6 }}>{bank.msg}</p>}
+            </div>
+          )}
+        </div>
+
+        {/* Capa 2 de rubros y coeficientes: del catálogo del cliente, cuáles usa
+            este edificio. Es lo que después habilita etiquetar sus gastos fijos. */}
+        <div className={styles.configSection}>
+          <button
+            type="button"
+            className={styles.lspToggle}
+            onClick={() => onToggleSection("catalogos")}
+            aria-expanded={openSection === "catalogos"}
+          >
+            <span className={styles.lspToggleChevron} aria-hidden="true">{openSection === "catalogos" ? "▾" : "▸"}</span>
+            <span className={styles.lspTitle}>Rubros y coeficientes</span>
+          </button>
+          {openSection === "catalogos" && (
+            <div className={styles.lspContent}>
+              <p className={styles.configSectionDesc}>
+                Del catálogo del cliente, cuáles usa este edificio. Un edificio sin empleado propio
+                no tiene el rubro 1: su liquidación arranca en el 2.
+              </p>
+
+              <h5 className={styles.lspTitle}>Rubros</h5>
+              {catalogos.rubros.length > 0 ? (
+                <div className={styles.checkboxList}>
+                  {catalogos.rubros.map((r) => (
+                    <label key={r.id} className={styles.checkboxRow}>
+                      <input
+                        type="checkbox"
+                        checked={catalogos.rubroIds.includes(r.id)}
+                        onChange={() => catalogos.onToggleRubro(r.id)}
+                      />
+                      <span>{r.order != null ? `${r.order} ` : ""}{r.name}</span>
+                    </label>
+                  ))}
+                </div>
+              ) : (
+                <p className={styles.lspEmpty}>
+                  No hay rubros en el catálogo. Se cargan desde Rubros y coeficientes, en el menú.
+                </p>
+              )}
+
+              <h5 className={styles.lspTitle}>Coeficientes</h5>
+              {catalogos.coeficientes.length > 0 ? (
+                <div className={styles.checkboxList}>
+                  {catalogos.coeficientes.map((c) => (
+                    <label key={c.id} className={styles.checkboxRow}>
+                      <input
+                        type="checkbox"
+                        checked={catalogos.coeficienteIds.includes(c.id)}
+                        onChange={() => catalogos.onToggleCoeficiente(c.id)}
+                      />
+                      <span>{c.code} — {c.name}</span>
+                    </label>
+                  ))}
+                </div>
+              ) : (
+                <p className={styles.lspEmpty}>
+                  No hay coeficientes en el catálogo. Se cargan desde Rubros y coeficientes, en el menú.
+                </p>
+              )}
+
+              <div className={styles.matchNamesActions}>
+                {catalogos.confirmMsg ? (
+                  <span className={styles.lspConfirmDelete}>
+                    {catalogos.confirmMsg}{" "}
+                    <AsyncButton
+                      type="button"
+                      className={styles.lspConfirmYes}
+                      onClick={catalogos.onSaveConfirmed}
+                      pendingLabel="Guardando…"
+                    >
+                      Guardar igual
+                    </AsyncButton>
+                    <button type="button" className={styles.lspConfirmNo} onClick={catalogos.onCancelConfirm}>
+                      Cancelar
+                    </button>
+                  </span>
+                ) : (
+                  <AsyncButton type="button" className={styles.addInvoiceBtn} onClick={catalogos.onSave} pendingLabel="Guardando…">
+                    Guardar
+                  </AsyncButton>
+                )}
+              </div>
+              {catalogos.msg && <p className={styles.infoMsg} style={{ marginTop: 6 }}>{catalogos.msg}</p>}
             </div>
           )}
         </div>

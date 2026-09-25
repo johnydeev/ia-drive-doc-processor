@@ -92,6 +92,45 @@ services:
         max-size: "50m"
         max-file: "10"
 
+  # ── Backup diario de la base (desde el incidente del 2026-09-24) ─
+  # Supabase Free no da backups. Este servicio hace un pg_dump por día (03:00 ART)
+  # y al arrancar si hoy todavía no hay uno. SOLO LEE la base.
+  #
+  # Los archivos van a la carpeta backups/ del proyecto en el host. La ruta es
+  # ABSOLUTA (BACKUP_HOST_DIR) a propósito: el deploy corre compose desde la carpeta
+  # del runner, que `actions/checkout` limpia en cada deploy — un `./backups`
+  # relativo se borraría con cada commit. Sin la variable, compose no arranca.
+  #
+  # El script se copia a /tmp antes de ejecutarlo: bash lee los scripts de a
+  # pedazos, y el checkout del deploy reemplaza el archivo montado mientras el
+  # servicio duerme. El `sed` quita CRLF por si el checkout de Windows los agregó.
+  db-backup:
+    image: postgres:17
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      BACKUP_HOUR_UTC: "6"
+      BACKUP_RETENTION_DAYS: "30"
+    entrypoint: ["bash", "-c", "sed 's/\\r$$//' /opt/db-backup.sh > /tmp/db-backup.sh && exec bash /tmp/db-backup.sh"]
+    volumes:
+      - type: bind
+        source: ./scripts/db-backup.sh
+        target: /opt/db-backup.sh
+        read_only: true
+      - type: bind
+        source: ${BACKUP_HOST_DIR:?Falta BACKUP_HOST_DIR en el .env (ruta absoluta a la carpeta backups del proyecto)}
+        target: /backups
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: "0.5"
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
 # ── Cloudflare Tunnel ──────────────────────────────────────────
   tunnel:
     image: cloudflare/cloudflared:2025.2.0

@@ -33,6 +33,19 @@ function setup(overrides: Partial<React.ComponentProps<typeof ConfigModal>> = {}
       onChangeForm: vi.fn(), onConfirmDelete: vi.fn(), onAdd: vi.fn(), onDelete: vi.fn(),
     },
     fixed: { list: [] },
+    catalogos: {
+      rubros: [],
+      coeficientes: [],
+      rubroIds: [],
+      coeficienteIds: [],
+      msg: null,
+      confirmMsg: null,
+      onToggleRubro: vi.fn(),
+      onToggleCoeficiente: vi.fn(),
+      onSave: vi.fn(),
+      onSaveConfirmed: vi.fn(),
+      onCancelConfirm: vi.fn(),
+    },
     ...overrides,
   };
   render(<ConfigModal {...props} />);
@@ -113,5 +126,96 @@ describe("ConfigModal", () => {
     const props = setup();
     await userEvent.click(screen.getByRole("button", { name: /^Cerrar$/ }));
     expect(props.onClose).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("ConfigModal — sección Rubros y coeficientes", () => {
+  const catalogos = {
+    rubros: [
+      { id: "r3", name: "SERVICIOS PÚBLICOS", order: 3 },
+      { id: "r5", name: "MANTENIMIENTO", order: 5 },
+    ],
+    coeficientes: [
+      { id: "cA", code: "A", name: "GASTO A", value: null },
+      { id: "cB", code: "B", name: "CALDERA", value: null },
+    ],
+    rubroIds: ["r3"],
+    coeficienteIds: [] as string[],
+    msg: null,
+    confirmMsg: null,
+    onToggleRubro: vi.fn(),
+    onToggleCoeficiente: vi.fn(),
+    onSave: vi.fn(),
+    onSaveConfirmed: vi.fn(),
+    onCancelConfirm: vi.fn(),
+  };
+
+  it("marca las casillas de lo que el edificio ya tiene asignado", () => {
+    setup({ openSection: "catalogos", catalogos });
+    expect(screen.getByRole("checkbox", { name: /SERVICIOS PÚBLICOS/ })).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: /MANTENIMIENTO/ })).not.toBeChecked();
+    expect(screen.getByRole("checkbox", { name: /CALDERA/ })).not.toBeChecked();
+  });
+
+  it("muestra el número del rubro y el código del coeficiente", () => {
+    setup({ openSection: "catalogos", catalogos });
+    expect(screen.getByRole("checkbox", { name: "3 SERVICIOS PÚBLICOS" })).toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: "B — CALDERA" })).toBeInTheDocument();
+  });
+
+  it("tildar una casilla avisa cuál se tocó", async () => {
+    const props = setup({ openSection: "catalogos", catalogos });
+    await userEvent.click(screen.getByRole("checkbox", { name: /MANTENIMIENTO/ }));
+    expect(props.catalogos.onToggleRubro).toHaveBeenCalledWith("r5");
+  });
+
+  it("la sección colapsada no muestra las casillas", () => {
+    setup({ openSection: null, catalogos });
+    expect(screen.queryByRole("checkbox", { name: /SERVICIOS PÚBLICOS/ })).not.toBeInTheDocument();
+  });
+});
+
+describe("ConfigModal — confirmación al desasignar", () => {
+  // Mocks frescos por test: compartir un `vi.fn()` entre casos hace que un
+  // `not.toHaveBeenCalled()` vea la llamada del test anterior.
+  const base = () => ({
+    rubros: [{ id: "r3", name: "SERVICIOS PÚBLICOS", order: 3 }],
+    coeficientes: [],
+    rubroIds: [] as string[],
+    coeficienteIds: [] as string[],
+    msg: null,
+    onToggleRubro: vi.fn(),
+    onToggleCoeficiente: vi.fn(),
+    onSave: vi.fn(),
+    onSaveConfirmed: vi.fn(),
+    onCancelConfirm: vi.fn(),
+  });
+
+  it("sin aviso pendiente, el botón guarda normal", () => {
+    setup({ openSection: "catalogos", catalogos: { ...base(), confirmMsg: null } });
+    expect(screen.getByRole("button", { name: "Guardar" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Guardar igual" })).not.toBeInTheDocument();
+  });
+
+  // Desasignar es destructivo e irreversible: volver a tildar el rubro no le
+  // devuelve la etiqueta a los gastos fijos.
+  it("con aviso pendiente, pide confirmar y dice qué se pierde", async () => {
+    const props = setup({
+      openSection: "catalogos",
+      catalogos: { ...base(), confirmMsg: "4 gastos fijos quedarán sin rubro. Volver a asignarlos no recupera las etiquetas." },
+    });
+    expect(screen.getByText(/4 gastos fijos quedarán sin rubro/)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Guardar igual" }));
+    expect(props.catalogos.onSaveConfirmed).toHaveBeenCalled();
+  });
+
+  it("cancelar el aviso no guarda", async () => {
+    const props = setup({
+      openSection: "catalogos",
+      catalogos: { ...base(), confirmMsg: "2 quedarán sin coeficiente." },
+    });
+    await userEvent.click(screen.getByRole("button", { name: "Cancelar" }));
+    expect(props.catalogos.onCancelConfirm).toHaveBeenCalled();
+    expect(props.catalogos.onSaveConfirmed).not.toHaveBeenCalled();
   });
 });

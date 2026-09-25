@@ -20,6 +20,8 @@
         "prisma:generate": "prisma generate",
         "prisma:migrate:deploy": "prisma migrate deploy",
         "prisma:migrate:status": "prisma migrate status",
+        "db:backup": "docker compose exec -T db-backup bash /tmp/db-backup.sh now",
+        "db:migrate": "npm run db:backup && prisma migrate deploy && prisma generate",
         "local": "powershell -ExecutionPolicy Bypass -File .\\scripts\\run-local.ps1",
         "logs:export": "powershell -ExecutionPolicy Bypass -File .\\scripts\\export-logs.ps1"
     },

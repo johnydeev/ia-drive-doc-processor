@@ -1,8 +1,10 @@
 // Tipos compartidos de la UI de consorcios. Movidos desde page.tsx sin cambios.
 
 export type Period = { id: string; year: number; month: number; status: "ACTIVE" | "CLOSED" };
-export type Coeficiente = { id: string; name: string; value: number };
-export type Rubro = { id: string; name: string };
+/** Coeficiente del catálogo del cliente. `code` es la columna de la liquidación (A, B, C). */
+export type Coeficiente = { id: string; code: string; name: string; value: number | null };
+/** Rubro del catálogo del cliente. `order` es el número de la sección (3 SERVICIOS PÚBLICOS). */
+export type Rubro = { id: string; name: string; order: number | null; description?: string | null };
 export type Bank = {
   id: string; name: string; color: string;
   _count?: { consortiums: number };
@@ -99,7 +101,7 @@ export type PayForm = {
 };
 
 // Dominio Config (Tanda 3e): sección abierta del acordeón + form de alta de LSP.
-export type ConfigSection = "matchNames" | "bank" | "lsp" | "fixed";
+export type ConfigSection = "matchNames" | "bank" | "catalogos" | "lsp" | "fixed";
 export type LspForm = { provider: string; clientNumber: string; description: string };
 
 // Reporte del sync de directorio. El sync no borra: lo que está en la base y no

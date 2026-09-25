@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { generateObligationsForPeriod, syncObligationsForClient } from "./obligation.service";
+import {
+  generateObligationsForPeriod,
+  linkInvoiceToObligation,
+  syncObligationsForClient,
+} from "./obligation.service";
 
 /** Fake prisma en memoria, solo con lo que usa generateObligationsForPeriod. */
 function makeFakePrisma(opts: {
@@ -64,7 +68,10 @@ describe("generateObligationsForPeriod", () => {
 /** Fake prisma para syncObligationsForClient: set-based, sin `create` de a uno. */
 function makeFakeSyncPrisma(opts: {
   periods: Array<{ id: string; consortiumId: string }>;
-  fixedExpenses: Array<{ id: string; consortiumId: string; providerId: string | null; lspServiceId: string | null }>;
+  fixedExpenses: Array<{
+    id: string; consortiumId: string; providerId: string | null; lspServiceId: string | null;
+    rubroId?: string | null; coeficienteId?: string | null;
+  }>;
   existing?: Array<{ periodId: string; fixedExpenseId: string; invoiceId: string | null }>;
   invoices?: Array<{
     id: string; periodId: string; providerId: string | null; lspServiceId: string | null;
@@ -76,9 +83,11 @@ function makeFakeSyncPrisma(opts: {
 }) {
   const createdMany: any[] = [];
   const updated: any[] = [];
+  const invoiceUpdates: any[] = [];
   return {
     createdMany,
     updated,
+    invoiceUpdates,
     client: {
       period: { findMany: async () => opts.periods },
       fixedExpense: { findMany: async () => opts.fixedExpenses },
@@ -100,6 +109,7 @@ function makeFakeSyncPrisma(opts: {
             ? all.filter((i) => !i.carriedFromPeriodId)
             : all;
         },
+        update: async ({ where, data }: any) => { invoiceUpdates.push({ where, data }); return {}; },
       },
     } as any,
   };
@@ -259,5 +269,140 @@ describe("syncObligationsForClient", () => {
     expect(res.created).toBe(1);
     expect(res.linked).toBe(0);
     expect(fake.updated).toHaveLength(0);
+  });
+});
+
+/**
+ * Fake prisma para `linkInvoiceToObligation`. Registra por separado los updates de
+ * la obligación y los de la boleta: lo que se prueba acá es que la etiqueta del
+ * gasto fijo se copie a la boleta (spec 2026-09-24).
+ */
+function makeFakeLinkPrisma(opts: {
+  obligations: Array<{
+    id: string;
+    fixedExpense: {
+      providerId: string | null;
+      lspServiceId: string | null;
+      kind: "FACTURA" | "RETENCION";
+      rubroId: string | null;
+      coeficienteId: string | null;
+    };
+  }>;
+}) {
+  const obligationUpdates: any[] = [];
+  const invoiceUpdates: any[] = [];
+  return {
+    obligationUpdates,
+    invoiceUpdates,
+    client: {
+      expenseObligation: {
+        findMany: async () =>
+          opts.obligations.map((o, i) => ({ ...o, createdAt: new Date(2026, 0, i + 1) })),
+        update: async ({ where, data }: any) => { obligationUpdates.push({ where, data }); return {}; },
+      },
+      invoice: {
+        update: async ({ where, data }: any) => { invoiceUpdates.push({ where, data }); return {}; },
+      },
+    } as any,
+  };
+}
+
+describe("linkInvoiceToObligation — rubro y coeficiente", () => {
+  it("copia el rubro y el coeficiente del gasto fijo a la boleta", async () => {
+    const fake = makeFakeLinkPrisma({
+      obligations: [
+        {
+          id: "ob1",
+          fixedExpense: {
+            providerId: null, lspServiceId: "l1", kind: "FACTURA",
+            rubroId: "r3", coeficienteId: "cA",
+          },
+        },
+      ],
+    });
+    const linked = await linkInvoiceToObligation(
+      { id: "inv1", periodId: "per1", providerId: null, lspServiceId: "l1" },
+      fake.client
+    );
+    expect(linked).toBe(true);
+    expect(fake.invoiceUpdates).toHaveLength(1);
+    expect(fake.invoiceUpdates[0]).toMatchObject({
+      where: { id: "inv1" },
+      data: { rubroId: "r3", coeficienteId: "cA" },
+    });
+  });
+
+  // Un gasto fijo sin etiquetar no tiene que tocar la boleta: si la boleta traía
+  // rubro cargado a mano, un null del gasto fijo no lo borra.
+  it("no toca la boleta si el gasto fijo no tiene ninguno de los dos", async () => {
+    const fake = makeFakeLinkPrisma({
+      obligations: [
+        {
+          id: "ob1",
+          fixedExpense: {
+            providerId: "p1", lspServiceId: null, kind: "FACTURA",
+            rubroId: null, coeficienteId: null,
+          },
+        },
+      ],
+    });
+    const linked = await linkInvoiceToObligation(
+      { id: "inv1", periodId: "per1", providerId: "p1", lspServiceId: null },
+      fake.client
+    );
+    expect(linked).toBe(true);
+    expect(fake.invoiceUpdates).toHaveLength(0);
+  });
+
+  it("copia sólo el que tiene, si tiene uno solo", async () => {
+    const fake = makeFakeLinkPrisma({
+      obligations: [
+        {
+          id: "ob1",
+          fixedExpense: {
+            providerId: "p1", lspServiceId: null, kind: "FACTURA",
+            rubroId: "r5", coeficienteId: null,
+          },
+        },
+      ],
+    });
+    await linkInvoiceToObligation(
+      { id: "inv1", periodId: "per1", providerId: "p1", lspServiceId: null },
+      fake.client
+    );
+    expect(fake.invoiceUpdates[0].data).toEqual({ rubroId: "r5" });
+  });
+});
+
+describe("syncObligationsForClient — rubro y coeficiente", () => {
+  it("copia la etiqueta del gasto fijo al vincular retroactivamente", async () => {
+    const fake = makeFakeSyncPrisma({
+      periods: [{ id: "per1", consortiumId: "c1" }],
+      fixedExpenses: [
+        {
+          id: "fx1", consortiumId: "c1", providerId: "p1", lspServiceId: null,
+          rubroId: "r5", coeficienteId: "cB",
+        },
+      ],
+      fresh: [{ id: "ob1", periodId: "per1", fixedExpenseId: "fx1" }],
+      invoices: [{ id: "inv1", periodId: "per1", providerId: "p1", lspServiceId: null }],
+    });
+    await syncObligationsForClient("cl1", fake.client);
+    expect(fake.invoiceUpdates).toHaveLength(1);
+    expect(fake.invoiceUpdates[0]).toMatchObject({
+      where: { id: "inv1" },
+      data: { rubroId: "r5", coeficienteId: "cB" },
+    });
+  });
+
+  it("no toca la boleta si el gasto fijo no está etiquetado", async () => {
+    const fake = makeFakeSyncPrisma({
+      periods: [{ id: "per1", consortiumId: "c1" }],
+      fixedExpenses: [{ id: "fx1", consortiumId: "c1", providerId: "p1", lspServiceId: null }],
+      fresh: [{ id: "ob1", periodId: "per1", fixedExpenseId: "fx1" }],
+      invoices: [{ id: "inv1", periodId: "per1", providerId: "p1", lspServiceId: null }],
+    });
+    await syncObligationsForClient("cl1", fake.client);
+    expect(fake.invoiceUpdates).toHaveLength(0);
   });
 });

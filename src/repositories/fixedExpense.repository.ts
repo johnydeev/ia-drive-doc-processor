@@ -68,7 +68,14 @@ export class FixedExpenseRepository {
   async update(
     id: string,
     clientId: string,
-    data: { active?: boolean; description?: string | null }
+    data: {
+      active?: boolean;
+      description?: string | null;
+      /// Etiqueta que heredan las boletas de este gasto fijo (spec 2026-09-24).
+      /// Que el rubro/coeficiente pertenezcan al edificio lo valida el endpoint.
+      rubroId?: string | null;
+      coeficienteId?: string | null;
+    }
   ): Promise<FixedExpense> {
     const fx = await this.prisma.fixedExpense.findFirst({ where: { id, clientId } });
     if (!fx) throw new FixedExpenseError("Gasto fijo no encontrado", 404);
@@ -77,6 +84,8 @@ export class FixedExpenseRepository {
       data: {
         ...(data.active !== undefined ? { active: data.active } : {}),
         ...(data.description !== undefined ? { description: data.description } : {}),
+        ...(data.rubroId !== undefined ? { rubroId: data.rubroId } : {}),
+        ...(data.coeficienteId !== undefined ? { coeficienteId: data.coeficienteId } : {}),
       },
     });
   }

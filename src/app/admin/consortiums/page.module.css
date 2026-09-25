@@ -1109,6 +1109,27 @@
   line-height: 1.4;
 }
 
+/* Casillas de "qué rubros y coeficientes usa este edificio". En dos columnas:
+   son ~11 rubros y el modal ya es alto. */
+.checkboxList {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 6px 16px;
+  margin: 8px 0 16px;
+}
+
+.checkboxRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.checkboxRow input {
+  cursor: pointer;
+}
+
 /* ── matchNames (reused inside config modal) ── */
 .matchNamesEditBtn {
   background: none;

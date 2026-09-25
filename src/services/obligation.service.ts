@@ -67,11 +67,35 @@ export async function generateObligationsForPeriod(
         where: { id: obligation.id },
         data: { status: "RECEIVED", invoiceId: match.id },
       });
+      await copyLabelsToInvoice(prisma, match.id, fx);
       linked++;
     }
   }
 
   return { created, linked };
+}
+
+/**
+ * Copia la etiqueta (rubro y coeficiente) del gasto fijo a la boleta recién
+ * vinculada — spec 2026-09-24.
+ *
+ * Se COPIA, no se lee al vuelo: la liquidación de un mes ya emitido no tiene que
+ * moverse si mañana se cambia la regla del gasto fijo. Y no pisa con null: un gasto
+ * fijo sin etiquetar no borra el rubro que la boleta pueda tener cargado a mano.
+ */
+async function copyLabelsToInvoice(
+  prisma: PrismaClient,
+  invoiceId: string,
+  fx: { rubroId: string | null; coeficienteId: string | null }
+): Promise<void> {
+  if (!fx.rubroId && !fx.coeficienteId) return;
+  await prisma.invoice.update({
+    where: { id: invoiceId },
+    data: {
+      ...(fx.rubroId ? { rubroId: fx.rubroId } : {}),
+      ...(fx.coeficienteId ? { coeficienteId: fx.coeficienteId } : {}),
+    },
+  });
 }
 
 /**
@@ -86,7 +110,11 @@ export async function linkInvoiceToObligation(
 
   const candidates = await prisma.expenseObligation.findMany({
     where: { periodId: invoice.periodId, status: "PENDING" },
-    include: { fixedExpense: { select: { providerId: true, lspServiceId: true, kind: true } } },
+    include: {
+      fixedExpense: {
+        select: { providerId: true, lspServiceId: true, kind: true, rubroId: true, coeficienteId: true },
+      },
+    },
     orderBy: { createdAt: "asc" },
   });
 
@@ -102,6 +130,7 @@ export async function linkInvoiceToObligation(
     where: { id: target.id },
     data: { status: "RECEIVED", invoiceId: invoice.id },
   });
+  await copyLabelsToInvoice(prisma, invoice.id, target.fixedExpense);
   return true;
 }
 
@@ -178,7 +207,11 @@ export async function syncObligationsForClient(
 
   const fixedExpenses = await prisma.fixedExpense.findMany({
     where: { consortiumId: { in: consortiumIds }, active: true },
-    select: { id: true, consortiumId: true, providerId: true, lspServiceId: true, kind: true },
+    select: {
+      id: true, consortiumId: true, providerId: true, lspServiceId: true, kind: true,
+      // Etiqueta que hereda la boleta al vincularse retroactivamente (spec 2026-09-24).
+      rubroId: true, coeficienteId: true,
+    },
   });
 
   const existing = await prisma.expenseObligation.findMany({
@@ -254,6 +287,7 @@ export async function syncObligationsForClient(
       where: { id: ob.id },
       data: { status: "RECEIVED", invoiceId: match.id },
     });
+    await copyLabelsToInvoice(prisma, match.id, fx);
     takenInvoiceIds.add(match.id);
     linked++;
   }
