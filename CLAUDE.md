@@ -792,7 +792,9 @@ el **servicio `db-backup`** de `docker-compose.yml` (5º servicio, imagen `postg
   `actions/checkout` limpia en cada corrida, y un `./backups` relativo se perdería.
 - Valida cada backup (`pg_restore --list`, mínimo de tablas con datos). Escribe a `.partial` y sólo
   renombra si pasó la validación: nunca queda un archivo a medias con nombre de backup.
-- Backup manual en el momento: `docker compose exec db-backup bash /tmp/db-backup.sh now`.
+- Backup manual en el momento: `npm run db:backup`.
+- En el deploy se levanta en un **paso aparte y best-effort**: si no arranca, queda un warning en
+  GitHub y la app sigue arriba (el 2026-09-25 un único `up` dejó todo caído, ver decisiones).
 
 **Restaurar** (lo hace el owner, nunca Claude; **pisa los datos actuales**):
 ```powershell

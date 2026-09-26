@@ -19,6 +19,9 @@
   de obligaciones agrupada por rubro con las columnas de coeficiente.
 
 ### Fixed
+- **El deploy dejaba producción caída si `db-backup` no levantaba (2026-09-26).** Un único
+  `compose up` para los 5 servicios: al colgarse la creación de `db-backup` ninguno arrancó (~16 h
+  caído). Ahora la app sube en su propio paso y `db-backup` va aparte, sin poder frenar el deploy.
 - **`notIn: []` no borraba nada (2026-09-24).** Destildar todos los rubros o coeficientes de un
   edificio dejaba las asignaciones intactas: en Prisma, `notIn: []` matchea cero filas, no todas.
   Helpers `excludeAssigned` / `orphanedBy` con tests del caso vacío.

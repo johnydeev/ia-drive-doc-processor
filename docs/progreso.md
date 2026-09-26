@@ -32,10 +32,14 @@ VEP, y el LSD abierto en una boleta por empleado.
 
 **Estado:** base restaurada y verificada (backup Supabase del 24/09 13:37 UTC). Primer backup propio OK
 (25/09 09:40, 0,9 MB, 22 tablas). El backup pasó a un servicio `db-backup` de docker-compose, validado
-offline (sintaxis, compose); su primer arranque lo hace el owner. Detalle en `docs/decisiones.md`.
+offline (sintaxis, compose). **Su primer deploy (run #159, 25/09 16:13) dejó producción caída ~16 h**:
+el `up` único se colgó creando `db-backup` y ningún contenedor arrancó. Levantados a mano el 26/09
+08:46; `db-backup` hizo su backup al arrancar. `ci.yml` ya separa los pasos (sin commitear).
+Detalle en `docs/decisiones.md`.
 
 **Pendiente, en orden:**
-1. Owner: `BACKUP_HOST_DIR` en el `.env` local y en el secret `PROD_ENV_FILE`; levantar `db-backup`.
+1. ~~`BACKUP_HOST_DIR` + levantar `db-backup`~~ **hecho** (26/09): corre y hace backup a `backups/`. El deploy
+   ahora lo sube en un paso aparte que no puede tirar la app (ver `docs/decisiones.md` 2026-09-26).
 2. Owner: volver Supabase a Free una vez que haya un backup propio (el resto del mes queda como crédito).
 3. Separar `.env.production` (contenedores) del `.env` de desarrollo + reglas `deny` en
    `.claude/settings.json` + conector MCP de Supabase en sólo lectura.

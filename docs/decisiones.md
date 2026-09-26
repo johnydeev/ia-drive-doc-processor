@@ -4,6 +4,28 @@ Registro de decisiones tomadas ante problemas reales encontrados en producción.
 
 ---
 
+## 2026-09-26 — El servicio de backup no puede frenar el deploy
+
+**Problema.** Primer deploy con `db-backup` (run #159, 2026-09-25 16:13): el `docker compose up -d
+--force-recreate` recreó los 4 contenedores de la app y se colgó ~5 min creando el de `db-backup`,
+hasta cortar con `error during connect … EOF` (el mismo corte intermitente de Docker Desktop que se
+vio al crear contenedores con bind mounts). Como era **un solo `up` para los 5 servicios**, ninguno
+arrancó: todos quedaron en `Created` y **producción estuvo caída ~16 h** (login devolvía HTML de
+Cloudflare → `Unexpected token '<'`). Se levantaron a mano desde Docker Desktop; `db-backup`
+arrancó bien e hizo su backup.
+
+**Decisión.** Dos pasos en el job `deploy`: `up -d --force-recreate web worker scheduler tunnel`
+(obligatorio, como antes) y después `up -d db-backup` + `restart` **best-effort**: si falla, deja un
+`::warning::` y el deploy sigue. Sin `--force-recreate` para `db-backup` (crearlo es lo que falla); el
+`restart` le hace releer el script actualizado.
+
+**Alternativas descartadas.** Sacar `db-backup` del compose: se pierde el backup automático, y el
+servicio en sí funciona.
+
+**Impacto.** `.github/workflows/ci.yml`.
+
+---
+
 ## 2026-09-24/25 — Incidente: la base de producción se vació; backups diarios propios
 
 **Problema.** Durante la revisión de rubros y coeficientes, Claude corrió

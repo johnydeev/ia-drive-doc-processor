@@ -207,8 +207,24 @@ jobs:
           Invoke-Step "prisma migrate deploy" {
             docker compose -p ia-drive-doc-processor run --rm web npx prisma migrate deploy
           }
-          Invoke-Step "docker compose up" {
-            docker compose -p ia-drive-doc-processor up -d --force-recreate
+          # Sólo la app. db-backup va aparte (abajo): el 2026-09-25 crear su
+          # contenedor se colgó 5 min y cortó con EOF, y como el `up` era uno solo
+          # para los 5 servicios, dejó TODOS en "Created" sin arrancar → producción
+          # caída. La app nunca más depende de que el backup levante.
+          Invoke-Step "docker compose up (app)" {
+            docker compose -p ia-drive-doc-processor up -d --force-recreate web worker scheduler tunnel
+          }
+          # Backup diario: best-effort, NO frena el deploy. Sin --force-recreate:
+          # compose sólo lo recrea si cambió su config (crearlo es lo que falla).
+          # El restart re-lee scripts/db-backup.sh, que el checkout pudo actualizar.
+          Write-Host "==> docker compose up (db-backup, best-effort)"
+          docker compose -p ia-drive-doc-processor up -d db-backup
+          if ($LASTEXITCODE -eq 0) {
+            docker compose -p ia-drive-doc-processor restart db-backup
+          }
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "::warning::db-backup no levantó (exit $LASTEXITCODE). La app está arriba; revisar el servicio de backup a mano."
+            $global:LASTEXITCODE = 0
           }
           # Limpieza posterior: ahora que los contenedores corren la imagen nueva, la
           # anterior quedó libre. Mismo filtro de 7 días para conservar el margen de
