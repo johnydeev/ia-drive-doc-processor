@@ -4,6 +4,33 @@ Registro de decisiones tomadas ante problemas reales encontrados en producción.
 
 ---
 
+## 2026-09-26 — Simulacro de restauración: los backups sirven, y el procedimiento cambió
+
+**Problema.** Antes de volver Supabase a Free había que probar que los backups propios restauran
+de verdad. Un backup nunca restaurado no está probado.
+
+**Qué se hizo** (todo local, salvo lecturas en producción autorizadas por el owner):
+1. `db_2026-09-26_0846.dump` restaurado en un `postgres:17` temporal (sin tocar producción).
+2. Conteo de filas de las 22 tablas contra producción, dentro de una transacción `READ ONLY`
+   (`transaction_read_only = on`): **idénticas** (49 consorcios, 757 gastos fijos, 761 obligaciones,
+   1317 boletas, 44 migraciones…).
+3. Huella de contenido — `md5` de `id || updatedAt` de las 10 tablas principales — de los dos
+   lados: **idénticas**.
+4. Restaurar **encima** de datos existentes con `--clean` (borrando pagos y renombrando consorcios
+   a propósito): volvió todo al estado del backup.
+
+**Hallazgos que cambiaron el procedimiento.**
+- El dump incluye `CREATE SCHEMA public`. Restaurar sin filtrar falla (`schema "public" already
+  exists`) y con `--clean` haría `DROP SCHEMA public`, que en Supabase borra sus permisos. Se filtra
+  con `pg_restore -l | grep -v " SCHEMA - public " > lista` + `-L lista`.
+- Docker Desktop cuelga la **creación** de contenedores con bind mounts de Windows (mismo `EOF` del
+  deploy #159), y a veces deja el contenedor en `Created` sin arrancar: `docker start` lo destraba.
+  Para el simulacro se usa `docker cp` en lugar de montar la carpeta.
+
+**Impacto.** `CLAUDE.md` (sección "Backups de la base": procedimientos total y parcial).
+
+---
+
 ## 2026-09-26 — El servicio de backup no puede frenar el deploy
 
 **Problema.** Primer deploy con `db-backup` (run #159, 2026-09-25 16:13): el `docker compose up -d

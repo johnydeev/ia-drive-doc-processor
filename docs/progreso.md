@@ -40,7 +40,8 @@ Detalle en `docs/decisiones.md`.
 **Pendiente, en orden:**
 1. ~~`BACKUP_HOST_DIR` + levantar `db-backup`~~ **hecho** (26/09): corre y hace backup a `backups/`. El deploy
    ahora lo sube en un paso aparte que no puede tirar la app (ver `docs/decisiones.md` 2026-09-26).
-2. Owner: volver Supabase a Free una vez que haya un backup propio (el resto del mes queda como crédito).
+2. Owner: volver Supabase a Free. **Desbloqueado** (26/09): simulacro de restauración OK — conteos y
+   huellas md5 idénticos a producción, y restauración con `--clean` sobre datos probada.
 3. Separar `.env.production` (contenedores) del `.env` de desarrollo + reglas `deny` en
    `.claude/settings.json` + conector MCP de Supabase en sólo lectura.
 4. Retomar las correcciones de la revisión de rubros y coeficientes (abajo): `@@index` de

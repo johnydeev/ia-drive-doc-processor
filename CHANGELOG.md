@@ -19,6 +19,9 @@
   de obligaciones agrupada por rubro con las columnas de coeficiente.
 
 ### Fixed
+- **Procedimiento de restauración corregido y probado (2026-09-26).** Simulacro local: el backup
+  coincide con producción (22 tablas, conteos y md5 idénticos). El comando documentado habría hecho
+  `DROP SCHEMA public` en Supabase; ahora filtra esa entrada (`pg_restore -l | grep -v` + `-L`).
 - **El deploy dejaba producción caída si `db-backup` no levantaba (2026-09-26).** Un único
   `compose up` para los 5 servicios: al colgarse la creación de `db-backup` ninguno arrancó (~16 h
   caído). Ahora la app sube en su propio paso y `db-backup` va aparte, sin poder frenar el deploy.

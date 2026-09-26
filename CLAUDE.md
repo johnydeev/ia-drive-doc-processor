@@ -796,12 +796,28 @@ el **servicio `db-backup`** de `docker-compose.yml` (5º servicio, imagen `postg
 - En el deploy se levanta en un **paso aparte y best-effort**: si no arranca, queda un warning en
   GitHub y la app sigue arriba (el 2026-09-25 un único `up` dejó todo caído, ver decisiones).
 
-**Restaurar** (lo hace el owner, nunca Claude; **pisa los datos actuales**):
+**Restaurar — borrado TOTAL** (lo hace el owner, nunca Claude; **reemplaza los datos actuales por
+los del backup**). Probado en simulacro el 2026-09-26 (ver `docs/decisiones.md`):
 ```powershell
-docker compose stop worker scheduler
-docker compose exec db-backup bash -c 'pg_restore --dbname "${DIRECT_URL%%\?*}" --clean --if-exists --no-owner --no-privileges --schema=public /backups/db_<fecha>.dump'
-docker compose start worker scheduler
+docker compose stop web worker scheduler
+npm run db:backup
+docker compose exec db-backup bash -c 'pg_restore -l /backups/db_<fecha>.dump | grep -v " SCHEMA - public " > /tmp/lista.txt && pg_restore --dbname "${DIRECT_URL%%\?*}" --clean --if-exists --no-owner --no-privileges --single-transaction -L /tmp/lista.txt /backups/db_<fecha>.dump'
+npx prisma migrate status
+docker compose start web worker scheduler
 ```
+- `npm run db:backup` antes: foto del estado roto, por si hay que volver atrás (si la base está
+  vacía falla la validación y no pasa nada: seguir).
+- **El filtro `grep -v " SCHEMA - public "` es obligatorio**: el dump trae `CREATE SCHEMA public`, y
+  con `--clean` pg_restore haría `DROP SCHEMA public`, que en Supabase se lleva los permisos que
+  Supabase le pone a ese schema. Sin `--clean` falla con `schema "public" already exists`.
+- `--single-transaction`: si algo falla, no se aplica nada.
+- Si `migrate status` marca pendientes (backup anterior a una migración): `npm run db:migrate`.
+
+**Restaurar — borrado PARCIAL** (una tabla, algunas filas): **no** usar el comando de arriba, pisaría
+lo cargado después del backup. Restaurar el dump en un Postgres temporal local, identificar lo que
+falta y copiar sólo eso a producción con `INSERT … ON CONFLICT DO NOTHING` (SQL puntual según el caso;
+cuidado con los borrados en cascada). Simulacro de referencia: contenedor `postgres:17` **sin bind
+mount** (`docker cp` del dump adentro) — los bind mounts de Windows cuelgan la creación en Docker Desktop.
 
 ## Variables de entorno requeridas
 ```env
