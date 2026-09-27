@@ -3,6 +3,20 @@
 ## [Unreleased]
 
 ### Added
+- **Rubros y coeficientes, parte 2: hoja de obligaciones agrupada (2026-09-27, sin migración).**
+  La hoja ahora agrupa por rubro (`groupByRubro`, fuente única para pantalla y PDF, reemplaza
+  `compareRows`/`GROUP_RANK`) con una columna por coeficiente asignado al edificio (sin `$`, edificio
+  sin catálogo usa `MONTO`), "Sin rubro" plegado por defecto y bloque de desactivados aparte. La
+  etiqueta de una fila es la de su boleta del mes si la tiene, sino la del gasto fijo. Nuevo
+  `PATCH /api/client/labels` corrige boleta + gasto fijo en una transacción (o sólo la boleta, para
+  las eventuales), validado con `validateLabels` (`src/services/labelAssignment.service.ts`,
+  compartido con el PATCH de gasto fijo) vía el nuevo editor `LabelEditor.tsx`. El PDF del banco
+  (`sheetPdf.ts`) calcula anchos de columna según la cantidad de coeficientes y omite secciones
+  vacías. TÉCNICO O GESTOR y TEL. CONTACTO se esconden en pantalla en edificios con 4 o más columnas
+  de coeficiente para darle ese lugar a PROVEEDOR/SERVICIO en notebook 1366px, y siguen apareciendo al
+  imprimir (D14). Detalle de las 14 decisiones de diseño (D1–D14) en `docs/decisiones.md`. Verificación:
+  1148 tests (antes 1104), typecheck/lint limpios, `build:jobs` y `next build` OK. **Falta el smoke
+  del owner en producción** sobre "Edificio de Prueba".
 - **Backup físico diario de la base (2026-09-25).** Servicio `db-backup` en docker-compose (`scripts/db-backup.sh`): `pg_dump` (
   `postgres:17`) diario a las 03:00 ART a `backups/` del proyecto (`BACKUP_HOST_DIR`), con validación y retención de 30 días. Nace del
   incidente del 24/09, cuando un `prisma migrate diff` con la base de producción como shadow la vació

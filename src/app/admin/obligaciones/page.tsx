@@ -29,7 +29,7 @@ export default function ObligacionesPage() {
     payload, sheets, month, monthLabel, goToPreviousMonth, goToNextMonth,
     isLoading, error, syncWarning, reload,
     addFixedExpenses, toggleFixedExpense, setObligationStatus,
-    toggleCarryOver, undoCarryOver, setLateAmount,
+    toggleCarryOver, undoCarryOver, setLateAmount, setLabels,
   } = useObligationsOverview();
 
   // Traslados marcados: se ejecutan por tandas DESPUÉS de cerrar el período.
@@ -192,6 +192,8 @@ export default function ObligacionesPage() {
                 onToggleCarryOver={toggleCarryOver}
                 onUndoCarryOver={undoCarryOver}
                 onSetLateAmount={setLateAmount}
+                onSetLabels={setLabels}
+                hideEmptySections={query.trim() !== ""}
                 open={openSheetId === sheet.consortiumId}
                 onToggleOpen={(id) => setOpenSheetId((prev) => (prev === id ? null : id))}
               />

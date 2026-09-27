@@ -69,8 +69,9 @@ src/
 │   │       │   ├── bulk-delete/       # POST borrado masivo (tope 10 por request)
 │   │       │   └── bulk-move-period/  # POST mover al período siguiente (+ preview, tope 10 por request)
 │   │       ├── obligations/   # PATCH [id]: omitir/reactivar obligación de gasto fijo
-│   │       │   ├── overview/  # GET: todo lo que necesita la vista global (4 queries)
+│   │       │   ├── overview/  # GET: todo lo que necesita la vista global (4 queries) + rubros/coeficientes
 │   │       │   └── sync/      # POST: sincroniza obligaciones de TODOS los períodos activos (set-based)
+│   │       ├── labels/        # PATCH: rubro/coeficiente de un gasto fijo + su boleta del mes (o sólo boleta)
 │   │       ├── periods/
 │   │       │   ├── [id]/obligations/  # GET + POST generar obligaciones del período
 │   │       │   └── close-all/ # preview (GET) + execute (POST) cierre general
@@ -82,7 +83,11 @@ src/
 │       ├── consortiums/       # UI principal de gestión
 │       ├── boletas/           # UI vista global "Boletas entrantes" (borrado/move masivo)
 │       ├── obligaciones/      # UI vista global de gastos fijos por edificio
-│       │                      # + subfilas de boletas adicionales y bloque "Otras boletas del mes" (2026-09-18)
+│       │                      # + agrupado por rubro (secciones + columna por coeficiente asignado al
+│       │                      #   edificio, "Sin rubro" colapsable, bloque de desactivados aparte;
+│       │                      #   `sheetModel.groupByRubro`, 2026-09-27, fuente única con el PDF)
+│       │                      # + editor de rubro/coeficiente por fila (LabelEditor, PATCH /api/client/labels)
+│       │                      # + subfilas de boletas adicionales y distintivo `eventual` en las sueltas
 │       │                      # + Descargar PDF (jsPDF, import dinámico) e Imprimir (@media print)
 │       │                      # + vista previa del PDF por fila (src/components/PdfPreviewModal.tsx)
 │       ├── clients/
@@ -151,7 +156,9 @@ Client          → Tenant. Roles: ADMIN / CLIENT / VIEWER. consortiumsEnabled (
   │                           Una obligación = UNA boleta principal (la primera que llega). Las demás del
   │                           mismo proveedor y las de proveedores sin gasto fijo se DERIVAN en lectura
   │                           (`Invoice` con `obligation: null`) y la hoja las muestra como adicionales
-  │                           `↳ 2ª boleta` / bloque "Otras boletas del mes" (spec 2026-09-18)
+  │                           `↳ 2ª boleta` / boleta eventual con distintivo `eventual` en su sección
+  │                           de rubro (spec 2026-09-18; el bloque aparte "Otras boletas del mes" se
+  │                           disolvió en los rubros el 2026-09-27, ver D6 en `docs/decisiones.md`)
   ├── ConsortiumProvider → Relación N:M consorcio↔proveedor. Unique (consortiumId, providerId)
   ├── ProcessingJob → Cola de jobs (PENDING/PROCESSING/COMPLETED/FAILED)
   │                    diagnosticRunId? → agrupa los jobs de una corrida selectiva
@@ -659,12 +666,15 @@ ficticio **"Edificio de Prueba"** en la cartera de MorinigoAdm.
       la boleta la hereda al vincularse a su obligación. Tres capas: catálogo del cliente →
       `ConsortiumRubro`/`ConsortiumCoeficiente` (qué usa cada edificio) → `FixedExpense.rubroId` /
       `.coeficienteId`. ABM en el sidebar y casillas en la Configuración del consorcio.
-      **Parte 2 pendiente**: la hoja de obligaciones agrupada por rubro con las columnas de
-      coeficiente (se elimina `compareRows`/`GROUP_RANK`, "Otras boletas del mes" se disuelve en los
-      rubros, aparece un bloque `Sin rubro`, el PDF sigue a la hoja). Necesita un PATCH de `Invoice`
-      para el rubro/coeficiente de una boleta suelta — hoy el único es `late-amount`.
-      **También pendiente**: `scripts/seed-rubros.ts`, la carga inicial de los ~725 gastos fijos con
-      el mapeo sacado de las liquidaciones de expensas.
+- [x] **Rubro y Coeficiente, parte 2: hoja de obligaciones agrupada (2026-09-27)** — secciones por
+      rubro con una columna por coeficiente asignado al edificio (`sheetModel.groupByRubro`, fuente
+      única con el PDF, reemplaza `compareRows`/`GROUP_RANK`); "Otras boletas del mes" se disolvió en
+      los rubros con distintivo `eventual`; bloque `Sin rubro` colapsable; `PATCH /api/client/labels`
+      para el rubro/coeficiente de una boleta suelta o del gasto fijo + boleta juntos. **Pendiente el
+      smoke del owner en producción** (ver `docs/progreso.md`).
+      **Sigue pendiente**: `scripts/seed-rubros.ts` (la carga de los ~725 gastos fijos se hizo con
+      scripts descartables, no con éste); los 45 gastos fijos sin rubro y 70 "sin evidencia"; si
+      `tipoGasto = EXTRAORDINARIO` debería caer solo en la columna `EXTRA`.
 - [ ] **UI de gestión de LspServices desde el panel** (hoy solo via archivo ALTA). **Subió de
       prioridad el 2026-08-18**: la tabla estuvo VACÍA hasta que se cargó el ALTA, y como el
       fast-path por número de cliente es terminal, mandó a Sin Asignar toda boleta de servicio del

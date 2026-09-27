@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { checkAssignable, excludeAssigned, orphanedBy } from "./rubroAssignment";
+import { checkAssignable, excludeAssigned, labelData, orphanedBy } from "./rubroAssignment";
 
 describe("checkAssignable", () => {
   it("acepta un id que el edificio tiene asignado", () => {
@@ -55,5 +55,17 @@ describe("orphanedBy", () => {
 
   it("sin ids, todos los etiquetados quedan huérfanos", () => {
     expect(orphanedBy([])).toEqual({ not: null });
+  });
+});
+
+describe("labelData", () => {
+  it("sólo escribe los campos que vinieron; null desasigna", () => {
+    expect(labelData({ rubroId: "r3" })).toEqual({ rubroId: "r3" });
+    expect(labelData({ coeficienteId: null })).toEqual({ coeficienteId: null });
+    expect(labelData({ rubroId: "r3", coeficienteId: "cA" })).toEqual({ rubroId: "r3", coeficienteId: "cA" });
+  });
+
+  it("sin campos no escribe nada", () => {
+    expect(labelData({})).toEqual({});
   });
 });

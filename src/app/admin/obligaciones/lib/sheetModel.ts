@@ -1,22 +1,34 @@
 /**
  * Modelo del documento "hoja de obligaciones", como datos puros.
  *
- * Es la ÚNICA fuente que consumen la pantalla y (en la Parte 2) el generador de
- * PDF: si un edificio deja de aparecer, deja de aparecer en los dos lados a la
- * vez. Sin React, sin fetch — se testea sin montar nada.
+ * Es la ÚNICA fuente que consumen la pantalla y el generador de PDF: si un
+ * edificio deja de aparecer, deja de aparecer en los dos lados a la vez. Sin
+ * React, sin fetch — se testea sin montar nada.
  */
 import { obligationMatchesInvoice } from "@/lib/fixedExpense";
 import { parsePaymentAliases } from "@/lib/paymentAliases";
 
 export type ObligationStatus = "PENDING" | "RECEIVED" | "SKIPPED" | "NOT_RECEIVED";
 /**
- * Grupo de una fila, para el orden de la hoja: los sueldos primero, después los
- * servicios (número de cliente), después el resto. Sale del `providerType` del
- * proveedor o de que la fila sea un LSP.
+ * Grupo de una fila. Desde `groupByRubro` (parte 2) ya no ordena la hoja —eso
+ * lo hace la sección de rubro—; hoy sólo se usa para que `facturasLabel`
+ * rotule "Empleado" en la columna FACTURA/NRO CLIENTE de un sueldo. Sale del
+ * `providerType` del proveedor o de que la fila sea un LSP.
  */
 export type RowGroup = "EMPLEADO" | "SERVICIO" | "PROVEEDOR";
 /** `NO_PERIOD` = el edificio no tiene período activo, así que no hay obligación posible. */
 export type SheetStatus = ObligationStatus | "NO_PERIOD";
+
+/** Rubro que usa el edificio: el número y el nombre con los que se titula la sección. */
+export type RubroInfo = { id: string; order: number | null; name: string };
+/**
+ * Columna de importe de la hoja (spec 2026-09-24). `id: null` = columna única de
+ * respaldo para un edificio sin coeficientes asignados (decisión D9).
+ */
+export type CoefColumn = { id: string | null; code: string };
+export const FALLBACK_COLUMN: CoefColumn = { id: null, code: "MONTO" };
+export const NO_RUBRO_TITLE = "SIN RUBRO";
+export const GRAND_TOTAL_LABEL = "TOTAL DEL MES";
 
 export type OverviewFixedExpense = {
   id: string;
@@ -26,6 +38,9 @@ export type OverviewFixedExpense = {
   /** FACTURA o RETENCION: la retención del proveedor es un gasto fijo aparte (spec 2026-09-17). */
   kind: "FACTURA" | "RETENCION";
   active: boolean;
+  /** Etiqueta del gasto fijo. Opcional: payloads viejos / fixtures de test no la traen. */
+  rubroId?: string | null;
+  coeficienteId?: string | null;
   obligation: {
     id: string;
     status: ObligationStatus;
@@ -37,6 +52,9 @@ export type OverviewFixedExpense = {
     carriedIn: boolean;
     /** Link de Drive del PDF de la boleta, si llegó. */
     invoiceUrl: string | null;
+    /** Etiqueta propia de la boleta vinculada; manda sobre la del gasto fijo (D4). */
+    invoiceRubroId?: string | null;
+    invoiceCoeficienteId?: string | null;
   } | null;
 };
 
@@ -87,6 +105,8 @@ export type OverviewLooseInvoice = {
   carryOverRequested: boolean;
   createdAt: string;
   carriedOutTo: string | null;
+  rubroId?: string | null;
+  coeficienteId?: string | null;
 };
 
 export type OverviewConsortium = {
@@ -103,6 +123,9 @@ export type OverviewConsortium = {
   fixedExpenses: OverviewFixedExpense[];
   carried?: OverviewCarried[];
   looseInvoices?: OverviewLooseInvoice[];
+  /** Rubros y coeficientes que usa el edificio. Ausentes → sin secciones / columna MONTO. */
+  rubros?: RubroInfo[];
+  coeficientes?: Array<{ id: string; code: string }>;
 };
 
 export type OverviewPayload = {
@@ -139,8 +162,9 @@ export type ExtraRow = {
 
 /**
  * Boleta de un proveedor que NO es gasto fijo del edificio (ticket, trabajo
- * eventual, razón social hermana de un proveedor cargado). Bloque propio,
- * "Otras boletas del mes".
+ * eventual, razón social hermana de un proveedor cargado). No tiene bloque
+ * propio: `groupByRubro` la mete en su sección de rubro con el distintivo
+ * "eventual" (D6).
  */
 export type OtherRow = {
   invoiceId: string;
@@ -153,6 +177,9 @@ export type OtherRow = {
   carryOverRequested: boolean;
   carriedOutTo: string | null;
   group: RowGroup;
+  /** Rubro y coeficiente que valen para esta fila (D4). Ausentes = sin etiqueta. */
+  rubroId?: string | null;
+  coeficienteId?: string | null;
 };
 
 export type SheetRow = {
@@ -188,6 +215,9 @@ export type SheetRow = {
   /** Las demás boletas del mes de este mismo gasto fijo, en orden de llegada. */
   extras: ExtraRow[];
   group: RowGroup;
+  /** Rubro y coeficiente que valen para esta fila (D4). Ausentes = sin etiqueta. */
+  rubroId?: string | null;
+  coeficienteId?: string | null;
 };
 
 /**
@@ -228,8 +258,28 @@ export type SheetData = {
   rows: SheetRow[];
   /** Bloque aparte, debajo de la tabla de gastos fijos. */
   carried: CarriedRow[];
-  /** Bloque "Otras boletas del mes": proveedores que no son gasto fijo del edificio. */
+  /** Boletas eventuales: proveedores que no son gasto fijo del edificio. `groupByRubro`
+   * las reparte en su sección de rubro (D6), no forman un bloque propio. */
   others: OtherRow[];
+  /** Rubros del edificio en orden de impresión: son las secciones. */
+  rubros: RubroInfo[];
+  /** Columnas de importe, por código (A, B, C, EXTRA). Nunca vacío: ver FALLBACK_COLUMN. */
+  coefColumns: CoefColumn[];
+};
+
+/** Lo que va dentro de una sección: una fila del padrón o una boleta eventual (D6). */
+export type SectionItem = { kind: "row"; row: SheetRow } | { kind: "other"; other: OtherRow };
+
+export type RubroSection = {
+  /** null = "Sin rubro". */
+  rubroId: string | null;
+  /** "3 SERVICIOS PÚBLICOS" */
+  title: string;
+  /** "TOTAL RUBRO 3" — como en la liquidación. */
+  totalLabel: string;
+  items: SectionItem[];
+  /** Un total por columna, en el orden de `coefColumns`. */
+  totals: number[];
 };
 
 /** Etiqueta del grupo de edificios sin banco asignado. Va último en el orden. */
@@ -243,33 +293,9 @@ function norm(value: string): string {
     .trim();
 }
 
-/** Rango del grupo para ordenar: EMPLEADO < SERVICIO < PROVEEDOR. */
-const GROUP_RANK: Record<RowGroup, number> = { EMPLEADO: 0, SERVICIO: 1, PROVEEDOR: 2 };
-
 function groupOf(isLsp: boolean, providerType: RowGroup | undefined): RowGroup {
   if (isLsp) return "SERVICIO";
   return providerType === "EMPLEADO" ? "EMPLEADO" : "PROVEEDOR";
-}
-
-/**
- * Orden de la hoja, en dos niveles (pedido del owner, 2026-09-18):
- * 1. Las filas CON boleta (hay monto que pagar) van arriba de las que hay que
- *    pedir. Las salteadas debajo de todo lo activo; los desactivados al fondo
- *    (no son parte de lo que hay que pagar, y desactivar es también el camino
- *    para un alta cargada por error).
- * 2. Dentro de cada nivel: empleados → servicios → proveedores, y alfabético.
- */
-function compareRows(a: SheetRow, b: SheetRow): number {
-  const tier = (r: SheetRow) => {
-    if (!r.active) return 3;
-    if (r.status === "SKIPPED") return 2;
-    return r.invoiceId || r.monto != null ? 0 : 1;
-  };
-  const byTier = tier(a) - tier(b);
-  if (byTier !== 0) return byTier;
-  const byGroup = GROUP_RANK[a.group] - GROUP_RANK[b.group];
-  if (byGroup !== 0) return byGroup;
-  return a.concepto.localeCompare(b.concepto, "es");
 }
 
 /** Tope de caracteres del nro. de cliente en pantalla; el completo va en el tooltip y en el PDF. */
@@ -304,6 +330,41 @@ export function firstMatchName(matchNames: string | null | undefined): string | 
   return first ?? null;
 }
 
+/** Número ascendente; los rubros sin número al final, alfabéticos. */
+function sortRubros(rubros: RubroInfo[]): RubroInfo[] {
+  return [...rubros].sort((a, b) => {
+    if (a.order == null && b.order != null) return 1;
+    if (a.order != null && b.order == null) return -1;
+    return (a.order ?? 0) - (b.order ?? 0) || a.name.localeCompare(b.name, "es");
+  });
+}
+
+/** Columnas por código (A, B, C, EXTRA); sin coeficientes, la columna única MONTO. */
+function toColumns(coefs: Array<{ id: string; code: string }>): CoefColumn[] {
+  if (coefs.length === 0) return [FALLBACK_COLUMN];
+  return [...coefs]
+    .sort((a, b) => a.code.localeCompare(b.code, "es", { numeric: true }))
+    .map((k) => ({ id: k.id, code: k.code }));
+}
+
+/** En qué columna va el importe: la de su coeficiente, o la primera si no tiene (spec). */
+export function columnIndex(columns: CoefColumn[], coeficienteId: string | null | undefined): number {
+  const i = columns.findIndex((c) => c.id !== null && c.id === coeficienteId);
+  return i >= 0 ? i : 0;
+}
+
+export function rubroTitle(r: RubroInfo): string {
+  return r.order != null ? `${r.order} ${r.name}` : r.name;
+}
+
+/** Marca de la celda de una fila pendiente (D12): dónde va a caer el monto. */
+export const PENDING_MARK = "—";
+
+/** ¿La fila lleva la marca de pendiente en su columna? Fuente única de pantalla y PDF. */
+export function showsPendingMark(row: SheetRow): boolean {
+  return row.active && row.status === "PENDING" && !row.invoiceId && row.monto == null;
+}
+
 export function buildSheets(payload: OverviewPayload): SheetData[] {
   const providerById = new Map(payload.providers.map((p) => [p.id, p]));
 
@@ -312,7 +373,8 @@ export function buildSheets(payload: OverviewPayload): SheetData[] {
 
     // Boletas del mes que no ocupan ninguna obligación: si el edificio tiene un
     // gasto fijo ACTIVO que matchee (mismo criterio que el pipeline), cuelgan de
-    // esa fila como adicionales; si no, van a "Otras boletas del mes". Un gasto
+    // esa fila como adicionales; si no, van como eventual a su sección de rubro
+    // (`groupByRubro`, D6). Un gasto
     // fijo desactivado no cuenta: su tabla está plegada y no se imprime, y la
     // boleta hay que pagarla igual.
     const extrasByFx = new Map<string, ExtraRow[]>();
@@ -353,12 +415,13 @@ export function buildSheets(payload: OverviewPayload): SheetData[] {
           invoiceUrl: inv.invoiceUrl,
           carryOverRequested: inv.carryOverRequested,
           carriedOutTo: inv.carriedOutTo,
+          rubroId: inv.rubroId ?? null,
+          coeficienteId: inv.coeficienteId ?? null,
         });
       }
     }
-    others.sort(
-      (a, b) => GROUP_RANK[a.group] - GROUP_RANK[b.group] || a.concepto.localeCompare(b.concepto, "es")
-    );
+    // El orden de verdad lo pone `groupByRubro` dentro de cada sección.
+    others.sort((a, b) => a.concepto.localeCompare(b.concepto, "es"));
 
     const rows: SheetRow[] = c.fixedExpenses.map((fx) => {
       const lsp = fx.lspServiceId ? lspById.get(fx.lspServiceId) ?? null : null;
@@ -390,10 +453,12 @@ export function buildSheets(payload: OverviewPayload): SheetData[] {
         invoiceUrl: fx.obligation?.invoiceUrl ?? null,
         extras: extrasByFx.get(fx.id) ?? [],
         group: groupOf(Boolean(lsp), provider?.providerType),
+        rubroId: fx.obligation?.invoiceRubroId ?? fx.rubroId ?? null,
+        coeficienteId: fx.obligation?.invoiceCoeficienteId ?? fx.coeficienteId ?? null,
       };
     });
 
-    rows.sort(compareRows);
+    rows.sort((a, b) => a.concepto.localeCompare(b.concepto, "es"));
 
     // Lo que vino del mes anterior, alfabético.
     const carried: CarriedRow[] = [...(c.carried ?? [])]
@@ -424,6 +489,8 @@ export function buildSheets(payload: OverviewPayload): SheetData[] {
       rows,
       carried,
       others,
+      rubros: sortRubros(c.rubros ?? []),
+      coefColumns: toColumns(c.coeficientes ?? []),
     };
   });
 
@@ -515,4 +582,88 @@ export function filterSheets(sheets: SheetData[], query: string): SheetData[] {
     if (rows.length > 0 || others.length > 0) out.push({ ...sheet, rows, others });
   }
   return out;
+}
+
+/** Tramo dentro de la sección: con boleta (0), pendiente (1), salteada (2). Una eventual siempre trae boleta. */
+function itemTier(item: SectionItem): number {
+  if (item.kind === "other") return 0;
+  if (item.row.status === "SKIPPED") return 2;
+  return item.row.invoiceId || item.row.monto != null ? 0 : 1;
+}
+
+function itemConcepto(item: SectionItem): string {
+  return item.kind === "row" ? item.row.concepto : item.other.concepto;
+}
+
+/**
+ * La hoja en secciones de rubro, como la liquidación (spec 2026-09-24, Parte 2).
+ *
+ * - Una sección por rubro asignado al edificio, en su orden, aunque esté vacía:
+ *   es el checklist del mes (el PDF omite las vacías, decisión D3).
+ * - "Sin rubro" al final, sólo si tiene algo: lo que no tiene rubro y lo que tiene
+ *   uno que el edificio ya no usa.
+ * - Los desactivados no entran: viven en su bloque plegado.
+ * - Totales por columna de coeficiente; una fila sin coeficiente suma en la primera;
+ *   las adicionales en la columna de su madre (D7); lo que pasó a otro mes no suma.
+ *
+ * Pura: la consumen la pantalla y el PDF, así ven exactamente lo mismo.
+ */
+export function groupByRubro(sheet: SheetData): RubroSection[] {
+  const columns = sheet.coefColumns.length > 0 ? sheet.coefColumns : [FALLBACK_COLUMN];
+  const assigned = new Set(sheet.rubros.map((r) => r.id));
+  const buckets = new Map<string | null, SectionItem[]>();
+  const put = (rubroId: string | null | undefined, item: SectionItem) => {
+    const key = rubroId && assigned.has(rubroId) ? rubroId : null;
+    const list = buckets.get(key) ?? [];
+    list.push(item);
+    buckets.set(key, list);
+  };
+  for (const row of sheet.rows) if (row.active) put(row.rubroId, { kind: "row", row });
+  for (const other of sheet.others) put(other.rubroId, { kind: "other", other });
+
+  const sortItems = (items: SectionItem[]) =>
+    [...items].sort((a, b) => itemTier(a) - itemTier(b) || itemConcepto(a).localeCompare(itemConcepto(b), "es"));
+
+  const totalsOf = (items: SectionItem[]) => {
+    const totals = columns.map(() => 0);
+    for (const item of items) {
+      if (item.kind === "row") {
+        const col = columnIndex(columns, item.row.coeficienteId);
+        if (item.row.monto != null) totals[col] += item.row.monto;
+        for (const e of item.row.extras) if (!e.carriedOutTo && e.monto != null) totals[col] += e.monto;
+      } else if (!item.other.carriedOutTo && item.other.monto != null) {
+        totals[columnIndex(columns, item.other.coeficienteId)] += item.other.monto;
+      }
+    }
+    // Redondeo a centavos: evita el drift de punto flotante (0.1 + 0.2 !== 0.3).
+    return totals.map((t) => Math.round(t * 100) / 100);
+  };
+
+  const sections: RubroSection[] = sheet.rubros.map((r) => {
+    const items = sortItems(buckets.get(r.id) ?? []);
+    return {
+      rubroId: r.id,
+      title: rubroTitle(r),
+      totalLabel: r.order != null ? `TOTAL RUBRO ${r.order}` : `TOTAL ${r.name}`,
+      items,
+      totals: totalsOf(items),
+    };
+  });
+
+  const sinRubro = buckets.get(null) ?? [];
+  if (sinRubro.length > 0) {
+    const items = sortItems(sinRubro);
+    sections.push({
+      rubroId: null, title: NO_RUBRO_TITLE, totalLabel: `TOTAL ${NO_RUBRO_TITLE}`, items, totals: totalsOf(items),
+    });
+  }
+  return sections;
+}
+
+/** Total del mes, columna por columna. */
+export function grandTotals(sections: RubroSection[], columnCount: number): number[] {
+  const length = Math.max(1, columnCount, ...sections.map((s) => s.totals.length));
+  const totals = Array.from({ length }, () => 0);
+  for (const s of sections) s.totals.forEach((t, i) => { totals[i] += t; });
+  return totals.map((t) => Math.round(t * 100) / 100);
 }

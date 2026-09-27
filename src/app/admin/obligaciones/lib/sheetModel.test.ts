@@ -1,13 +1,22 @@
 import { describe, expect, it } from "vitest";
 import {
   buildSheets,
+  columnIndex,
   facturasLabel,
   filterSheets,
+  FALLBACK_COLUMN,
+  grandTotals,
+  groupByRubro,
   hasPrintableRows,
   isPrintableRow,
+  NO_RUBRO_TITLE,
+  PENDING_MARK,
   printableExtras,
   shortClientNumber,
+  showsPendingMark,
   toPrintableSheets,
+  type OverviewConsortium,
+  type OverviewFixedExpense,
   type OverviewLooseInvoice,
   type OverviewPayload,
 } from "./sheetModel";
@@ -75,31 +84,6 @@ describe("buildSheets", () => {
     const seguro = rows.find((r) => r.fixedExpenseId === "fx1")!;
     expect(edesur.facturas).toBe("4804882");
     expect(seguro.facturas).toBeNull();
-  });
-
-  it("ordena: con boleta arriba; después servicios antes que proveedores", () => {
-    const rows = buildSheets(payload)[0].rows;
-    expect(rows.map((r) => r.fixedExpenseId)).toEqual(["fx2", "fx1", "fx3"]);
-  });
-
-  it("manda los desactivados al final, aunque sean LSP", () => {
-    const conLspInactivo = {
-      ...payload,
-      consortiums: [
-        {
-          ...payload.consortiums[0],
-          fixedExpenses: [
-            // El LSP está desactivado: pierde su lugar de privilegio y va último.
-            { ...payload.consortiums[0].fixedExpenses[1], active: false },
-            payload.consortiums[0].fixedExpenses[0], // SEGURO, activo
-          ],
-        },
-      ],
-    };
-
-    const rows = buildSheets(conLspInactivo)[0].rows;
-    expect(rows.map((r) => r.fixedExpenseId)).toEqual(["fx1", "fx2"]);
-    expect(rows[rows.length - 1].active).toBe(false);
   });
 
   it("expone la URL del PDF de la boleta vinculada, y null si no llegó", () => {
@@ -441,6 +425,7 @@ describe("boletas adicionales y otras del mes", () => {
       invoiceId: "i5", facturas: null, concepto: "PLOMERO JUAN", fantasia: "JUAN", monto: 32000,
       aliasCbu: ["juan.plomero", "0000003100012345678901"], invoiceUrl: "https://d/5",
       carryOverRequested: false, carriedOutTo: null, group: "PROVEEDOR",
+      rubroId: null, coeficienteId: null,
     }]);
   });
 
@@ -542,7 +527,7 @@ describe("imprimibles con extras y otras", () => {
   });
 });
 
-describe("orden de la hoja: dos niveles", () => {
+describe("grupo de la fila", () => {
   const fx = (id: string, over: Partial<OverviewPayload["consortiums"][0]["fixedExpenses"][0]> = {}) => ({
     id, providerId: null, lspServiceId: null, description: null, kind: "FACTURA" as const, active: true,
     obligation: { id: `ob-${id}`, status: "PENDING" as const, amount: null, invoiceId: null,
@@ -577,16 +562,6 @@ describe("orden de la hoja: dos niveles", () => {
     }],
   };
 
-  it("1° con boleta, 2° empleados → servicios → proveedores, alfabético; sin boleta igual; salteadas y desactivadas al final", () => {
-    const ids = buildSheets(base)[0].rows.map((r) => r.fixedExpenseId);
-    expect(ids).toEqual([
-      "rec-emp", "rec-lsp", "rec-prov-a", "rec-prov-z",
-      "pend-emp", "pend-lsp", "pend-prov",
-      "skipped",
-      "inactivo",
-    ]);
-  });
-
   it("cada fila dice su grupo", () => {
     const rows = buildSheets(base)[0].rows;
     const g = (id: string) => rows.find((r) => r.fixedExpenseId === id)!.group;
@@ -597,30 +572,6 @@ describe("orden de la hoja: dos niveles", () => {
 
   it("un proveedor sin providerType cuenta como PROVEEDOR", () => {
     expect(buildSheets(payload)[0].rows.find((r) => r.fixedExpenseId === "fx1")!.group).toBe("PROVEEDOR");
-  });
-
-  it("'otras' también: empleados → servicios → proveedores, alfabético", () => {
-    const loose = (invoiceId: string, over: Partial<OverviewLooseInvoice>): OverviewLooseInvoice => ({
-      invoiceId, providerId: null, lspServiceId: null, docKind: "FACTURA", concepto: "X", matchNames: null,
-      facturas: null, aliasCbu: null, amount: 1, invoiceUrl: null, carryOverRequested: false,
-      createdAt: "2026-07-01T00:00:00.000Z", carriedOutTo: null, ...over,
-    });
-    const withOthers: OverviewPayload = {
-      ...base,
-      consortiums: [{
-        ...base.consortiums[0],
-        fixedExpenses: [],
-        looseInvoices: [
-          loose("z", { providerId: "prov-z", concepto: "ZETA SA" }),
-          loose("s", { providerId: "p9", lspServiceId: "l-otro", concepto: "EDESUR S.A.", facturas: "99" }),
-          loose("a", { providerId: "prov-a", concepto: "ALFA SRL" }),
-          loose("e", { providerId: "emp", concepto: "PEREZ JUAN" }),
-        ],
-      }],
-    };
-    const others = buildSheets(withOthers)[0].others;
-    expect(others.map((o) => o.invoiceId)).toEqual(["e", "s", "a", "z"]);
-    expect(others.map((o) => o.group)).toEqual(["EMPLEADO", "SERVICIO", "PROVEEDOR", "PROVEEDOR"]);
   });
 });
 
@@ -643,5 +594,189 @@ describe("facturasLabel", () => {
     expect(facturasLabel({ facturas: "4804882", group: "SERVICIO" })).toBe("4804882");
     expect(facturasLabel({ facturas: null, group: "SERVICIO" })).toBeNull();
     expect(facturasLabel({ facturas: null, group: "PROVEEDOR" })).toBeNull();
+  });
+});
+
+describe("agrupado por rubro (spec 2026-09-24, Parte 2)", () => {
+  type Ob = NonNullable<OverviewFixedExpense["obligation"]>;
+  const ob = (id: string, over: Partial<Ob> = {}): Ob => ({
+    id: `ob-${id}`, status: "PENDING", amount: null, invoiceId: null,
+    carryOverRequested: false, carriedIn: false, invoiceUrl: null, ...over,
+  });
+  const recibida = (id: string, amount: number, over: Partial<Ob> = {}): Ob =>
+    ob(id, { status: "RECEIVED", amount, invoiceId: `inv-${id}`, ...over });
+  const fx = (id: string, over: Partial<OverviewFixedExpense> = {}): OverviewFixedExpense => ({
+    id, providerId: null, lspServiceId: null, description: id.toUpperCase(), kind: "FACTURA",
+    active: true, rubroId: null, coeficienteId: null, obligation: ob(id), ...over,
+  });
+
+  const conRubros = (fixedExpenses: OverviewFixedExpense[], extra: Partial<OverviewConsortium> = {}): OverviewPayload => ({
+    ...payload,
+    providers: [],
+    consortiums: [{
+      ...payload.consortiums[0],
+      lspServices: [],
+      rubros: [
+        { id: "r4", order: 4, name: "ABONOS DE SERVICIOS" },
+        { id: "r3", order: 3, name: "SERVICIOS PÚBLICOS" },
+        { id: "rx", order: null, name: "VARIOS" },
+      ],
+      coeficientes: [{ id: "cB", code: "B" }, { id: "cA", code: "A" }],
+      fixedExpenses,
+      ...extra,
+    }],
+  });
+  const sheetOf = (p: OverviewPayload) => buildSheets(p)[0];
+
+  it("expone los rubros por número (los sin número al final) y las columnas por código", () => {
+    const s = sheetOf(conRubros([]));
+    expect(s.rubros.map((r) => r.id)).toEqual(["r3", "r4", "rx"]);
+    expect(s.coefColumns).toEqual([{ id: "cA", code: "A" }, { id: "cB", code: "B" }]);
+  });
+
+  it("sin coeficientes asignados usa la columna única MONTO", () => {
+    expect(sheetOf(conRubros([], { coeficientes: [] })).coefColumns).toEqual([FALLBACK_COLUMN]);
+    expect(FALLBACK_COLUMN.code).toBe("MONTO");
+  });
+
+  it("la etiqueta de la boleta manda; si no tiene, vale la del gasto fijo", () => {
+    const s = sheetOf(conRubros([
+      fx("a", { rubroId: "r3", coeficienteId: "cA", obligation: recibida("a", 10, { invoiceRubroId: "r4", invoiceCoeficienteId: "cB" }) }),
+      fx("b", { rubroId: "r3", coeficienteId: "cA", obligation: recibida("b", 10) }),
+    ]));
+    const a = s.rows.find((r) => r.fixedExpenseId === "a")!;
+    const b = s.rows.find((r) => r.fixedExpenseId === "b")!;
+    expect([a.rubroId, a.coeficienteId]).toEqual(["r4", "cB"]);
+    expect([b.rubroId, b.coeficienteId]).toEqual(["r3", "cA"]);
+  });
+
+  it("una sección por rubro asignado, en orden, aunque esté vacía, con totales en cero", () => {
+    const sections = groupByRubro(sheetOf(conRubros([fx("a", { rubroId: "r3" })])));
+    expect(sections.map((x) => x.title)).toEqual(["3 SERVICIOS PÚBLICOS", "4 ABONOS DE SERVICIOS", "VARIOS"]);
+    expect(sections[1].items).toEqual([]);
+    expect(sections[1].totals).toEqual([0, 0]);
+    expect(sections.map((x) => x.totalLabel)).toEqual(["TOTAL RUBRO 3", "TOTAL RUBRO 4", "TOTAL VARIOS"]);
+  });
+
+  it("'Sin rubro' va al final con lo que no tiene rubro o tiene uno que el edificio no usa", () => {
+    const sections = groupByRubro(sheetOf(conRubros([
+      fx("a", { rubroId: "r3" }), fx("b"), fx("c", { rubroId: "r-ajeno" }),
+    ])));
+    const sin = sections[sections.length - 1];
+    expect(sin.rubroId).toBeNull();
+    expect(sin.title).toBe(NO_RUBRO_TITLE);
+    expect(sin.items.map((i) => i.kind === "row" && i.row.fixedExpenseId)).toEqual(["b", "c"]);
+  });
+
+  it("sin nada sin rubro, no hay sección 'Sin rubro'", () => {
+    const sections = groupByRubro(sheetOf(conRubros([fx("a", { rubroId: "r3" })])));
+    expect(sections.some((x) => x.rubroId === null)).toBe(false);
+  });
+
+  it("dentro del rubro: con boleta, después pendientes, después salteadas; alfabético en cada tramo", () => {
+    const sections = groupByRubro(sheetOf(conRubros([
+      fx("zeta-pend", { rubroId: "r3" }),
+      fx("beta-rec", { rubroId: "r3", obligation: recibida("beta-rec", 1) }),
+      fx("alfa-salt", { rubroId: "r3", obligation: ob("alfa-salt", { status: "SKIPPED" }) }),
+      fx("alfa-pend", { rubroId: "r3" }),
+    ])));
+    expect(sections[0].items.map((i) => i.kind === "row" && i.row.fixedExpenseId))
+      .toEqual(["beta-rec", "alfa-pend", "zeta-pend", "alfa-salt"]);
+  });
+
+  it("los desactivados no entran en ninguna sección", () => {
+    const sections = groupByRubro(sheetOf(conRubros([fx("a", { rubroId: "r3", active: false })])));
+    expect(sections.flatMap((x) => x.items)).toEqual([]);
+  });
+
+  it("totaliza por columna; sin coeficiente va a la primera; las adicionales suman en la columna de la madre", () => {
+    const p = conRubros([
+      fx("a", { rubroId: "r3", coeficienteId: "cB", obligation: recibida("a", 100) }),
+      fx("b", { rubroId: "r3", obligation: recibida("b", 50) }),
+    ], {
+      looseInvoices: [{
+        invoiceId: "extra", providerId: null, lspServiceId: null, docKind: "FACTURA", concepto: "A",
+        matchNames: null, facturas: null, aliasCbu: null, amount: 7, invoiceUrl: null,
+        carryOverRequested: false, createdAt: "2026-07-01T00:00:00.000Z", carriedOutTo: null,
+      }],
+    });
+    // La boleta suelta no matchea ningún gasto fijo (no tienen proveedor): es eventual, sin rubro.
+    const sections = groupByRubro(sheetOf(p));
+    expect(sections[0].totals).toEqual([50, 100]);
+    const sinRubro = sections[sections.length - 1];
+    expect(sinRubro.rubroId).toBeNull();
+    expect(sinRubro.totals).toEqual([7, 0]);
+
+    const s = sheetOf(conRubros([fx("a", { rubroId: "r3", coeficienteId: "cB", obligation: recibida("a", 100) })]));
+    const conExtra = { ...s, rows: [{ ...s.rows[0], extras: [
+      { invoiceId: "e1", ordinal: 2, monto: 5, invoiceUrl: null, carryOverRequested: false, carriedOutTo: null },
+      { invoiceId: "e2", ordinal: 3, monto: 9, invoiceUrl: null, carryOverRequested: false, carriedOutTo: "agosto 2026" },
+    ] }] };
+    expect(groupByRubro(conExtra)[0].totals).toEqual([0, 105]);
+  });
+
+  it("una eventual con carriedOutTo (pasó a otro mes) no suma en el total de su sección", () => {
+    const p = conRubros([], {
+      looseInvoices: [{
+        invoiceId: "o2", providerId: "p-x", lspServiceId: null, docKind: "FACTURA", concepto: "PLOMERO",
+        matchNames: null, facturas: null, aliasCbu: null, amount: 30, invoiceUrl: null,
+        carryOverRequested: false, createdAt: "2026-07-01T00:00:00.000Z", carriedOutTo: "agosto 2026",
+        rubroId: "r4", coeficienteId: "cA",
+      }],
+    });
+    const r4 = groupByRubro(sheetOf(p)).find((x) => x.rubroId === "r4")!;
+    expect(r4.items).toHaveLength(1);
+    expect(r4.totals).toEqual([0, 0]);
+  });
+
+  it("los totales se redondean a centavos: sin drift de punto flotante", () => {
+    const s = sheetOf(conRubros([
+      fx("a", { rubroId: "r3", coeficienteId: "cA", obligation: recibida("a", 0.1) }),
+      fx("b", { rubroId: "r3", coeficienteId: "cA", obligation: recibida("b", 0.2) }),
+    ]));
+    expect(groupByRubro(s)[0].totals).toEqual([0.3, 0]);
+  });
+
+  it("una boleta eventual entra en su rubro como 'other' y suma en su columna", () => {
+    const p = conRubros([], {
+      looseInvoices: [{
+        invoiceId: "o1", providerId: "p-x", lspServiceId: null, docKind: "FACTURA", concepto: "PLOMERO",
+        matchNames: null, facturas: null, aliasCbu: null, amount: 30, invoiceUrl: null,
+        carryOverRequested: false, createdAt: "2026-07-01T00:00:00.000Z", carriedOutTo: null,
+        rubroId: "r4", coeficienteId: "cA",
+      }],
+    });
+    const r4 = groupByRubro(sheetOf(p)).find((x) => x.rubroId === "r4")!;
+    expect(r4.items).toHaveLength(1);
+    expect(r4.items[0].kind).toBe("other");
+    expect(r4.totals).toEqual([30, 0]);
+  });
+
+  it("grandTotals suma las secciones columna por columna", () => {
+    const s = sheetOf(conRubros([
+      fx("a", { rubroId: "r3", coeficienteId: "cB", obligation: recibida("a", 100) }),
+      fx("b", { rubroId: "r4", obligation: recibida("b", 50) }),
+      fx("c", { obligation: recibida("c", 1) }),
+    ]));
+    expect(grandTotals(groupByRubro(s), 2)).toEqual([51, 100]);
+  });
+
+  it("showsPendingMark: sólo una fila activa, pendiente y sin boleta ni monto (D12)", () => {
+    const s = sheetOf(conRubros([
+      fx("pend", { rubroId: "r3" }),
+      fx("rec", { rubroId: "r3", obligation: recibida("rec", 5) }),
+      fx("salt", { rubroId: "r3", obligation: ob("salt", { status: "SKIPPED" }) }),
+      fx("inact", { rubroId: "r3", active: false }),
+    ]));
+    const mark = (id: string) => showsPendingMark(s.rows.find((r) => r.fixedExpenseId === id)!);
+    expect([mark("pend"), mark("rec"), mark("salt"), mark("inact")]).toEqual([true, false, false, false]);
+    expect(PENDING_MARK).toBe("—");
+  });
+
+  it("columnIndex: la columna del coeficiente, o la primera si no está", () => {
+    const cols = [{ id: "cA", code: "A" }, { id: "cB", code: "B" }];
+    expect(columnIndex(cols, "cB")).toBe(1);
+    expect(columnIndex(cols, null)).toBe(0);
+    expect(columnIndex(cols, "cZ")).toBe(0);
   });
 });

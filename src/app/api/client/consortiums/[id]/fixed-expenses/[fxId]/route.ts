@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { requireClientSession } from "@/lib/clientAuth";
 import { getPrismaClient } from "@/lib/prisma";
-import { checkAssignable } from "@/lib/rubroAssignment";
+import { validateLabels } from "@/services/labelAssignment.service";
 import { FixedExpenseRepository, FixedExpenseError } from "@/repositories/fixedExpense.repository";
 
 /**
@@ -29,7 +29,8 @@ export async function PATCH(request: NextRequest, context: { params: Promise<{ i
       return NextResponse.json({ ok: false, error: parsed.error.issues[0].message }, { status: 400 });
     }
     // Capa 3: sólo se acepta un rubro o coeficiente que el edificio tenga asignado
-    // (capa 2). La decisión vive en `checkAssignable`, que se testea sin base.
+    // (capa 2). Pasa por `validateLabels` (compartido con el endpoint de etiquetas),
+    // que delega la decisión en `checkAssignable`, testeado sin base.
     if (parsed.data.rubroId !== undefined || parsed.data.coeficienteId !== undefined) {
       const prisma = getPrismaClient();
       const fx = await prisma.fixedExpense.findFirst({
@@ -40,27 +41,8 @@ export async function PATCH(request: NextRequest, context: { params: Promise<{ i
         return NextResponse.json({ ok: false, error: "Gasto fijo no encontrado" }, { status: 404 });
       }
 
-      if (parsed.data.rubroId !== undefined) {
-        const asignados = await prisma.consortiumRubro.findMany({
-          where: { consortiumId: fx.consortiumId },
-          select: { rubroId: true },
-        });
-        const check = checkAssignable(parsed.data.rubroId, asignados.map((a) => a.rubroId), "rubro");
-        if (!check.ok) return NextResponse.json({ ok: false, error: check.error }, { status: 400 });
-      }
-
-      if (parsed.data.coeficienteId !== undefined) {
-        const asignados = await prisma.consortiumCoeficiente.findMany({
-          where: { consortiumId: fx.consortiumId },
-          select: { coeficienteId: true },
-        });
-        const check = checkAssignable(
-          parsed.data.coeficienteId,
-          asignados.map((a) => a.coeficienteId),
-          "coeficiente"
-        );
-        if (!check.ok) return NextResponse.json({ ok: false, error: check.error }, { status: 400 });
-      }
+      const error = await validateLabels(prisma, fx.consortiumId, parsed.data);
+      if (error) return NextResponse.json({ ok: false, error }, { status: 400 });
     }
 
     const repo = new FixedExpenseRepository();

@@ -45,3 +45,17 @@ export function excludeAssigned(keepIds: string[]): { notIn: string[] } | undefi
 export function orphanedBy(keepIds: string[]): { not: null; notIn?: string[] } {
   return keepIds.length > 0 ? { not: null, notIn: keepIds } : { not: null };
 }
+
+/**
+ * Qué escribe la edición de rubro/coeficiente de una fila. `undefined` = no se tocó
+ * (no se escribe); `null` = desasignar. Mismo criterio en gasto fijo y boleta.
+ */
+export function labelData(p: { rubroId?: string | null; coeficienteId?: string | null }): {
+  rubroId?: string | null;
+  coeficienteId?: string | null;
+} {
+  return {
+    ...(p.rubroId !== undefined ? { rubroId: p.rubroId } : {}),
+    ...(p.coeficienteId !== undefined ? { coeficienteId: p.coeficienteId } : {}),
+  };
+}

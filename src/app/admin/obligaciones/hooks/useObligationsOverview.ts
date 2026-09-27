@@ -224,6 +224,32 @@ export function useObligationsOverview() {
     [guardedFetch, loadOverview]
   );
 
+  /**
+   * Rubro y coeficiente de una fila. Con gasto fijo + boleta escribe los dos (la
+   * boleta del mes y la regla hacia adelante); con sólo boleta, una eventual.
+   */
+  const setLabels = useCallback(
+    async (
+      target: { fixedExpenseId?: string; invoiceId?: string },
+      labels: { rubroId: string | null; coeficienteId: string | null }
+    ) => {
+      try {
+        const res = await guardedFetch("/api/client/labels", {
+          method: "PATCH",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ ...target, ...labels }),
+        });
+        const data = await res.json();
+        if (!res.ok || !data.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
+        setError(null);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "No se pudo cambiar el rubro");
+      }
+      await loadOverview();
+    },
+    [guardedFetch, loadOverview]
+  );
+
   const goToPreviousMonth = useCallback(() => {
     setMonth((current) => (current ? previousMonth(current) : current));
   }, []);
@@ -249,5 +275,6 @@ export function useObligationsOverview() {
     toggleCarryOver,
     undoCarryOver,
     setLateAmount,
+    setLabels,
   };
 }

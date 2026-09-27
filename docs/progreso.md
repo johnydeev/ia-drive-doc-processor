@@ -1,6 +1,7 @@
 # Progreso del proyecto — drive-doc-processor
 
-Actualizado al 24/09/2026 (sesión 72 — rubros y coeficientes, parte 1: modelo, carga y pipeline).
+Actualizado al 27/09/2026 (sesión 73 — rubros y coeficientes, parte 2: hoja de obligaciones agrupada).
+Sesión 72 (24/09): rubros y coeficientes, parte 1: modelo, carga y pipeline.
 Sesión 71 (23/09): "Empleado" en la columna FACTURA/NRO CLIENTE de la hoja de obligaciones.
 Sesión 70 (19/09): router + prompt TELECENTRO con la primera factura real, GUALEGUAYCHU.
 Sesión 69 (18/09): adicionales y "Otras boletas del mes" en la hoja de
@@ -28,6 +29,119 @@ VEP, y el LSD abierto en una boleta por empleado.
 > **VEP** (sesión 62) dicen "implementado": las primeras entraron en `ae31c15` y `e3551a7`, el VEP en
 > `add4e11`. Lo que sigue abierto en todas ellas es el **smoke en producción**, no el commit.
 
+## 🗂️ Rubros y coeficientes — parte 2: hoja de obligaciones agrupada (2026-09-27)
+
+**Estado:** implementado (con subagentes: implementador + revisión de spec + revisión de calidad por
+tarea), **sin commitear** — listo para que el owner commitee. Verificación: 1148 tests OK (eran
+1104), caracterización del pipeline 72/72, `typecheck` y `lint` limpios, `build:jobs` y `next build`
+OK. **Falta el smoke del owner en producción** sobre "Edificio de Prueba" (ver checklist abajo).
+
+- **Una sola fuente de agrupado:** `groupByRubro` (`sheetModel.ts`) reemplaza `compareRows`/
+  `GROUP_RANK`. Arma secciones por cada rubro asignado al edificio (orden `Rubro.order`, incluso
+  vacías en pantalla), con boleta → pendiente → salteada dentro de cada sección (los desactivados no
+  entran: viven en su propio bloque plegado, D11), y "Sin rubro" al final sólo si tiene filas (D1:
+  plegado por defecto, salvo que el edificio no tenga ningún rubro asignado, que ninguna sección
+  tenga todavía algo cargado, o que haya una búsqueda activa). La usan por igual `SheetCard.tsx`
+  (pantalla) y `sheetPdf.ts` (PDF del banco) — antes cada uno tenía su propio orden.
+- **Etiqueta de una fila:** la de su boleta del mes si la tiene, sino la del gasto fijo (D4) — cubre
+  las boletas vinculadas antes de hoy, que no heredaron rubro al vincularse.
+- **Desactivados** siguen en su bloque plegado aparte, fuera de las secciones de rubro (D11, decisión
+  del owner: no alargar la hoja con lo que no se paga).
+- **Fila pendiente** (sin boleta) muestra `—` en la columna de su coeficiente (D12,
+  `PENDING_MARK`/`showsPendingMark`), en pantalla y PDF: marca dónde se anota el monto a mano.
+- **Importes de columnas de coeficiente y totales sin `$`** (D8: con 4 columnas A/B/C/EXTRA cada
+  columna de monto tiene 21 mm, y con `$` no entra un monto de millones); el "vienen del mes
+  anterior" conserva el `$`. Edificio sin coeficientes asignados usa una columna única `MONTO` (D9,
+  `FALLBACK_COLUMN`).
+- **"Vienen del mes anterior"** ahora dice qué gasto fijo arrastra en el concepto (`EDESUR S.A. —
+  PORTERIA`, `X — Retención`) — D10.
+- **Boletas eventuales** (ex "Otras boletas del mes", que desaparece como bloque) entran en su rubro
+  con distintivo `eventual`; sin rubro, a "Sin rubro" (D6). Las adicionales (`↳ 2ª boleta`) suman en
+  la columna de coeficiente de su fila madre, no tienen obligación ni etiqueta propia (D7).
+- **Editor de rubro/coeficiente** (`LabelEditor.tsx`, botón `3 · A`) al principio de la celda de
+  acciones (D5, sin columna nueva ni CSS extra para esconderlo al imprimir); dos selects limitados a
+  lo asignado al edificio + `AsyncButton` Guardar, Cancelar deshabilitado mientras guarda.
+- **`PATCH /api/client/labels`** (nuevo): con gasto fijo + boleta, escribe los dos en una
+  transacción (corrige el mes y fija la regla a futuro); con sólo boleta (eventual), sólo ésa. Valida
+  contra lo asignado al edificio con `validateLabels` (`src/services/labelAssignment.service.ts`),
+  compartido ahora con el PATCH de `fixed-expenses/[fxId]`.
+- **Impresión y PDF:** `@media print` fuerza "Sin rubro" desplegado y esconde el toggle y las
+  secciones vacías (D2/D3: son pagos reales del mes, no pueden faltar en el papel; el PDF además omite
+  secciones vacías, D3). `sheetPdf.ts` calcula anchos por cantidad de columnas de coeficiente
+  (`pdfColumnWidths`, 182 mm en total; el piso de 20 mm para concepto sólo se cruza con 8 columnas,
+  hasta 6 concepto no baja de 40 mm), cabecera de dos niveles, montos a 7,5 pt (6,5 pt + wrap si la
+  columna da menos de 20 mm), adicionales con prefijo `>` (el glifo `↳` no existe en Helvetica).
+  Verificado renderizando PDFs reales con 1 a 5 columnas de coeficiente.
+- **Búsqueda:** con término activo no se muestran rubros vacíos (D13).
+- **TÉCNICO O GESTOR / TEL. CONTACTO compactadas en pantalla con ≥4 columnas de coeficiente** (D14,
+  2026-09-27): se colapsan a ancho cero SÓLO EN PANTALLA (`data-compact` en `SheetCard.tsx` +
+  `.contactCell` dentro de `@media screen` en `page.module.css`, sin `display: none` para no romper
+  los `colSpan` de encabezado/totales) y le dan el lugar a PROVEEDOR/SERVICIO en una notebook de
+  1366px. Al imprimir el colapso no aplica (no está en el `@media print`): la columna usa las reglas
+  normales de la tabla, sin ningún ajuste — se completa a mano en el papel. Revisión encontró además
+  que la tabla de rubros y "Sin rubro" podían imprimir sólo su encabezado cuando ninguna fila era
+  imprimible (`rubroTableEmpty`/`sinRubroBlockEmpty`, calculadas con `isItemPrintable`).
+
+**Alternativas descartadas:** columna aparte para el editor de rubro/coeficiente (se prefirió meterlo
+en la celda de acciones, ya oculta al imprimir); un PATCH separado para boleta y gasto fijo (se
+prefirió una transacción, para que "corregir" y "fijar la regla" no queden inconsistentes); secciones
+vacías en el papel (se omiten, D3); desactivados repetidos al final de cada rubro (quedan en un solo
+bloque aparte, D11).
+
+**Pendiente:**
+1. **Verificación del owner en producción**, después del deploy, sobre "Edificio de Prueba":
+   - Abrir `/admin/obligaciones`, desplegar un edificio con liquidación (ej. Arenales 2154): secciones
+     en orden, montos en su columna, totales por rubro y del mes.
+   - "Sin rubro" plegado con su cantidad; desplegarlo. Una fila pendiente muestra "—" en su columna.
+     Buscar "EDESUR": no aparecen los rubros vacíos. Una fila de "Vienen del mes anterior" dice qué
+     servicio es (ej. `EDESUR S.A. — PORTERIA`).
+   - En "Edificio de Prueba": cambiar el rubro de una fila con el editor y confirmar que pasa de
+     sección.
+   - Descargar el PDF y revisar que entren las columnas (un edificio con A, B, C y EXTRA).
+2. Deuda conocida: faltan tests de handler para el nuevo `PATCH /api/client/labels`.
+3. Sin resolver (fuera de este plan): los 45 gastos fijos sin rubro y los 70 "sin evidencia" (parte
+   1); si `tipoGasto = EXTRAORDINARIO` debería caer solo en la columna `EXTRA`.
+   ~~En notebook 1366px con 4 columnas de coeficiente la columna PROVEEDOR/SERVICIO queda en ~65 px~~
+   → resuelto (D14, 2026-09-27): TÉCNICO/TEL se esconden en pantalla con ≥4 coeficientes.
+
+## 🗂️ Rubros y coeficientes — carga de catálogos y asignación por edificio (2026-09-26/27)
+
+**Estado:** cargado en producción por el owner con SQL preparado por Claude (Claude no escribe en la
+base desde el incidente); cada paso verificado después con consultas en transacción `READ ONLY`.
+Fuente: las 24 liquidaciones de expensas de agosto 2026 (`pdf-parse`, local).
+
+- **Catálogo de rubros:** los 11 de las liquidaciones, con su número. El 1 es `DETALLE DE SUELDO Y
+  CARGAS SOCIALES` (el "EXTRAS SUELDO" de algunas liquidaciones son los suplentes, van dentro del 1).
+- **Rubros por edificio:** los 11 a los 49 edificios (539). Los que no usan alguno (sin encargado →
+  sin el 1) se destildan desde la Configuración.
+- **Catálogo de coeficientes:** `A`, `B`, `C` (`GASTOS A/B/C`) y `EXTRA` (`GASTOS EXTRA`, las
+  expensas extraordinarias, columna en 20 de 24 liquidaciones). Nombre corto a pedido del owner: en
+  la hoja de la Parte 2 el encabezado de columna es el código.
+- **Coeficientes por edificio (122):** los 24 con liquidación según las columnas de su **prorrateo**
+  (los encabezados de rubro traen A/B/C por plantilla, no sirven); los 25 sin liquidación, sólo `A`
+  hasta tener la suya; `EXTRA` en todos.
+
+- **Coeficientes, 2ª tanda (27/09):** con 11 liquidaciones más (35 en total, en
+  `Desktop/PDFs consorcios`) se sumaron 13 asignaciones → 135. Corrección: Bartolomé Mitre 1225 usa
+  A y C (su prorrateo dice `GASTOS c`, en minúscula, y la primera búsqueda distinguía mayúsculas).
+  Quedan 14 edificios sin liquidación, con `A` + `EXTRA`.
+- **Rubro de cada gasto fijo (27/09): 704 de 749 activos cargados**, verificados 704/704. No se hizo
+  con `scripts/seed-rubros.ts` (el plan lo preveía) sino con scripts descartables que cruzaron las 35
+  liquidaciones con los gastos fijos + una planilla de revisión + un UPDATE aplicado por el owner, que
+  sólo escribe donde `rubroId` es null. Orden de las fuentes: sección de la liquidación del edificio
+  (por NOMBRE de sección: Corrientes 4815 corre la numeración y Thames 647 trae el 11 sin nombre) →
+  reglas (empleados 1, servicios 3, recordatorios SUELDO 1 / SEGURO 10, abono en 4 y 5 → 4) → mismo
+  proveedor en otros edificios (≥75 %) → liquidación de otro edificio → palabras del nombre → 5 por
+  defecto (70, marcados "sin evidencia"). En los 14 edificios sin liquidación sólo se precompletaron
+  empleados y servicios, por decisión del owner: **45 quedan sin rubro**.
+
+**Pendiente:** los 45 gastos fijos sin rubro y revisar los 70 "sin evidencia" (quedaron en 5); cargar
+los catálogos en las hojas `_Rubros` / `_Coeficientes` del ALTA (si no, el sync los reporta como
+sobrantes); las boletas ya vinculadas antes de hoy no heredan el rubro (el copiado es al vincular:
+fuera de alcance según el spec, se etiquetan desde la hoja en la Parte 2). **Para la Parte 2:** definir si una
+boleta con `tipoGasto = EXTRAORDINARIO` cae sola en la columna `EXTRA`; hay columnas puntuales de
+prorrateo en algunos edificios (Aguinaldo, Adicional, VARIOS, Aysa, Ascensor) que no se cargaron.
+
 ## 🚨 Incidente: base de producción vaciada y restaurada; backups diarios (2026-09-24/25)
 
 **Estado:** base restaurada y verificada (backup Supabase del 24/09 13:37 UTC). Primer backup propio OK
@@ -40,11 +154,20 @@ Detalle en `docs/decisiones.md`.
 **Pendiente, en orden:**
 1. ~~`BACKUP_HOST_DIR` + levantar `db-backup`~~ **hecho** (26/09): corre y hace backup a `backups/`. El deploy
    ahora lo sube en un paso aparte que no puede tirar la app (ver `docs/decisiones.md` 2026-09-26).
-2. Owner: volver Supabase a Free. **Desbloqueado** (26/09): simulacro de restauración OK — conteos y
-   huellas md5 idénticos a producción, y restauración con `--clean` sobre datos probada.
-3. Separar `.env.production` (contenedores) del `.env` de desarrollo + reglas `deny` en
-   `.claude/settings.json` + conector MCP de Supabase en sólo lectura.
-4. Retomar las correcciones de la revisión de rubros y coeficientes (abajo): `@@index` de
+2. ~~Owner: volver Supabase a Free~~ **hecho** (26/09), tras el simulacro de restauración OK (conteos y
+   huellas md5 idénticos a producción, restauración con `--clean` sobre datos probada). Spend cap
+   activado; lo no usado de Pro quedó como crédito. App verificada sin errores de conexión después.
+3. **Separar desarrollo de producción** — plan listo, sin empezar:
+   `docs/superpowers/plans/2026-09-26-separar-entornos-dev-prod.md` (base dev en Docker local, `.env`
+   local sin credenciales de producción y con otra clave de cifrado, usuario de sólo lectura,
+   migraciones de producción sólo por el deploy con backup previo, hook de Claude Code, MCP en RO).
+4. **Seguridad — RLS desactivado en las 22 tablas** (detectado 27/09 por un aviso del SQL Editor de
+   Supabase). La Data API (PostgREST) expone el schema `public`: con la URL del proyecto + la anon key
+   se puede leer y escribir todo, incluida `Client`. La app no usa esa API (Prisma, rol `postgres`),
+   así que la anon key no está publicada y el riesgo hoy es bajo. Resolver: activar RLS sin políticas
+   en todas las tablas (la app no se entera: `postgres` es dueño) o desactivar la Data API. Con backup
+   antes. Ir junto con el plan de separación de entornos.
+5. Retomar las correcciones de la revisión de rubros y coeficientes (abajo): `@@index` de
    `FixedExpense.rubroId`/`coeficienteId` en el schema (**hecho**, sólo archivo), aviso de número de
    rubro repetido, confirmación desactualizada al seguir tildando, número inválido al editar que
    borra el número, test del copiado en `generateObligationsForPeriod`, y decidir qué pasa al borrar

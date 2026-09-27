@@ -4,6 +4,97 @@ Registro de decisiones tomadas ante problemas reales encontrados en producción.
 
 ---
 
+## 2026-09-27 — Rubros y coeficientes, parte 2: la hoja de obligaciones agrupada
+
+**Problema.** La parte 1 (24/09) cargó rubro y coeficiente en gasto fijo y boleta, pero la hoja de
+obligaciones seguía ordenando con `compareRows`/`GROUP_RANK` y una sola columna de monto: el
+catálogo no se veía en ningún lado. Faltaba definir cómo agrupar, cómo mostrar los coeficientes como
+columnas, qué hacer con lo que no tiene rubro, y cómo se corrige una etiqueta mal cargada.
+
+**Decisiones (D1–D14; D1–D13 confirmadas con el owner el 27/09 antes de implementar, D14 el mismo día
+como follow-up sobre el ancho en notebook 1366px):**
+- **D1** — "Sin rubro" plegado por defecto (con su cantidad en el botón), salvo que el edificio no
+  tenga ningún rubro asignado, que ninguna sección de rubro tenga todavía algo cargado, o que haya
+  una búsqueda activa (ahí arranca desplegado, para no mostrar la hoja vacía ni esconder el único
+  resultado). El toggle del usuario sigue funcionando en cualquiera de los tres casos.
+- **D2** — Al imprimir y en el PDF, "Sin rubro" sale siempre desplegado: son pagos reales del mes.
+- **D3** — En pantalla se muestran todos los rubros asignados aunque estén vacíos (checklist del
+  mes); en el PDF se omiten las secciones vacías (11 secciones vacías en un A4 es papel sin
+  información).
+- **D4** — La etiqueta que vale por fila es la de su boleta del mes si la tiene, sino la del gasto
+  fijo: cubre las boletas vinculadas antes del 27/09, que no heredaron rubro al vincularse.
+- **D5** — El editor de rubro/coeficiente va al principio de la celda de acciones, no en una columna
+  nueva: las acciones ya se esconden al imprimir, así que el editor no necesita CSS aparte.
+- **D6** — Las boletas eventuales (ex "Otras boletas del mes", que desaparece como bloque) entran en
+  su rubro con un distintivo `eventual`; sin rubro, van a "Sin rubro".
+- **D7** — Las adicionales (`↳ 2ª boleta`) suman en la columna de coeficiente de su fila madre: no
+  tienen obligación propia ni etiqueta copiada.
+- **D8** — Los importes de las columnas de coeficiente y de los totales van sin el signo `$`, en
+  pantalla y en PDF a 7,5 pt (6,5 pt cuando la columna quedó por debajo de 20 mm): con 4 columnas
+  (A, B, C, EXTRA) el ancho de monto es de 21 mm cada una, y con `$` no entra un monto de millones.
+  El ancho de columna varía de 28 mm (1-2 columnas) a 13 mm (8 columnas) según `pdfColumnWidths`. El
+  encabezado COEFICIENTE ya avisa que son importes. El "1° pago / 2° pago" de las arrastradas
+  conserva el `$`.
+- **D9** — Un edificio sin coeficientes asignados usa una columna única `MONTO` (`FALLBACK_COLUMN`):
+  la hoja se ve como antes para el cliente sin catálogo.
+- **D10** — "Vienen del mes anterior" sigue como bloque aparte, con su monto en la primera columna, y
+  el concepto dice qué gasto fijo arrastra (`EDESUR S.A. — PORTERIA`, `X — Retención`).
+- **D11** — Dentro de cada sección de rubro el orden es con boleta → pendiente → salteada. Los
+  gastos fijos desactivados siguen en su bloque plegado "Desactivados (N)", fuera de
+  las secciones de rubro (el spec original los repetía al final de cada rubro; el owner lo cambió el
+  27/09 porque el bloque ya existe, está testeado, la impresión lo esconde entero, y repartirlos
+  alargaría la hoja con lo que no se paga).
+- **D12** — Una fila pendiente (sin boleta) muestra `—` en la columna de su coeficiente, en pantalla
+  y PDF: marca dónde se anota el monto a mano.
+- **D13** — Con una búsqueda activa no se muestran los rubros vacíos (ruido: buscar "EDESUR" y ver
+  10 secciones vacías alrededor).
+- **D14** — TÉCNICO O GESTOR y TEL. CONTACTO se esconden EN PANTALLA en los edificios con 4 o más
+  columnas de coeficiente (`sheet.coefColumns.length >= 4`), para darle ese lugar a
+  PROVEEDOR/SERVICIO en una notebook de 1366px (con A+B+C+EXTRA la columna de proveedor quedaba en
+  ~65 px, ver pendiente #3 de `progreso.md` antes de esta decisión). Siguen apareciendo al imprimir:
+  se completan a mano en el papel, así que no pueden faltar ahí. Se implementó colapsando el ancho a
+  0 y ocultando el contenido por CSS (`data-compact` + `.contactCell`), no sacando las celdas del DOM
+  ni con `display: none`: las filas de encabezado y de total usan `colSpan` sobre ese tramo de
+  columnas, y perder una celda ahí corre el resto de la fila.
+
+**Alternativas descartadas.**
+- Columna nueva para el editor de rubro/coeficiente → se eligió la celda de acciones (D5) para no
+  duplicar el CSS de ocultamiento en impresión.
+- Un PATCH por separado para la boleta y para el gasto fijo → se unificaron en una transacción
+  (`PATCH /api/client/labels`) para que "corregir el mes" y "fijar la regla a futuro" no puedan quedar
+  a mitad de camino.
+- Secciones vacías en el PDF → se omiten (D3); en pantalla sí se muestran, como checklist.
+- Desactivados repetidos al final de cada rubro (como decía el spec original) → se mantuvo el bloque
+  único existente (D11).
+
+**Impacto.**
+- `src/app/admin/obligaciones/lib/sheetModel.ts` — se elimina `compareRows`/`GROUP_RANK`; nueva
+  `groupByRubro` (fuente única de agrupado para pantalla y PDF), `grandTotals`, `columnIndex`,
+  `rubroTitle`, `showsPendingMark`/`PENDING_MARK`, `FALLBACK_COLUMN`.
+- `src/app/admin/obligaciones/components/SheetCard.tsx` — reescrito: secciones por rubro con total
+  por rubro, columnas de coeficiente bajo cabecera de dos niveles, total del mes en tabla aparte,
+  "Sin rubro" colapsable, reglas de impresión.
+- `src/app/admin/obligaciones/lib/sheetPdf.ts` — reescrito con el mismo modelo: anchos de columna por
+  cantidad de coeficientes (`pdfColumnWidths`), cabecera de dos niveles, secciones vacías omitidas.
+- `src/app/api/client/labels/route.ts` (nuevo) — `PATCH` transaccional gasto fijo + boleta o sólo
+  boleta.
+- `src/services/labelAssignment.service.ts` (nuevo) — `validateLabels`, compartido con
+  `src/app/api/client/consortiums/[id]/fixed-expenses/[fxId]/route.ts`.
+- `src/app/admin/obligaciones/components/LabelEditor.tsx` (nuevo) — UI del editor.
+- `src/app/api/client/obligations/overview/route.ts` y `useObligationsOverview.ts` — exponen
+  rubros/coeficientes asignados por consorcio y las etiquetas por fila.
+- `src/lib/rubroAssignment.ts` — helper `labelData` compartido entre los dos PATCH.
+- Verificación: 1148 tests (antes 1104), caracterización del pipeline 72/72, `typecheck`/`lint`
+  limpios, `build:jobs` y `next build` OK. Implementado con subagentes (implementador + revisión de
+  spec + revisión de calidad por tarea); las revisiones agregaron el redondeo a centavos de los
+  totales, el servicio compartido `validateLabels`, el fix de alineación de impresión y las reglas de
+  "Sin rubro" forzado a abierto.
+- Pendiente: verificación del owner en producción sobre "Edificio de Prueba"; tests de handler para
+  `PATCH /api/client/labels`; los 45 gastos fijos sin rubro y 70 "sin evidencia" de la parte 1;
+  `tipoGasto EXTRAORDINARIO` ↔ columna EXTRA, sin decidir.
+
+---
+
 ## 2026-09-26 — Simulacro de restauración: los backups sirven, y el procedimiento cambió
 
 **Problema.** Antes de volver Supabase a Free había que probar que los backups propios restauran

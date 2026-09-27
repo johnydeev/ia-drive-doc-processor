@@ -2,8 +2,8 @@
 
 /* Tope de 1440px: entra la planilla con las acciones en una sola línea sin que
    PROVEEDOR/SERVICIO (la única columna elástica) quede con un hueco enorme
-   hasta MONTO en un monitor ancho. El administrador trabaja en notebook o
-   escritorio. */
+   hasta la primera columna de coeficiente en un monitor ancho. El administrador
+   trabaja en notebook o escritorio. */
 .page { padding: 20px 28px; max-width: 1440px; margin: 0 auto; }
 
 .toolbar {
@@ -69,18 +69,39 @@
 .addBtn:hover { background: rgba(127, 127, 127, 0.12); }
 
 .sheetTable { width: 100%; border-collapse: collapse; font-size: 13px; table-layout: fixed; }
-/* Anchos fijos compartidos por las tres tablas de la hoja: así FACTURA, MONTO y
-   ALIAS caen en la misma vertical en la tabla del mes, en "Otras boletas del
-   mes" y en "Vienen del mes anterior". PROVEEDOR/SERVICIO absorbe el resto. */
+/* Anchos fijos compartidos por todas las tablas de la hoja: así FACTURA, las
+   columnas de coeficiente y ALIAS caen en la misma vertical en la tabla de
+   rubros, en "Sin rubro" y en "Vienen del mes anterior". PROVEEDOR/SERVICIO
+   absorbe el resto. */
 .colPreview { width: 34px; }
-.colFacturas { width: 128px; }
+.colFacturas { width: 110px; }
 .colConcepto { width: auto; }
-.colMonto { width: 124px; }
-.colAlias { width: 168px; }
-.colTecnico { width: 104px; }
-.colTel { width: 96px; }
+.colCoef { width: 104px; }
+.colAlias { width: 150px; }
+.colTecnico { width: 56px; }
+.colTel { width: 56px; }
+/* Con ≥4 columnas de coeficiente (D14) TÉCNICO/TEL se esconden en pantalla —
+   PROVEEDOR/SERVICIO necesita el lugar en una notebook de 1366px— pero siguen
+   apareciendo al imprimir (se completan a mano en el papel). No se usa
+   `display: none`: rompería el colSpan de las filas de total/encabezado que
+   abarcan estas columnas. Se colapsan a ancho cero en su lugar.
+   `@media screen`: sin esto la especificidad de `[data-compact="true"] .contactCell`
+   le gana a las reglas de `@media print` (mismo origen, y el selector con atributo
+   pesa más), y el papel queda sin línea divisoria (`border-bottom-color: transparent`)
+   ni tamaño de letra en TÉCNICO/TEL. */
+@media screen {
+  .sheetCard[data-compact="true"] .colTecnico,
+  .sheetCard[data-compact="true"] .colTel { width: 0; }
+  .sheetCard[data-compact="true"] .contactCell {
+    padding: 0;
+    overflow: hidden;
+    font-size: 0;
+    border-bottom-color: transparent;
+    white-space: nowrap;
+  }
+}
 /* Entra la combinación más larga (arrastradas: Mes siguiente · Devolver · Monto vencido). */
-.colActions { width: 330px; }
+.colActions { width: 370px; }
 .facturasCell { white-space: nowrap; font-variant-numeric: tabular-nums; }
 .sheetTable td { overflow-wrap: anywhere; }
 .sheetTable th {
@@ -135,12 +156,8 @@
 .rowExtra td:nth-child(3) { padding-left: 22px; }
 .extraLabel { opacity: 0.8; }
 
-/* Otras boletas del mes: proveedores que no son gasto fijo del edificio. */
-.othersBlock { margin-top: 18px; border-top: 1px dashed rgba(127, 127, 127, 0.45); padding-top: 10px; }
-.othersTitle {
-  font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em;
-  opacity: 0.75; margin: 0 0 6px;
-}
+/* Boleta eventual: proveedor que no es gasto fijo del edificio, con el
+   distintivo "eventual" (entra en su rubro, D6). */
 .rowOther td { background: rgba(37, 99, 235, 0.05); }
 /* Nació este mes y ya pasó al siguiente: se ve (rendición), no se paga acá. */
 .rowCarriedOut td { opacity: 0.55; }
@@ -200,6 +217,33 @@
 .targetItem { padding: 3px 0; }
 .targetLabel { display: flex; gap: 8px; align-items: center; cursor: pointer; font-size: 13px; }
 
+/* ── Secciones por rubro y columnas de coeficiente (spec 2026-09-24, Parte 2) ── */
+.coefGroupRow th { padding-bottom: 0; border-bottom: none; }
+.coefGroupHeader { text-align: center; font-size: 11px; letter-spacing: 0.08em; opacity: 0.7; }
+.amountHeader { text-align: right; }
+.amountCell { text-align: right; white-space: nowrap; }
+.sectionRow td { font-weight: 700; padding-top: 12px; border-bottom: 1px solid rgba(127, 127, 127, 0.35); }
+.sectionTotal td { font-weight: 600; font-size: 12px; border-bottom: 2px solid rgba(127, 127, 127, 0.25); }
+.grandTotal td { font-weight: 800; padding-top: 10px; border-top: 2px solid rgba(127, 127, 127, 0.5); }
+.eventualBadge {
+  margin-left: 6px; padding: 1px 6px; border-radius: 999px;
+  font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em;
+  background: rgba(37, 99, 235, 0.12);
+}
+.sinRubroBlock { margin-top: 14px; border-top: 1px dashed rgba(127, 127, 127, 0.45); padding-top: 8px; }
+.sinRubroToggle {
+  background: none; border: none; color: inherit; font: inherit; font-weight: 600;
+  cursor: pointer; padding: 4px 0;
+}
+.labelBtn {
+  font-size: 12px; padding: 2px 8px; border: 1px solid rgba(127, 127, 127, 0.45);
+  border-radius: 6px; background: transparent; color: inherit; cursor: pointer; white-space: nowrap;
+}
+.labelEditor { display: inline-flex; gap: 4px; align-items: center; }
+.labelEditor select { font-size: 12px; max-width: 150px; }
+/* Con el editor abierto la fila de acciones no tiene que desbordar: envuelve. */
+.rowActions:has(.labelEditor) { flex-wrap: wrap; }
+
 /* ── Impresión ───────────────────────────────────────────────────────────
    Lo que sale por la impresora es la misma vista sin el cromo de la app: sin
    barra, sin buscador y sin las acciones de fila. El criterio de qué filas se
@@ -246,6 +290,23 @@
   .sheetTitle { font-size: 16pt; }
   .sheetBank,
   .sheetPeriod { color: #444; }
+
+  /* "Sin rubro" se pliega en pantalla, no en papel (D2); el botón que lo
+     pliega no tiene sentido en el papel — la sección ya imprime su título. */
+  .sinRubroBody[hidden] { display: block; }
+  .sinRubroToggle { display: none; }
+  .eventualBadge { background: none; padding: 0; }
+  /* Rubros vacíos: el checklist es de pantalla, el papel los omite (D3). */
+  .sectionEmpty { display: none; }
+  /* Si TODOS los rubros están vacíos, sin esto quedaría imprimiendo sólo el
+     encabezado de la tabla (todas sus filas son `.sectionEmpty`): sin
+     contenido, no tiene sentido ocupar espacio en el papel. Misma clase para
+     "sin filas" (D3) y "con filas pero nada imprimible" (D14 review, ver
+     `rubroSectionsPrintEmpty` en `SheetCard.tsx`). */
+  .rubroTableEmpty { display: none; }
+  /* Mismo caso que `rubroTableEmpty`, para el bloque "Sin rubro" completo
+     (botón + tabla): sin nada imprimible no tiene sentido en el papel. */
+  .sinRubroBlockEmpty { display: none; }
 }
 
 @page {
@@ -254,8 +315,9 @@
 }
 
 /* ── Mobile ──────────────────────────────────────────────────────────────
-   La tabla de 7 columnas no entra en un teléfono: la card scrollea en
-   horizontal y las acciones crecen a 40px de alto para ser clickeables. */
+   La tabla (FACTURA + PROVEEDOR + una por coeficiente + ALIAS + TÉCNICO + TEL
+   + ACCIONES) no entra en un teléfono: la card scrollea en horizontal y las
+   acciones crecen a 40px de alto para ser clickeables. */
 @media (max-width: 640px) {
   .page { padding: 12px; }
   .toolbar { gap: 10px; }

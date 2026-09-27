@@ -67,11 +67,16 @@ export async function GET(request: NextRequest) {
       fixedExpenses: {
         select: {
           id: true, providerId: true, lspServiceId: true, description: true, kind: true, active: true,
+          rubroId: true, coeficienteId: true,
         },
       },
       lspServices: {
         select: { id: true, providerName: true, clientNumber: true, description: true, providerId: true },
       },
+      // Rubros y coeficientes que usa el edificio (spec 2026-09-24): arman las
+      // secciones y las columnas de la hoja.
+      rubros: { select: { rubro: { select: { id: true, order: true, name: true } } } },
+      coeficientes: { select: { coeficiente: { select: { id: true, code: true } } } },
     },
     orderBy: { canonicalName: "asc" },
   });
@@ -89,7 +94,10 @@ export async function GET(request: NextRequest) {
           fixedExpenseId: true,
           status: true,
           invoice: {
-            select: { id: true, amount: true, sourceFileUrl: true, carryOverRequestedAt: true, carriedFromPeriodId: true },
+            select: {
+              id: true, amount: true, sourceFileUrl: true, carryOverRequestedAt: true, carriedFromPeriodId: true,
+              rubroId: true, coeficienteId: true,
+            },
           },
         },
       })
@@ -114,8 +122,9 @@ export async function GET(request: NextRequest) {
           lateAmount: true,
           sourceFileUrl: true,
           carryOverRequestedAt: true,
+          docKind: true,
           providerRef: { select: { canonicalName: true, paymentAlias: true } },
-          lspServiceRef: { select: { clientNumber: true } },
+          lspServiceRef: { select: { clientNumber: true, providerName: true, description: true } },
           carriedFrom: { select: { year: true, month: true } },
         },
       })
@@ -128,6 +137,7 @@ export async function GET(request: NextRequest) {
   const looseSelect = {
     id: true, consortiumId: true, periodId: true, providerId: true, lspServiceId: true,
     docKind: true, amount: true, sourceFileUrl: true, carryOverRequestedAt: true, createdAt: true,
+    rubroId: true, coeficienteId: true,
     provider: true,
     providerRef: { select: { canonicalName: true, paymentAlias: true, matchNames: true } },
     lspServiceRef: { select: { clientNumber: true } },
@@ -165,6 +175,8 @@ export async function GET(request: NextRequest) {
     invoiceUrl: inv.sourceFileUrl ?? null,
     carryOverRequested: Boolean(inv.carryOverRequestedAt),
     createdAt: inv.createdAt.toISOString(),
+    rubroId: inv.rubroId,
+    coeficienteId: inv.coeficienteId,
     carriedOutTo,
   });
 
@@ -193,11 +205,21 @@ export async function GET(request: NextRequest) {
         /** ACTIVE / CLOSED, o null si el edificio no tiene período de este mes. */
         periodStatus: period?.status ?? null,
         lspServices: c.lspServices,
+        rubros: c.rubros.map((r) => r.rubro),
+        coeficientes: c.coeficientes.map((k) => k.coeficiente),
         carried: carried
           .filter((inv) => inv.consortiumId === c.id)
           .map((inv) => ({
             invoiceId: inv.id,
-            concepto: inv.providerRef?.canonicalName ?? inv.provider ?? "—",
+            // Mismo rótulo que la fila del gasto fijo que arrastra: el servicio con su
+            // descripción (EDESUR S.A. — PORTERIA) y la retención marcada. Sin esto, dos
+            // EDESUR del mismo edificio no se distinguían (spec: "suma la aclaración de
+            // qué gasto fijo arrastra").
+            concepto:
+              (inv.lspServiceRef
+                ? `${inv.lspServiceRef.providerName}${inv.lspServiceRef.description ? ` — ${inv.lspServiceRef.description}` : ""}`
+                : inv.providerRef?.canonicalName ?? inv.provider ?? "—") +
+              (inv.docKind === "RETENCION" ? " — Retención" : ""),
             facturas: inv.lspServiceRef?.clientNumber ?? null,
             aliasCbu: inv.providerRef?.paymentAlias ?? null,
             originalAmount: inv.amount != null ? Number(inv.amount) : null,
@@ -228,6 +250,8 @@ export async function GET(request: NextRequest) {
             description: fx.description,
             kind: fx.kind,
             active: fx.active,
+            rubroId: fx.rubroId,
+            coeficienteId: fx.coeficienteId,
             obligation: ob
               ? {
                   id: ob.id,
@@ -241,6 +265,9 @@ export async function GET(request: NextRequest) {
                   carryOverRequested: Boolean(ob.invoice?.carryOverRequestedAt),
                   /** Esta boleta vino empujada de un mes anterior. */
                   carriedIn: Boolean(ob.invoice?.carriedFromPeriodId),
+                  /** Etiqueta propia de la boleta; manda sobre la del gasto fijo (decisión D4). */
+                  invoiceRubroId: ob.invoice?.rubroId ?? null,
+                  invoiceCoeficienteId: ob.invoice?.coeficienteId ?? null,
                 }
               : null,
           };
