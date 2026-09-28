@@ -1,6 +1,6 @@
 # Progreso del proyecto — drive-doc-processor
 
-Actualizado al 27/09/2026 (sesión 73 — rubros y coeficientes, parte 2: hoja de obligaciones agrupada).
+Actualizado al 28/09/2026 (sesión 73 — rubros y coeficientes, parte 2 + arrastre dentro de los rubros).
 Sesión 72 (24/09): rubros y coeficientes, parte 1: modelo, carga y pipeline.
 Sesión 71 (23/09): "Empleado" en la columna FACTURA/NRO CLIENTE de la hoja de obligaciones.
 Sesión 70 (19/09): router + prompt TELECENTRO con la primera factura real, GUALEGUAYCHU.
@@ -28,6 +28,60 @@ VEP, y el LSD abierto en una boleta por empleado.
 > Las secciones de la **sesión 61** (instrumentación de requests, triage de no-boletas, LSD) y la del
 > **VEP** (sesión 62) dicen "implementado": las primeras entraron en `ae31c15` y `e3551a7`, el VEP en
 > `add4e11`. Lo que sigue abierto en todas ellas es el **smoke en producción**, no el commit.
+
+## 🔁 Arrastre de impagas dentro de los rubros + "Omitir" + menú Acciones (2026-09-28)
+
+**Estado:** implementado con subagentes, sin migración. **Falta el smoke del owner** después del
+deploy. Spec `docs/superpowers/specs/2026-09-28-arrastre-en-rubros-y-omitir-design.md`, plan
+`docs/superpowers/plans/2026-09-28-arrastre-en-rubros-y-omitir.md`.
+
+- [x] "Saltear periodo" → **Omitir**; "Agregar al periodo" → **Incluir**. Diálogo aclara: «Si la
+      boleta llegó y no se pudo pagar, no la omitas: usá «Mes siguiente»».
+- [x] Omitir + Desactivar en un menú **Acciones ▾** (`ActionsMenu.tsx`); editor de etiqueta, Mes
+      siguiente e Incluir/Activar quedan como botones directos.
+- [x] Mes destino: la arrastrada va en su rubro con `de septiembre`, suma en rubro y en el total del
+      mes; conserva 1°/2° pago, Devolver, Monto vencido y Mes siguiente. Sin bloque aparte (ni en PDF).
+- [x] Mes origen: fila `CARRIED_OVER` con `pasó a octubre`, atenuada, sin acciones, no suma ni imprime.
+- [x] Distintivos sólo con el mes (`monthOnly`), también en adicionales/eventuales pasadas.
+- [x] `carry-over/pending`: marcadas del mes pedido **y del anterior**, sólo períodos CERRADOS. La barra
+      de la vista dice «Hay N boleta(s) marcadas para pasar al mes siguiente — Pasar ahora».
+- [x] Revisión final: arrastrada sin etiqueta propia usa la del gasto fijo de origen + editor en el
+      destino; PDF sin rubros vacíos (`isItemPrintable` compartida); menú con teclado (flechas,
+      Escape devuelve el foco). Límites conocidos en `docs/decisiones.md` (2026-09-28).
+- [ ] Mirar en pantalla que la fila arrastrada (editor + Mes siguiente + Devolver + Monto vencido)
+      entre en la columna de acciones de 370px.
+
+**Verificar en producción** (en el próximo cierre): marcar una boleta con "Mes siguiente", cerrar el
+período general, abrir Obligaciones (abre en el mes nuevo), apretar "Pasar ahora" y ver la boleta en
+su rubro con `de <mes>`; volver al mes anterior y ver `pasó a <mes>` sin sumar.
+
+## 🗂️ Hoja de obligaciones — ajustes de vista tras el primer smoke (2026-09-27)
+
+**Estado:** implementado, sin migración. **Falta el smoke del owner** después del deploy.
+
+Pedido del owner sobre la captura de ARENALES 2154:
+- [x] Bloques de rubro con fondo gris (un `tbody` por rubro, franja de separación arriba del título).
+- [x] Rubros vacíos: no se dibujan (antes título + total `0,00`).
+- [x] TÉCNICO O GESTOR y TEL. CONTACTO fuera de la pantalla; se quita `data-compact` (D14). **Siguen
+      en el PDF** — si tampoco se quieren ahí, es cambiar `TRAIL_COLUMNS`/`pdfColumnWidths`.
+- [x] Adicionales sin `↳ 2ª boleta`: misma denominación que la principal, pegadas a ella, con su
+      factura, su monto y etiqueta propia (`ExtraRow.rubroId`/`coeficienteId`, editables con
+      `LabelEditor` → `PATCH /api/client/labels` con `{ invoiceId }`). Con otro rubro que la madre, la
+      adicional va a ESA sección (`SectionItem` `kind: "extra"`). Mismo criterio en el PDF.
+- [x] FACTURA/NRO CLIENTE: nro. de factura (`Invoice.boletaNumber`) en proveedores; nro. de cliente
+      en servicios. Tope en pantalla sube a 14 caracteres, columna a 128px.
+- [x] Totales en cero en blanco (pantalla); encabezados A/B/C/EXTRA y COEFICIENTE alineados; celda
+      de acciones sin `display: flex` (la línea de la fila quedaba escalonada a la derecha).
+- [x] Botón de etiqueta: `sin rubro` / `sin coef.`, ámbar si el edificio usa coeficientes y a la fila
+      le falta uno (el monto cae en la primera columna). Editor abierto con selects del tema (antes
+      el select nativo salía blanco) y Guardar en azul.
+- [x] **Saltear periodo y Desactivar piden confirmación** (`ConfirmActionDialog`): quedan al lado del
+      editor de etiqueta y un click errado cambiaba el estado del gasto. El diálogo explica qué pasa y
+      cómo se deshace; el foco arranca en Cancelar y Escape cierra. Activar / Agregar al periodo no
+      preguntan (son las que deshacen).
+
+**Verificar en producción:** ARENALES 2154 (bloques, alineación, sin rubros vacíos), un proveedor con
+2 boletas en el mes (mismo nombre, dos facturas), el PDF del banco.
 
 ## 🗂️ Rubros y coeficientes — parte 2: hoja de obligaciones agrupada (2026-09-27)
 

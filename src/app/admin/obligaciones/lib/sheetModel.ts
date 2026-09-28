@@ -8,7 +8,8 @@
 import { obligationMatchesInvoice } from "@/lib/fixedExpense";
 import { parsePaymentAliases } from "@/lib/paymentAliases";
 
-export type ObligationStatus = "PENDING" | "RECEIVED" | "SKIPPED" | "NOT_RECEIVED";
+/** `CARRIED_OVER`: su boleta pasó al mes siguiente; el origen la muestra, sin contarla. */
+export type ObligationStatus = "PENDING" | "RECEIVED" | "SKIPPED" | "NOT_RECEIVED" | "CARRIED_OVER";
 /**
  * Grupo de una fila. Desde `groupByRubro` (parte 2) ya no ordena la hoja —eso
  * lo hace la sección de rubro—; hoy sólo se usa para que `facturasLabel`
@@ -55,6 +56,10 @@ export type OverviewFixedExpense = {
     /** Etiqueta propia de la boleta vinculada; manda sobre la del gasto fijo (D4). */
     invoiceRubroId?: string | null;
     invoiceCoeficienteId?: string | null;
+    /** Nro. de la factura vinculada: va en FACTURA/NRO CLIENTE cuando no es un servicio. */
+    invoiceBoletaNumber?: string | null;
+    /** Con status CARRIED_OVER: a qué mes pasó la boleta ("octubre 2026"). */
+    invoiceCarriedOutTo?: string | null;
   } | null;
 };
 
@@ -82,6 +87,9 @@ export type OverviewCarried = {
   carryOverRequested: boolean;
   /** Link de Drive del PDF de la boleta. */
   invoiceUrl?: string | null;
+  /** Etiqueta de la boleta: la sección de rubro y la columna donde va (spec 2026-09-28). */
+  rubroId?: string | null;
+  coeficienteId?: string | null;
 };
 
 /**
@@ -147,18 +155,34 @@ export type OverviewPayload = {
 /**
  * Boleta ADICIONAL de un gasto fijo: la 2ª, 3ª… del mismo proveedor en el mes.
  * No es una obligación (no se omite, no vence): es otro gasto a pagar, con su
- * PDF, su recibo y su arrastre. Concepto y alias los hereda de la fila madre.
+ * PDF, su recibo y su arrastre. Concepto y alias los hereda de la fila madre y
+ * se muestra con ese mismo nombre, pegada a ella; lo que la distingue es su
+ * factura, su monto y, si se le cargó, su propia etiqueta.
  */
 export type ExtraRow = {
   invoiceId: string;
-  /** 2, 3, … (la principal, vinculada a la obligación, es la 1ª). */
-  ordinal: number;
+  /** Nro. de la factura (o de cliente, si es un servicio). */
+  facturas: string | null;
   monto: number | null;
   invoiceUrl: string | null;
   carryOverRequested: boolean;
   /** "octubre 2026" si el owner la empujó al mes siguiente; null si vive acá. */
   carriedOutTo: string | null;
+  /**
+   * Etiqueta PROPIA de la boleta; null = hereda la de la madre (`extraLabels`).
+   * Con otro rubro que la madre, `groupByRubro` la lleva a esa sección.
+   */
+  rubroId?: string | null;
+  coeficienteId?: string | null;
 };
+
+/** Rubro y coeficiente que valen para una adicional: los suyos, o los de su madre. */
+export function extraLabels(row: SheetRow, extra: ExtraRow): { rubroId: string | null; coeficienteId: string | null } {
+  return {
+    rubroId: extra.rubroId ?? row.rubroId ?? null,
+    coeficienteId: extra.coeficienteId ?? row.coeficienteId ?? null,
+  };
+}
 
 /**
  * Boleta de un proveedor que NO es gasto fijo del edificio (ticket, trabajo
@@ -212,6 +236,11 @@ export type SheetRow = {
   carriedIn: boolean;
   /** Link de Drive del PDF de la boleta, para la vista previa. Null si no llegó. */
   invoiceUrl: string | null;
+  /**
+   * Obligación CARRIED_OVER: su boleta pasó a otro mes ("octubre 2026"). La fila
+   * queda de rendición: atenuada, sin acciones, no suma ni se imprime.
+   */
+  carriedOutTo: string | null;
   /** Las demás boletas del mes de este mismo gasto fijo, en orden de llegada. */
   extras: ExtraRow[];
   group: RowGroup;
@@ -221,12 +250,12 @@ export type SheetRow = {
 };
 
 /**
- * Fila del bloque "Vienen del mes anterior".
+ * Boleta impaga que vino empujada del mes anterior.
  *
  * No es una `SheetRow`: no sale de un gasto fijo del mes sino de una boleta que
- * el owner empujó desde el mes pasado. Va en un bloque propio —y en una sección
- * aparte del PDF— para distinguir a simple vista qué es del mes y qué viene
- * atrasado.
+ * el owner empujó desde el mes pasado. `groupByRubro` la mete en la sección de
+ * su rubro con el distintivo "de septiembre" y la suma (spec 2026-09-28, revierte
+ * el bloque aparte "Vienen del mes anterior").
  */
 export type CarriedRow = {
   invoiceId: string;
@@ -244,6 +273,9 @@ export type CarriedRow = {
   carryOverRequested: boolean;
   /** Link de Drive del PDF, para la vista previa. */
   invoiceUrl: string | null;
+  /** Rubro y coeficiente de la boleta. Sin rubro (o uno que el edificio no usa) → "Sin rubro". */
+  rubroId: string | null;
+  coeficienteId: string | null;
 };
 
 export type SheetData = {
@@ -256,7 +288,7 @@ export type SheetData = {
   periodLabel: string | null;
   periodStatus: "ACTIVE" | "CLOSED" | null;
   rows: SheetRow[];
-  /** Bloque aparte, debajo de la tabla de gastos fijos. */
+  /** Arrastradas del mes anterior. `groupByRubro` las reparte en su sección de rubro. */
   carried: CarriedRow[];
   /** Boletas eventuales: proveedores que no son gasto fijo del edificio. `groupByRubro`
    * las reparte en su sección de rubro (D6), no forman un bloque propio. */
@@ -268,7 +300,16 @@ export type SheetData = {
 };
 
 /** Lo que va dentro de una sección: una fila del padrón o una boleta eventual (D6). */
-export type SectionItem = { kind: "row"; row: SheetRow } | { kind: "other"; other: OtherRow };
+/**
+ * `extra`: adicional con un rubro distinto al de su madre. Va suelta en SU sección,
+ * con el nombre de la madre (las que comparten rubro viajan en `row.extras`).
+ * `carried`: impaga arrastrada del mes anterior (spec 2026-09-28).
+ */
+export type SectionItem =
+  | { kind: "row"; row: SheetRow }
+  | { kind: "other"; other: OtherRow }
+  | { kind: "extra"; row: SheetRow; extra: ExtraRow }
+  | { kind: "carried"; carried: CarriedRow };
 
 export type RubroSection = {
   /** null = "Sin rubro". */
@@ -298,8 +339,11 @@ function groupOf(isLsp: boolean, providerType: RowGroup | undefined): RowGroup {
   return providerType === "EMPLEADO" ? "EMPLEADO" : "PROVEEDOR";
 }
 
-/** Tope de caracteres del nro. de cliente en pantalla; el completo va en el tooltip y en el PDF. */
-export const CLIENT_NUMBER_MAX = 12;
+/**
+ * Tope de caracteres del nro. de cliente o de factura en pantalla; el completo va
+ * en el tooltip y en el PDF. 14 = un nro. de factura entero (`00003-00001234`).
+ */
+export const CLIENT_NUMBER_MAX = 14;
 
 /**
  * Recorta un número de cliente largo para que la columna FACTURA/NRO CLIENTE no
@@ -353,6 +397,16 @@ export function columnIndex(columns: CoefColumn[], coeficienteId: string | null 
   return i >= 0 ? i : 0;
 }
 
+/**
+ * Sólo el mes de un rótulo de período: "septiembre 2026" → "septiembre". Los
+ * distintivos "de septiembre" / "pasó a octubre" no llevan año (spec 2026-09-28).
+ */
+export function monthOnly(label: string | null): string | null {
+  if (label == null) return null;
+  const first = label.trim().split(/\s+/)[0];
+  return first ? first : null;
+}
+
 export function rubroTitle(r: RubroInfo): string {
   return r.order != null ? `${r.order} ${r.name}` : r.name;
 }
@@ -393,11 +447,13 @@ export function buildSheets(payload: OverviewPayload): SheetData[] {
         const list = extrasByFx.get(fx.id) ?? [];
         list.push({
           invoiceId: inv.invoiceId,
-          ordinal: list.length + 2,
+          facturas: inv.facturas,
           monto: inv.amount,
           invoiceUrl: inv.invoiceUrl,
           carryOverRequested: inv.carryOverRequested,
           carriedOutTo: inv.carriedOutTo,
+          rubroId: inv.rubroId ?? null,
+          coeficienteId: inv.coeficienteId ?? null,
         });
         extrasByFx.set(fx.id, list);
       } else {
@@ -440,7 +496,8 @@ export function buildSheets(payload: OverviewPayload): SheetData[] {
         obligationId: fx.obligation?.id ?? null,
         providerId: fx.providerId,
         lspServiceId: fx.lspServiceId,
-        facturas: lsp?.clientNumber ?? null,
+        // Servicio: su nro. de cliente. Resto: el nro. de la factura del mes, si llegó.
+        facturas: lsp?.clientNumber ?? fx.obligation?.invoiceBoletaNumber ?? null,
         concepto,
         fantasia,
         monto: fx.obligation?.amount ?? null,
@@ -451,6 +508,7 @@ export function buildSheets(payload: OverviewPayload): SheetData[] {
         carryOverRequested: fx.obligation?.carryOverRequested ?? false,
         carriedIn: fx.obligation?.carriedIn ?? false,
         invoiceUrl: fx.obligation?.invoiceUrl ?? null,
+        carriedOutTo: fx.obligation?.invoiceCarriedOutTo ?? null,
         extras: extrasByFx.get(fx.id) ?? [],
         group: groupOf(Boolean(lsp), provider?.providerType),
         rubroId: fx.obligation?.invoiceRubroId ?? fx.rubroId ?? null,
@@ -474,6 +532,8 @@ export function buildSheets(payload: OverviewPayload): SheetData[] {
         fromLabel: inv.fromLabel,
         carryOverRequested: inv.carryOverRequested,
         invoiceUrl: inv.invoiceUrl ?? null,
+        rubroId: inv.rubroId ?? null,
+        coeficienteId: inv.coeficienteId ?? null,
       }))
       .sort((a, b) => a.concepto.localeCompare(b.concepto, "es"));
 
@@ -517,12 +577,33 @@ export function isPrintableRow(row: SheetRow): boolean {
   if (!row.active) return false;                 // gasto fijo dado de baja
   if (row.status === "SKIPPED") return false;    // este mes no va
   if (row.status === "NO_PERIOD") return false;  // el edificio no tiene período abierto
+  if (row.status === "CARRIED_OVER") return false; // su boleta se paga en otro mes
   return true;
 }
 
 /** Las adicionales que van al papel: las que siguen viviendo en este mes. */
 export function printableExtras(row: SheetRow): ExtraRow[] {
   return row.extras.filter((e) => !e.carriedOutTo);
+}
+
+/**
+ * ¿Este ítem de una sección va al papel? Mismo criterio que `toPrintableSheets`,
+ * pero por ítem: una madre salteada (o pasada a otro mes) cuya única adicional
+ * imprimible cayó en OTRO rubro queda en su sección con `extras: []` — cuenta
+ * como ítem pero no imprime nada. La pantalla y el PDF lo usan para no dejar una
+ * sección con título y total y sin ninguna fila.
+ */
+export function isItemPrintable(item: SectionItem): boolean {
+  switch (item.kind) {
+    case "row":
+      return isPrintableRow(item.row) || printableExtras(item.row).length > 0;
+    case "extra":
+      return !item.extra.carriedOutTo;
+    case "carried":
+      return true; // la arrastrada es deuda a pagar este mes: siempre va
+    case "other":
+      return !item.other.carriedOutTo;
+  }
 }
 
 /**
@@ -545,8 +626,8 @@ export function hasPrintableRows(sheet: SheetData): boolean {
  * edificios sin período activo y sin edificios que quedarían en blanco (no se
  * gasta papel en una hoja vacía). Una madre no imprimible con adicionales
  * QUEDA: el PDF decide con `isPrintableRow` si imprime su línea o sólo las
- * adicionales. Lo que pasó a otro mes no va. El bloque de impagas viaja
- * intacto. No muta la entrada.
+ * adicionales. Lo que pasó a otro mes no va. Las impagas arrastradas viajan
+ * intactas. No muta la entrada.
  */
 export function toPrintableSheets(sheets: SheetData[]): SheetData[] {
   return sheets
@@ -579,20 +660,26 @@ export function filterSheets(sheets: SheetData[], query: string): SheetData[] {
     }
     const rows = sheet.rows.filter((r) => norm(r.concepto).includes(q));
     const others = sheet.others.filter((o) => norm(o.concepto).includes(q));
-    if (rows.length > 0 || others.length > 0) out.push({ ...sheet, rows, others });
+    const carried = sheet.carried.filter((c) => norm(c.concepto).includes(q));
+    if (rows.length > 0 || others.length > 0 || carried.length > 0) out.push({ ...sheet, rows, others, carried });
   }
   return out;
 }
 
-/** Tramo dentro de la sección: con boleta (0), pendiente (1), salteada (2). Una eventual siempre trae boleta. */
+/**
+ * Tramo dentro de la sección: con boleta (0), pendiente (1), salteada o pasada a
+ * otro mes (2). Una eventual y una arrastrada siempre traen boleta.
+ */
 function itemTier(item: SectionItem): number {
-  if (item.kind === "other") return 0;
-  if (item.row.status === "SKIPPED") return 2;
+  if (item.kind !== "row") return 0;
+  if (item.row.status === "SKIPPED" || item.row.status === "CARRIED_OVER") return 2;
   return item.row.invoiceId || item.row.monto != null ? 0 : 1;
 }
 
 function itemConcepto(item: SectionItem): string {
-  return item.kind === "row" ? item.row.concepto : item.other.concepto;
+  if (item.kind === "other") return item.other.concepto;
+  if (item.kind === "carried") return item.carried.concepto;
+  return item.row.concepto;
 }
 
 /**
@@ -604,7 +691,8 @@ function itemConcepto(item: SectionItem): string {
  *   uno que el edificio ya no usa.
  * - Los desactivados no entran: viven en su bloque plegado.
  * - Totales por columna de coeficiente; una fila sin coeficiente suma en la primera;
- *   las adicionales en la columna de su madre (D7); lo que pasó a otro mes no suma.
+ *   una adicional en la de su propio coeficiente, o el de su madre si no tiene;
+ *   lo que pasó a otro mes no suma; lo que vino del mes anterior sí.
  *
  * Pura: la consumen la pantalla y el PDF, así ven exactamente lo mismo.
  */
@@ -612,14 +700,24 @@ export function groupByRubro(sheet: SheetData): RubroSection[] {
   const columns = sheet.coefColumns.length > 0 ? sheet.coefColumns : [FALLBACK_COLUMN];
   const assigned = new Set(sheet.rubros.map((r) => r.id));
   const buckets = new Map<string | null, SectionItem[]>();
+  const bucketOf = (rubroId: string | null | undefined) => (rubroId && assigned.has(rubroId) ? rubroId : null);
   const put = (rubroId: string | null | undefined, item: SectionItem) => {
-    const key = rubroId && assigned.has(rubroId) ? rubroId : null;
+    const key = bucketOf(rubroId);
     const list = buckets.get(key) ?? [];
     list.push(item);
     buckets.set(key, list);
   };
-  for (const row of sheet.rows) if (row.active) put(row.rubroId, { kind: "row", row });
+  for (const row of sheet.rows) {
+    if (!row.active) continue;
+    // La adicional acompaña a su madre salvo que tenga otro rubro: ahí va a esa sección.
+    const own = row.extras.filter((e) => bucketOf(extraLabels(row, e).rubroId) === bucketOf(row.rubroId));
+    put(row.rubroId, { kind: "row", row: own.length === row.extras.length ? row : { ...row, extras: own } });
+    for (const extra of row.extras) {
+      if (!own.includes(extra)) put(extraLabels(row, extra).rubroId, { kind: "extra", row, extra });
+    }
+  }
   for (const other of sheet.others) put(other.rubroId, { kind: "other", other });
+  for (const carried of sheet.carried) put(carried.rubroId, { kind: "carried", carried });
 
   const sortItems = (items: SectionItem[]) =>
     [...items].sort((a, b) => itemTier(a) - itemTier(b) || itemConcepto(a).localeCompare(itemConcepto(b), "es"));
@@ -628,9 +726,16 @@ export function groupByRubro(sheet: SheetData): RubroSection[] {
     const totals = columns.map(() => 0);
     for (const item of items) {
       if (item.kind === "row") {
-        const col = columnIndex(columns, item.row.coeficienteId);
-        if (item.row.monto != null) totals[col] += item.row.monto;
-        for (const e of item.row.extras) if (!e.carriedOutTo && e.monto != null) totals[col] += e.monto;
+        // La que pasó a otro mes no suma acá (sus adicionales sí, criterio de siempre).
+        if (item.row.status !== "CARRIED_OVER" && item.row.monto != null) totals[columnIndex(columns, item.row.coeficienteId)] += item.row.monto;
+        for (const e of item.row.extras) {
+          if (!e.carriedOutTo && e.monto != null) totals[columnIndex(columns, extraLabels(item.row, e).coeficienteId)] += e.monto;
+        }
+      } else if (item.kind === "extra") {
+        const e = item.extra;
+        if (!e.carriedOutTo && e.monto != null) totals[columnIndex(columns, extraLabels(item.row, e).coeficienteId)] += e.monto;
+      } else if (item.kind === "carried") {
+        totals[columnIndex(columns, item.carried.coeficienteId)] += item.carried.monto;
       } else if (!item.other.carriedOutTo && item.other.monto != null) {
         totals[columnIndex(columns, item.other.coeficienteId)] += item.other.monto;
       }

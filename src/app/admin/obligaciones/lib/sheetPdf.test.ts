@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { CARRIED_TITLE, pdfColumnWidths, pdfFileName, toPdfTables, type PdfCell } from "./sheetPdf";
+import { pdfColumnWidths, pdfFileName, toPdfTables, type PdfCell } from "./sheetPdf";
 import type { SheetData } from "./sheetModel";
 
 const num = (n: number) => new Intl.NumberFormat("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n);
@@ -26,20 +26,27 @@ const base: SheetData = {
   rows: [
     { fixedExpenseId: "fx2", obligationId: "ob2", providerId: null, lspServiceId: "l1",
       facturas: "4804882", concepto: "EDESUR", fantasia: null, monto: 118000, aliasCbu: ["edesur.pago"],
-      status: "RECEIVED", active: true, invoiceId: "i2", carryOverRequested: false, carriedIn: false, invoiceUrl: null,
+      status: "RECEIVED", active: true, invoiceId: "i2", carryOverRequested: false, carriedIn: false, carriedOutTo: null, invoiceUrl: null,
       extras: [], group: "SERVICIO", rubroId: "r3", coeficienteId: "cB" },
     { fixedExpenseId: "fx1", obligationId: "ob1", providerId: "p1", lspServiceId: null,
       facturas: null, concepto: "SEGURO LA CAJA", fantasia: null, monto: null, aliasCbu: [],
-      status: "PENDING", active: true, invoiceId: null, carryOverRequested: false, carriedIn: false, invoiceUrl: null,
+      status: "PENDING", active: true, invoiceId: null, carryOverRequested: false, carriedIn: false, carriedOutTo: null, invoiceUrl: null,
       extras: [], group: "PROVEEDOR", rubroId: "r10", coeficienteId: null },
     { fixedExpenseId: "fx9", obligationId: "ob9", providerId: "p9", lspServiceId: null,
       facturas: null, concepto: "FUMIGACION", fantasia: null, monto: null, aliasCbu: [],
-      status: "SKIPPED", active: true, invoiceId: null, carryOverRequested: false, carriedIn: false, invoiceUrl: null,
+      status: "SKIPPED", active: true, invoiceId: null, carryOverRequested: false, carriedIn: false, carriedOutTo: null, invoiceUrl: null,
       extras: [], group: "PROVEEDOR", rubroId: "r4", coeficienteId: null },
   ],
   carried: [],
   others: [],
 };
+
+/** Impaga arrastrada del mes anterior; por defecto en el rubro 3, columna A. */
+const arrastrada = (over: Partial<SheetData["carried"][number]> = {}): SheetData["carried"][number] => ({
+  invoiceId: "c9", facturas: null, concepto: "AYSA", monto: 900, originalAmount: 900, lateAmount: null,
+  aliasCbu: [], fromLabel: "junio 2026", carryOverRequested: false, invoiceUrl: null,
+  rubroId: "r3", coeficienteId: "cA", ...over,
+});
 
 describe("toPdfTables", () => {
   it("rotula banco y período en el subtítulo", () => {
@@ -108,19 +115,39 @@ describe("toPdfTables", () => {
     expect(items(body)).toContainEqual(["", "PLOMERO JUAN (JUAN)", num(32000), "", "juan.plomero", "", ""]);
   });
 
-  it("una adicional sale indentada bajo su madre, en la columna de la madre", () => {
+  it("una adicional sale debajo de su madre con el mismo nombre, su factura y en la columna de la madre", () => {
     const conExtra = { ...base, rows: [{ ...base.rows[0], extras: [
-      { invoiceId: "e1", ordinal: 2, monto: 54000, invoiceUrl: null, carryOverRequested: false, carriedOutTo: null },
+      { invoiceId: "e1", facturas: "0001-00000077", monto: 54000, invoiceUrl: null, carryOverRequested: false, carriedOutTo: null },
     ] }] };
-    // "> " en vez de "↳ ": la Helvetica embebida de jsPDF no tiene ese glifo.
-    expect(items(toPdfTables([conExtra])[0].body)[1]).toEqual(["", "   > 2ª boleta", "", num(54000), "edesur.pago", "", ""]);
+    expect(items(toPdfTables([conExtra])[0].body)[1]).toEqual(["0001-00000077", "EDESUR", "", num(54000), "edesur.pago", "", ""]);
   });
 
-  it("la adicional de una madre salteada lleva el concepto completo, sin la flecha", () => {
-    const salteada = { ...base, rows: [{ ...base.rows[0], status: "SKIPPED" as const, extras: [
-      { invoiceId: "e2", ordinal: 2, monto: 54000, invoiceUrl: null, carryOverRequested: false, carriedOutTo: null },
+  it("una adicional con coeficiente propio sale en esa columna", () => {
+    const conExtra = { ...base, rows: [{ ...base.rows[0], extras: [
+      { invoiceId: "e1", facturas: null, monto: 54000, invoiceUrl: null, carryOverRequested: false, carriedOutTo: null, coeficienteId: "cA" },
     ] }] };
-    expect(items(toPdfTables([salteada])[0].body)).toContainEqual(["", "EDESUR — 2ª boleta", "", num(54000), "edesur.pago", "", ""]);
+    expect(items(toPdfTables([conExtra])[0].body)[1]).toEqual(["", "EDESUR", num(54000), "", "edesur.pago", "", ""]);
+  });
+
+  it("la adicional de una madre salteada sale sola, con el nombre de la madre", () => {
+    const salteada = { ...base, rows: [{ ...base.rows[0], status: "SKIPPED" as const, extras: [
+      { invoiceId: "e2", facturas: null, monto: 54000, invoiceUrl: null, carryOverRequested: false, carriedOutTo: null },
+    ] }] };
+    expect(items(toPdfTables([salteada])[0].body)).toContainEqual(["", "EDESUR", "", num(54000), "edesur.pago", "", ""]);
+  });
+
+  it("madre salteada cuya única adicional cayó en otro rubro: su sección no sale vacía", () => {
+    // La madre queda en el rubro 3 sin adicionales propias (la suya se fue al 4):
+    // es un ítem de la sección pero no imprime nada. Sin el filtro por lo
+    // imprimible, el papel mostraba "3 SERVICIOS PÚBLICOS" y su total sin filas.
+    for (const status of ["SKIPPED", "CARRIED_OVER"] as const) {
+      const madre = { ...base, rows: [{ ...base.rows[0], status, extras: [
+        { invoiceId: "e3", facturas: "0001-00000088", monto: 54000, invoiceUrl: null, carryOverRequested: false, carriedOutTo: null, rubroId: "r4" },
+      ] }] };
+      const titulos = toPdfTables([madre])[0].body.map(titleOf);
+      expect(titulos).not.toContain("3 SERVICIOS PÚBLICOS");
+      expect(titulos).toEqual(["4 ABONOS DE SERVICIOS", "0001-00000088", "TOTAL RUBRO 4", "TOTAL DEL MES"]);
+    }
   });
 
   it("la fila de un empleado sale rotulada 'Empleado'", () => {
@@ -128,18 +155,36 @@ describe("toPdfTables", () => {
     expect(items(toPdfTables([sueldo])[0].body)[0][0]).toBe("Empleado");
   });
 
-  it("las arrastradas van en su bloque, con el monto en la primera columna", () => {
-    const conArrastre = { ...base, carried: [{ invoiceId: "c9", facturas: null, concepto: "AYSA", monto: 900,
-      originalAmount: 900, lateAmount: null, aliasCbu: [], fromLabel: "junio 2026", carryOverRequested: false, invoiceUrl: null }] };
-    expect(toPdfTables([conArrastre])[0].carried).toEqual([["", "AYSA — de junio 2026", num(900), "", "", "", ""]]);
-    expect(CARRIED_TITLE).toBe("VIENEN DEL MES ANTERIOR");
+  it("una arrastrada va en su rubro con «(de junio)», en la columna de su coeficiente, y suma en los totales", () => {
+    const conArrastre = { ...base, carried: [arrastrada()] };
+    const t = toPdfTables([conArrastre])[0];
+    expect(t.body.map(titleOf).slice(0, 4)).toEqual(["3 SERVICIOS PÚBLICOS", "", "4804882", "TOTAL RUBRO 3"]);
+    expect(items(t.body)).toContainEqual(["", "AYSA (de junio)", num(900), "", "", "", ""]);
+    const total3 = t.body.find((r) => titleOf(r) === "TOTAL RUBRO 3")!;
+    expect(total3.slice(1, 3)).toEqual([num(900), num(118000)]);
+    expect(t.body[t.body.length - 1].slice(1, 3)).toEqual([num(900), num(118000)]);
+    // Ya no hay bloque ni tabla aparte.
+    expect(t).not.toHaveProperty("carried");
+  });
+
+  it("una arrastrada sin rubro sale en SIN RUBRO", () => {
+    const t = toPdfTables([{ ...base, carried: [arrastrada({ rubroId: null })] }])[0];
+    const iSin = t.body.findIndex((r) => titleOf(r) === "SIN RUBRO");
+    expect(iSin).toBeGreaterThan(-1);
+    expect(t.body[iSin + 1]).toEqual(["", "AYSA (de junio)", num(900), "", "", "", ""]);
   });
 
   it("la impaga con 2° vencimiento muestra el 1° pago con signo $ (D8: es texto, no columna de monto)", () => {
-    const conAtraso = { ...base, carried: [{ invoiceId: "c1", facturas: null, concepto: "AYSA", monto: 950,
-      originalAmount: 900, lateAmount: 950, aliasCbu: [], fromLabel: "junio 2026", carryOverRequested: false, invoiceUrl: null }] };
-    const [row] = toPdfTables([conAtraso])[0].carried;
-    expect(row[1]).toBe(`AYSA — de junio 2026 (1° pago ${currency(900)})`);
+    const t = toPdfTables([{ ...base, carried: [arrastrada({ monto: 950, lateAmount: 950 })] }])[0];
+    const row = items(t.body).find((r) => String(r[1]).startsWith("AYSA"))!;
+    expect(row[1]).toBe(`AYSA (de junio) (1° pago ${currency(900)})`);
+    expect(row[2]).toBe(num(950));
+  });
+
+  it("la fila cuya boleta pasó a otro mes (CARRIED_OVER) no sale", () => {
+    const pasada = { ...base, rows: [{ ...base.rows[0], status: "CARRIED_OVER" as const, carriedOutTo: "agosto 2026" }, base.rows[1]] };
+    const t = toPdfTables([pasada])[0];
+    expect(t.body.map(titleOf)).not.toContain("4804882");
   });
 
   it("un edificio sin nada imprimible no genera tabla", () => {
@@ -147,16 +192,14 @@ describe("toPdfTables", () => {
     expect(toPdfTables([salteadas])).toEqual([]);
   });
 
-  it("un edificio sólo con impagas arrastradas genera tabla con body vacío y carried con datos", () => {
+  it("un edificio sólo con impagas arrastradas genera la tabla con su sección", () => {
     const soloArrastre = {
       ...base,
       rows: base.rows.map((r) => ({ ...r, status: "SKIPPED" as const })),
-      carried: [{ invoiceId: "c9", facturas: null, concepto: "AYSA", monto: 900,
-        originalAmount: 900, lateAmount: null, aliasCbu: [], fromLabel: "junio 2026", carryOverRequested: false, invoiceUrl: null }],
+      carried: [arrastrada()],
     };
     const [t] = toPdfTables([soloArrastre]);
-    expect(t.body).toEqual([]);
-    expect(t.carried.length).toBeGreaterThan(0);
+    expect(t.body.map(titleOf)).toEqual(["3 SERVICIOS PÚBLICOS", "", "TOTAL RUBRO 3", "TOTAL DEL MES"]);
   });
 
   describe("ancho de fila = ancho de columnas", () => {
@@ -172,11 +215,9 @@ describe("toPdfTables", () => {
       }
     });
 
-    it("cada fila del bloque carried también suma widths.length", () => {
-      const conArrastre = { ...base, carried: [{ invoiceId: "c9", facturas: null, concepto: "AYSA", monto: 900,
-        originalAmount: 900, lateAmount: null, aliasCbu: [], fromLabel: "junio 2026", carryOverRequested: false, invoiceUrl: null }] };
-      const t = toPdfTables([conArrastre])[0];
-      for (const row of t.carried) {
+    it("la línea de una arrastrada también suma widths.length", () => {
+      const t = toPdfTables([{ ...base, carried: [arrastrada()] }])[0];
+      for (const row of t.body) {
         expect(rowSpan(row)).toBe(t.widths.length);
       }
     });

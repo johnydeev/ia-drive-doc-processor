@@ -87,6 +87,8 @@ src/
 │       │                      #   edificio, "Sin rubro" colapsable, bloque de desactivados aparte;
 │       │                      #   `sheetModel.groupByRubro`, 2026-09-27, fuente única con el PDF)
 │       │                      # + editor de rubro/coeficiente por fila (LabelEditor, PATCH /api/client/labels)
+│       │                      # + arrastradas ("Mes siguiente") dentro de su rubro con `de <mes>`; el origen
+│       │                      #   las marca `pasó a <mes>` sin sumar (2026-09-28). Omitir/Desactivar en menú Acciones
 │       │                      # + subfilas de boletas adicionales y distintivo `eventual` en las sueltas
 │       │                      # + Descargar PDF (jsPDF, import dinámico) e Imprimir (@media print)
 │       │                      # + vista previa del PDF por fila (src/components/PdfPreviewModal.tsx)
@@ -156,9 +158,10 @@ Client          → Tenant. Roles: ADMIN / CLIENT / VIEWER. consortiumsEnabled (
   │                           Una obligación = UNA boleta principal (la primera que llega). Las demás del
   │                           mismo proveedor y las de proveedores sin gasto fijo se DERIVAN en lectura
   │                           (`Invoice` con `obligation: null`) y la hoja las muestra como adicionales
-  │                           `↳ 2ª boleta` / boleta eventual con distintivo `eventual` en su sección
-  │                           de rubro (spec 2026-09-18; el bloque aparte "Otras boletas del mes" se
-  │                           disolvió en los rubros el 2026-09-27, ver D6 en `docs/decisiones.md`)
+  │                           (otra fila con el MISMO nombre, su factura y etiqueta propia; desde el
+  │                           2026-09-27 sin rótulo `↳ 2ª boleta`) / boleta eventual con distintivo
+  │                           `eventual` en su sección de rubro (spec 2026-09-18; el bloque aparte
+  │                           "Otras boletas del mes" se disolvió en los rubros el 2026-09-27, ver D6)
   ├── ConsortiumProvider → Relación N:M consorcio↔proveedor. Unique (consortiumId, providerId)
   ├── ProcessingJob → Cola de jobs (PENDING/PROCESSING/COMPLETED/FAILED)
   │                    diagnosticRunId? → agrupa los jobs de una corrida selectiva

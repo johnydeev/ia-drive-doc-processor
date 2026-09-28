@@ -3,16 +3,21 @@
 import type { UserOptions } from "jspdf-autotable";
 import {
   columnIndex,
+  extraLabels,
   FALLBACK_COLUMN,
   facturasLabel,
   GRAND_TOTAL_LABEL,
   grandTotals,
   groupByRubro,
+  isItemPrintable,
   isPrintableRow,
+  monthOnly,
   PENDING_MARK,
   showsPendingMark,
   toPrintableSheets,
+  type CarriedRow,
   type CoefColumn,
+  type ExtraRow,
   type OtherRow,
   type RubroSection,
   type SheetData,
@@ -39,16 +44,11 @@ export type PdfTable = {
   subtitle: string;
   /** Dos niveles: COEFICIENTE arriba, los códigos abajo. */
   head: PdfCell[][];
-  /** Secciones por rubro + total del mes. */
+  /** Secciones por rubro (con las arrastradas adentro) + total del mes. */
   body: PdfCell[][];
-  /** Bloque "Vienen del mes anterior", debajo. */
-  carried: PdfCell[][];
   /** Ancho de cada columna en mm; suman 182 (A4 con márgenes de 14 mm). */
   widths: number[];
 };
-
-/** Título del bloque de impagas dentro de la hoja del edificio. */
-export const CARRIED_TITLE = "VIENEN DEL MES ANTERIOR";
 
 /** Sin `$` (D8): el ancho de cada columna de monto varía según cuántas columnas de
  * coeficiente tenga el edificio (13-28 mm; ver `pdfColumnWidths`). */
@@ -105,24 +105,20 @@ function amountCells(value: number | null, col: number, n: number, pending = fal
 }
 
 /**
- * Una fila madre y sus adicionales, en la columna del coeficiente de la madre (D7).
- * Si la madre no se imprime (salteada), las adicionales llevan el concepto completo.
+ * Adicional: una línea más con el MISMO nombre que su madre; la distinguen su
+ * factura, su monto y su columna (la de su coeficiente, o la de la madre).
  */
+function extraLine(row: SheetRow, extra: ExtraRow, columns: CoefColumn[]): PdfCell[] {
+  const col = columnIndex(columns, extraLabels(row, extra).coeficienteId);
+  return [extra.facturas ?? "", row.concepto, ...amountCells(extra.monto, col, columns.length), row.aliasCbu.join("\n"), "", ""];
+}
+
+/** Una fila madre y, pegadas debajo, sus adicionales. Si la madre no se imprime (salteada), sólo ellas. */
 function rowLines(row: SheetRow, columns: CoefColumn[]): PdfCell[][] {
   const n = columns.length;
   const col = columnIndex(columns, row.coeficienteId);
-  const madre = isPrintableRow(row);
-  const extras = row.extras.map((e) => [
-    "",
-    // "↳" no tiene glifo en la Helvetica embebida de jsPDF y sale un cuadrado: se
-    // reemplaza por un prefijo ASCII.
-    madre ? `   > ${e.ordinal}ª boleta` : `${row.concepto} — ${e.ordinal}ª boleta`,
-    ...amountCells(e.monto, col, n),
-    row.aliasCbu.join("\n"),
-    "",
-    "",
-  ]);
-  if (!madre) return extras;
+  const extras = row.extras.map((e) => extraLine(row, e, columns));
+  if (!isPrintableRow(row)) return extras;
   return [
     [facturasLabel(row) ?? "", row.concepto, ...amountCells(row.monto, col, n, showsPendingMark(row)), row.aliasCbu.join("\n"), "", ""],
     ...extras,
@@ -140,12 +136,33 @@ function otherLine(row: OtherRow, columns: CoefColumn[]): PdfCell[] {
   ];
 }
 
+/**
+ * Impaga arrastrada del mes anterior, en su sección: "AYSA (de junio)". El monto
+ * es el saldo (sobre el 2° vencimiento si se cargó); el 1° pago va en el concepto,
+ * con signo $ (D8: acá sí, es texto suelto, no una columna de monto).
+ */
+function carriedLine(row: CarriedRow, columns: CoefColumn[]): PdfCell[] {
+  const from = monthOnly(row.fromLabel);
+  return [
+    row.facturas ?? "",
+    `${row.concepto}${from ? ` (de ${from})` : ""}` +
+      (row.lateAmount != null && row.originalAmount != null ? ` (1° pago ${currency.format(row.originalAmount)})` : ""),
+    ...amountCells(row.monto, columnIndex(columns, row.coeficienteId), columns.length),
+    row.aliasCbu.join("\n"),
+    "",
+    "",
+  ];
+}
+
 function sectionLines(section: RubroSection, columns: CoefColumn[]): PdfCell[][] {
   const width = LEAD_COLUMNS.length + columns.length + TRAIL_COLUMNS.length;
   return [
     [{ content: section.title, colSpan: width, styles: { fontStyle: "bold", fillColor: SECTION_FILL } }],
     ...section.items.flatMap((item) =>
-      item.kind === "row" ? rowLines(item.row, columns) : [otherLine(item.other, columns)]
+      item.kind === "row" ? rowLines(item.row, columns)
+      : item.kind === "extra" ? [extraLine(item.row, item.extra, columns)]
+      : item.kind === "carried" ? [carriedLine(item.carried, columns)]
+      : [otherLine(item.other, columns)]
     ),
     [
       { content: section.totalLabel, colSpan: LEAD_COLUMNS.length, styles: { fontStyle: "bold" } },
@@ -169,7 +186,9 @@ export function toPdfTables(sheets: SheetData[]): PdfTable[] {
     // con 3+ coeficientes): "TÉCNICO" entero corta a mitad de palabra ahí.
     const tecnicoWidth = widths[widths.length - 2];
     const trailLabels = ["ALIAS - CBU", tecnicoWidth < 14 ? "TÉC." : "TÉCNICO", "TEL."];
-    const sections = groupByRubro(sheet).filter((s) => s.items.length > 0);
+    // Por lo imprimible, no por la cantidad de ítems: una madre salteada cuya
+    // adicional cayó en otro rubro deja su sección con un ítem que no imprime nada.
+    const sections = groupByRubro(sheet).filter((s) => s.items.some(isItemPrintable));
     const grand = grandTotals(sections, n);
     return {
       title: sheet.consortiumName,
@@ -196,18 +215,6 @@ export function toPdfTables(sheets: SheetData[]): PdfTable[] {
                 "", "", "",
               ],
             ],
-      // El monto de una impaga es el saldo (sobre el 2° vencimiento si se cargó);
-      // el 1° pago va en el concepto, con signo $ (D8: acá sí, es texto suelto, no
-      // una columna de monto). Primera columna (D10).
-      carried: sheet.carried.map((row) => [
-        row.facturas ?? "",
-        `${row.concepto}${row.fromLabel ? ` — de ${row.fromLabel}` : ""}` +
-          (row.lateAmount != null && row.originalAmount != null ? ` (1° pago ${currency.format(row.originalAmount)})` : ""),
-        ...amountCells(row.monto, 0, n),
-        row.aliasCbu.join("\n"),
-        "",
-        "",
-      ]),
       widths,
     };
   });
@@ -285,30 +292,10 @@ export async function downloadSheetsPdf(sheets: SheetData[], majorityLabel: stri
       margin: { left: 14, right: 14 },
     };
 
-    // Sin filas del mes (edificio sólo con impagas arrastradas): no se dibuja la
-    // tabla principal — quedaría el encabezado de dos niveles solo, sin datos.
-    const drewMain = table.body.length > 0;
-    if (drewMain) {
+    // Una sola tabla: las arrastradas van dentro de su rubro (spec 2026-09-28).
+    // `toPrintableSheets` ya descartó los edificios sin nada que imprimir.
+    if (table.body.length > 0) {
       autoTable(doc, { startY: 30, head: table.head, body: table.body, ...tableStyles });
-    }
-
-    if (table.carried.length > 0) {
-      // `lastAutoTable` existe en runtime (jspdf-autotable 5.0.8 → `{ finalY }`)
-      // pero la v5 no lo declara en sus tipos.
-      const withLast = doc as unknown as { lastAutoTable?: { finalY?: number } };
-      const finalY = drewMain ? withLast.lastAutoTable?.finalY ?? 30 : 30;
-      const pageHeight = doc.internal.pageSize.getHeight();
-      let titleY = finalY + 10;
-      let startY = finalY + 13;
-      if (finalY + 25 > pageHeight - 15) {
-        doc.addPage();
-        titleY = 20;
-        startY = 23;
-      }
-      doc.setFontSize(10);
-      doc.setTextColor(60);
-      doc.text(CARRIED_TITLE, 14, titleY);
-      autoTable(doc, { startY, head: table.head, body: table.carried, ...tableStyles });
     }
 
     doc.setFontSize(8);

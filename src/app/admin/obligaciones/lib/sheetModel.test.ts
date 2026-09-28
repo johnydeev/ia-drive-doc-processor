@@ -8,7 +8,9 @@ import {
   grandTotals,
   groupByRubro,
   hasPrintableRows,
+  isItemPrintable,
   isPrintableRow,
+  monthOnly,
   NO_RUBRO_TITLE,
   PENDING_MARK,
   printableExtras,
@@ -282,7 +284,7 @@ describe("impagas de meses anteriores", () => {
     ],
   };
 
-  it("van en su propio bloque, no entre los gastos fijos", () => {
+  it("no se mezclan con las filas de gastos fijos: viajan en `carried`", () => {
     const sheet = buildSheets(conImpaga)[0];
     expect(sheet.rows.some((r) => r.monto === 980000)).toBe(false);
     expect(sheet.carried).toHaveLength(1);
@@ -361,6 +363,10 @@ describe("isPrintableRow / hasPrintableRows", () => {
     expect(isPrintableRow({ ...row, status: "NO_PERIOD" })).toBe(false);
   });
 
+  it("una fila cuya boleta pasó a otro mes (CARRIED_OVER) no se imprime", () => {
+    expect(isPrintableRow({ ...row, status: "CARRIED_OVER", carriedOutTo: "agosto 2026" })).toBe(false);
+  });
+
   it("hasPrintableRows resume la hoja entera", () => {
     expect(hasPrintableRows(buildSheets(payload)[0])).toBe(true);
     expect(hasPrintableRows({ ...buildSheets(payload)[0], rows: [] })).toBe(false);
@@ -380,13 +386,14 @@ describe("boletas adicionales y otras del mes", () => {
     consortiums: [{ ...payload.consortiums[0], looseInvoices: items }, payload.consortiums[1]],
   });
 
-  it("una boleta suelta del proveedor de un gasto fijo activo cuelga de su fila como 2ª boleta", () => {
+  it("una boleta suelta del proveedor de un gasto fijo activo cuelga de su fila como adicional", () => {
     const sheet = buildSheets(withLoose([
       loose({ invoiceId: "i2", providerId: "p1", amount: 500, invoiceUrl: "https://d/2", concepto: "SEGURO LA CAJA" }),
     ]))[0];
     const seguro = sheet.rows.find((r) => r.fixedExpenseId === "fx1")!;
     expect(seguro.extras).toEqual([
-      { invoiceId: "i2", ordinal: 2, monto: 500, invoiceUrl: "https://d/2", carryOverRequested: false, carriedOutTo: null },
+      { invoiceId: "i2", facturas: null, monto: 500, invoiceUrl: "https://d/2", carryOverRequested: false, carriedOutTo: null,
+        rubroId: null, coeficienteId: null },
     ]);
     expect(sheet.others).toEqual([]);
   });
@@ -407,13 +414,13 @@ describe("boletas adicionales y otras del mes", () => {
     expect(sheet.others.map((o) => o.invoiceId)).toEqual(["i4"]);
   });
 
-  it("ordena las extras por fecha de carga y numera 2ª, 3ª", () => {
+  it("ordena las extras por fecha de carga", () => {
     const sheet = buildSheets(withLoose([
       loose({ invoiceId: "tarde", providerId: "p1", createdAt: "2026-07-20T00:00:00.000Z" }),
       loose({ invoiceId: "temprano", providerId: "p1", createdAt: "2026-07-05T00:00:00.000Z" }),
     ]))[0];
     const extras = sheet.rows.find((r) => r.fixedExpenseId === "fx1")!.extras;
-    expect(extras.map((e) => [e.invoiceId, e.ordinal])).toEqual([["temprano", 2], ["tarde", 3]]);
+    expect(extras.map((e) => e.invoiceId)).toEqual(["temprano", "tarde"]);
   });
 
   it("una boleta de un proveedor sin gasto fijo va a 'otras' con concepto, fantasía, alias y nro. de cliente", () => {
@@ -480,7 +487,7 @@ describe("boletas adicionales y otras del mes", () => {
 describe("imprimibles con extras y otras", () => {
   const base = buildSheets(payload)[0];
   const extra = (invoiceId: string, carriedOutTo: string | null = null) =>
-    ({ invoiceId, ordinal: 2, monto: 100, invoiceUrl: null, carryOverRequested: false, carriedOutTo });
+    ({ invoiceId, facturas: null, monto: 100, invoiceUrl: null, carryOverRequested: false, carriedOutTo });
   const other = (invoiceId: string, carriedOutTo: string | null = null) =>
     ({ invoiceId, facturas: null, concepto: "PLOMERO", fantasia: null, monto: 100, aliasCbu: [],
        invoiceUrl: null, carryOverRequested: false, carriedOutTo, group: "PROVEEDOR" as const });
@@ -511,6 +518,19 @@ describe("imprimibles con extras y otras", () => {
     expect(madre.status).toBe("SKIPPED");
     expect(madre.extras.map((e) => e.invoiceId)).toEqual(["a"]);
     expect(out.others.map((o) => o.invoiceId)).toEqual(["o1"]);
+  });
+
+  it("isItemPrintable: mismo criterio que toPrintableSheets, por ítem de sección", () => {
+    const salteada = { ...base.rows[1], status: "SKIPPED" as const };
+    expect(isItemPrintable({ kind: "row", row: base.rows[1] })).toBe(isPrintableRow(base.rows[1]));
+    // Madre salteada: sólo si le queda alguna adicional que vive en este mes.
+    expect(isItemPrintable({ kind: "row", row: { ...salteada, extras: [] } })).toBe(false);
+    expect(isItemPrintable({ kind: "row", row: { ...salteada, extras: [extra("b", "agosto 2026")] } })).toBe(false);
+    expect(isItemPrintable({ kind: "row", row: { ...salteada, extras: [extra("a")] } })).toBe(true);
+    expect(isItemPrintable({ kind: "extra", row: salteada, extra: extra("a") })).toBe(true);
+    expect(isItemPrintable({ kind: "extra", row: salteada, extra: extra("b", "agosto 2026") })).toBe(false);
+    expect(isItemPrintable({ kind: "other", other: other("o") })).toBe(true);
+    expect(isItemPrintable({ kind: "other", other: other("o", "agosto 2026") })).toBe(false);
   });
 
   it("toPrintableSheets conserva un edificio que sólo tiene otras", () => {
@@ -579,8 +599,8 @@ describe("shortClientNumber", () => {
   it("deja pasar los cortos y recorta los largos con puntos suspensivos", () => {
     expect(shortClientNumber(null)).toBeNull();
     expect(shortClientNumber("4804882")).toBe("4804882");
-    expect(shortClientNumber("123456789012")).toBe("123456789012");
-    expect(shortClientNumber("1234567890123")).toBe("123456789012…");
+    expect(shortClientNumber("00003-00001234")).toBe("00003-00001234");
+    expect(shortClientNumber("123456789012345")).toBe("12345678901234…");
     expect(shortClientNumber("1234567890123", 5)).toBe("12345…");
   });
 });
@@ -627,6 +647,40 @@ describe("agrupado por rubro (spec 2026-09-24, Parte 2)", () => {
     }],
   });
   const sheetOf = (p: OverviewPayload) => buildSheets(p)[0];
+
+  it("FACTURA/NRO CLIENTE: nro. de la factura del mes en un proveedor, nro. de cliente en un servicio", () => {
+    const s = sheetOf(conRubros([fx("a", { providerId: "p1", obligation: recibida("a", 10, { invoiceBoletaNumber: "0003-00001234" }) })]));
+    expect(s.rows[0].facturas).toBe("0003-00001234");
+    const lsp = buildSheets({
+      ...payload,
+      consortiums: [{ ...payload.consortiums[0], fixedExpenses: [{ ...payload.consortiums[0].fixedExpenses[1],
+        obligation: { ...payload.consortiums[0].fixedExpenses[1].obligation!, invoiceBoletaNumber: "B-999" } }] }],
+    })[0];
+    expect(lsp.rows[0].facturas).toBe("4804882");
+  });
+
+  it("una adicional con coeficiente propio suma en esa columna, no en la de su madre", () => {
+    const s = sheetOf(conRubros([fx("a", { rubroId: "r3", coeficienteId: "cB", obligation: recibida("a", 100) })]));
+    const conExtra = { ...s, rows: [{ ...s.rows[0], extras: [
+      { invoiceId: "e1", facturas: null, monto: 5, invoiceUrl: null, carryOverRequested: false, carriedOutTo: null, coeficienteId: "cA" },
+    ] }] };
+    expect(groupByRubro(conExtra)[0].totals).toEqual([5, 100]);
+  });
+
+  it("una adicional con otro rubro que su madre va suelta a esa sección, con el nombre de la madre", () => {
+    const s = sheetOf(conRubros([fx("a", { rubroId: "r3", coeficienteId: "cB", obligation: recibida("a", 100) })]));
+    const extra = { invoiceId: "e1", facturas: null, monto: 5, invoiceUrl: null, carryOverRequested: false, carriedOutTo: null, rubroId: "r4" };
+    const conExtra = { ...s, rows: [{ ...s.rows[0], extras: [extra] }] };
+    const sections = groupByRubro(conExtra);
+    const r3 = sections.find((x) => x.rubroId === "r3")!;
+    const r4 = sections.find((x) => x.rubroId === "r4")!;
+    expect(r3.items).toHaveLength(1);
+    expect(r3.items[0].kind === "row" && r3.items[0].row.extras).toEqual([]);
+    expect(r3.totals).toEqual([0, 100]);
+    expect(r4.items).toEqual([{ kind: "extra", row: conExtra.rows[0], extra }]);
+    // Sin coeficiente propio hereda el de la madre (B).
+    expect(r4.totals).toEqual([0, 5]);
+  });
 
   it("expone los rubros por número (los sin número al final) y las columnas por código", () => {
     const s = sheetOf(conRubros([]));
@@ -709,8 +763,8 @@ describe("agrupado por rubro (spec 2026-09-24, Parte 2)", () => {
 
     const s = sheetOf(conRubros([fx("a", { rubroId: "r3", coeficienteId: "cB", obligation: recibida("a", 100) })]));
     const conExtra = { ...s, rows: [{ ...s.rows[0], extras: [
-      { invoiceId: "e1", ordinal: 2, monto: 5, invoiceUrl: null, carryOverRequested: false, carriedOutTo: null },
-      { invoiceId: "e2", ordinal: 3, monto: 9, invoiceUrl: null, carryOverRequested: false, carriedOutTo: "agosto 2026" },
+      { invoiceId: "e1", facturas: null, monto: 5, invoiceUrl: null, carryOverRequested: false, carriedOutTo: null },
+      { invoiceId: "e2", facturas: null, monto: 9, invoiceUrl: null, carryOverRequested: false, carriedOutTo: "agosto 2026" },
     ] }] };
     expect(groupByRubro(conExtra)[0].totals).toEqual([0, 105]);
   });
@@ -778,5 +832,134 @@ describe("agrupado por rubro (spec 2026-09-24, Parte 2)", () => {
     expect(columnIndex(cols, "cB")).toBe(1);
     expect(columnIndex(cols, null)).toBe(0);
     expect(columnIndex(cols, "cZ")).toBe(0);
+  });
+});
+
+describe("monthOnly", () => {
+  it("deja sólo el mes de un rótulo de período", () => {
+    expect(monthOnly("septiembre 2026")).toBe("septiembre");
+    expect(monthOnly("  octubre   2026 ")).toBe("octubre");
+    expect(monthOnly("julio")).toBe("julio");
+  });
+
+  it("null o vacío → null", () => {
+    expect(monthOnly(null)).toBeNull();
+    expect(monthOnly("   ")).toBeNull();
+  });
+});
+
+describe("arrastradas en rubros y origen marcado (spec 2026-09-28)", () => {
+  type Ob = NonNullable<OverviewFixedExpense["obligation"]>;
+  const ob = (id: string, over: Partial<Ob> = {}): Ob => ({
+    id: `ob-${id}`, status: "RECEIVED", amount: 100, invoiceId: `inv-${id}`,
+    carryOverRequested: false, carriedIn: false, invoiceUrl: null, ...over,
+  });
+  const fx = (id: string, over: Partial<OverviewFixedExpense> = {}): OverviewFixedExpense => ({
+    id, providerId: null, lspServiceId: null, description: id.toUpperCase(), kind: "FACTURA",
+    active: true, rubroId: null, coeficienteId: null, obligation: ob(id), ...over,
+  });
+  const arrastrada = (invoiceId: string, over: Record<string, unknown> = {}) => ({
+    invoiceId, concepto: invoiceId.toUpperCase(), facturas: null, aliasCbu: null,
+    originalAmount: 40, lateAmount: null, fromLabel: "septiembre 2026", carryOverRequested: false,
+    invoiceUrl: null, ...over,
+  });
+  const hoja = (extra: Partial<OverviewConsortium>) => buildSheets({
+    ...payload,
+    providers: [],
+    consortiums: [{
+      ...payload.consortiums[0],
+      lspServices: [],
+      rubros: [{ id: "r3", order: 3, name: "SERVICIOS PÚBLICOS" }, { id: "r4", order: 4, name: "ABONOS" }],
+      coeficientes: [{ id: "cA", code: "A" }, { id: "cB", code: "B" }],
+      fixedExpenses: [],
+      ...extra,
+    }],
+  })[0];
+
+  it("buildSheets lleva el rubro y el coeficiente de la arrastrada", () => {
+    const s = hoja({ carried: [arrastrada("x", { rubroId: "r4", coeficienteId: "cB" })] });
+    expect([s.carried[0].rubroId, s.carried[0].coeficienteId]).toEqual(["r4", "cB"]);
+    const sinEtiqueta = hoja({ carried: [arrastrada("y")] });
+    expect([sinEtiqueta.carried[0].rubroId, sinEtiqueta.carried[0].coeficienteId]).toEqual([null, null]);
+  });
+
+  it("la arrastrada va a la sección de su rubro y suma en la columna de su coeficiente", () => {
+    const s = hoja({
+      fixedExpenses: [fx("a", { rubroId: "r4", coeficienteId: "cA", obligation: ob("a", { amount: 100 }) })],
+      carried: [arrastrada("x", { rubroId: "r4", coeficienteId: "cB", lateAmount: 55 })],
+    });
+    const r4 = groupByRubro(s).find((x) => x.rubroId === "r4")!;
+    expect(r4.items.map((i) => i.kind)).toEqual(["row", "carried"]);
+    // Suma el monto a pagar: el vencido si se cargó.
+    expect(r4.totals).toEqual([100, 55]);
+  });
+
+  it("sin rubro, o con uno que el edificio no usa, va a 'Sin rubro' (columna del coeficiente o la primera)", () => {
+    const s = hoja({ carried: [arrastrada("x"), arrastrada("y", { rubroId: "r-ajeno", coeficienteId: "cB" })] });
+    const sections = groupByRubro(s);
+    const sin = sections[sections.length - 1];
+    expect(sin.rubroId).toBeNull();
+    expect(sin.items.map((i) => i.kind === "carried" && i.carried.invoiceId)).toEqual(["x", "y"]);
+    expect(sin.totals).toEqual([40, 40]);
+  });
+
+  it("va en el tramo de las que tienen boleta, alfabética con ellas", () => {
+    const s = hoja({
+      fixedExpenses: [
+        fx("beta", { rubroId: "r3" }),
+        fx("zeta-pend", { rubroId: "r3", obligation: ob("zeta-pend", { status: "PENDING", amount: null, invoiceId: null }) }),
+      ],
+      carried: [arrastrada("alfa", { rubroId: "r3" })],
+    });
+    const items = groupByRubro(s)[0].items;
+    expect(items.map((i) => (i.kind === "carried" ? i.carried.invoiceId : i.kind === "row" ? i.row.fixedExpenseId : "?")))
+      .toEqual(["alfa", "beta", "zeta-pend"]);
+  });
+
+  it("grandTotals incluye la arrastrada", () => {
+    const s = hoja({
+      fixedExpenses: [fx("a", { rubroId: "r3", coeficienteId: "cA", obligation: ob("a", { amount: 100 }) })],
+      carried: [arrastrada("x", { rubroId: "r3", coeficienteId: "cA" })],
+    });
+    expect(grandTotals(groupByRubro(s), 2)).toEqual([140, 0]);
+  });
+
+  it("buildSheets mapea invoiceCarriedOutTo a carriedOutTo; sin dato, null", () => {
+    const s = hoja({
+      fixedExpenses: [
+        fx("a", { obligation: ob("a", { status: "CARRIED_OVER", invoiceCarriedOutTo: "octubre 2026" }) }),
+        fx("b"),
+      ],
+    });
+    expect(s.rows.find((r) => r.fixedExpenseId === "a")!.carriedOutTo).toBe("octubre 2026");
+    expect(s.rows.find((r) => r.fixedExpenseId === "b")!.carriedOutTo).toBeNull();
+  });
+
+  it("la fila CARRIED_OVER no suma (sus adicionales sí), no se imprime y va al final de su sección", () => {
+    const s = hoja({
+      fixedExpenses: [
+        fx("alfa", { rubroId: "r3", obligation: ob("alfa", { status: "CARRIED_OVER", amount: 100, invoiceCarriedOutTo: "octubre 2026" }) }),
+        fx("zeta-pend", { rubroId: "r3", obligation: ob("zeta-pend", { status: "PENDING", amount: null, invoiceId: null }) }),
+        fx("beta", { rubroId: "r3", obligation: ob("beta", { amount: 10 }) }),
+      ],
+    });
+    const pasada = s.rows.find((r) => r.fixedExpenseId === "alfa")!;
+    const conExtra = { ...s, rows: s.rows.map((r) => r === pasada ? { ...r, extras: [
+      { invoiceId: "e1", facturas: null, monto: 5, invoiceUrl: null, carryOverRequested: false, carriedOutTo: null },
+    ] } : r) };
+    const r3 = groupByRubro(conExtra)[0];
+    expect(r3.items.map((i) => i.kind === "row" && i.row.fixedExpenseId)).toEqual(["beta", "zeta-pend", "alfa"]);
+    expect(r3.totals).toEqual([15, 0]);
+    expect(isPrintableRow(pasada)).toBe(false);
+    // Sin la adicional, la hoja no tiene nada que la fila pasada aporte al papel.
+    expect(toPrintableSheets([s])[0].rows.map((r) => r.fixedExpenseId)).toEqual(["beta", "zeta-pend"]);
+  });
+
+  it("filterSheets encuentra por concepto una arrastrada y conserva la hoja", () => {
+    const s = hoja({ fixedExpenses: [fx("a")], carried: [arrastrada("plomero"), arrastrada("gasista")] });
+    const out = filterSheets([s], "plomer");
+    expect(out).toHaveLength(1);
+    expect(out[0].rows).toEqual([]);
+    expect(out[0].carried.map((c) => c.invoiceId)).toEqual(["plomero"]);
   });
 });

@@ -21,7 +21,8 @@ type Props = {
 
 /**
  * Rubro y coeficiente de una fila de la hoja (spec 2026-09-24, "Edición inline").
- * Cerrado muestra "3 · A" (o "Rubro · Coef" si no tiene); abierto, dos listas con
+ * Cerrado muestra "R-3 · C-A" (R = rubro, C = coeficiente; "sin rubro" / "sin coef." si le falta; marcado en ámbar
+ * cuando el edificio usa coeficientes y a la fila le falta uno); abierto, dos listas con
  * lo que el EDIFICIO tiene asignado. Guardar escribe boleta y gasto fijo (lo decide
  * el llamador con el `target`).
  */
@@ -41,7 +42,7 @@ export function LabelEditor({ rubros, coefColumns, value, concepto, onSave }: Pr
     return (
       <button
         type="button"
-        className={styles.labelBtn}
+        className={!coef && coefs.length > 0 ? `${styles.labelBtn} ${styles.labelBtnMissing}` : styles.labelBtn}
         aria-label={`Rubro y coeficiente de ${concepto}`}
         title={rubro ? rubro.name : "Sin rubro"}
         onClick={() => {
@@ -52,26 +53,26 @@ export function LabelEditor({ rubros, coefColumns, value, concepto, onSave }: Pr
           setEditing(true);
         }}
       >
-        {rubro ? rubro.order ?? rubro.name : "Rubro"} · {coef ? coef.code : "Coef"}
+        {rubro ? `R-${rubro.order ?? rubro.name}` : "sin rubro"} · {coef ? `C-${coef.code}` : "sin coef."}
       </button>
     );
   }
 
   return (
     <span className={styles.labelEditor}>
-      <select aria-label={`Rubro de ${concepto}`} value={rubroId} onChange={(e) => setRubroId(e.target.value)}>
+      <select className={styles.labelSelect} aria-label={`Rubro de ${concepto}`} value={rubroId} onChange={(e) => setRubroId(e.target.value)}>
         <option value="">Sin rubro</option>
         {rubros.map((r) => (
           <option key={r.id} value={r.id}>{rubroTitle(r)}</option>
         ))}
       </select>
-      <select aria-label={`Coeficiente de ${concepto}`} value={coeficienteId} onChange={(e) => setCoeficienteId(e.target.value)}>
+      <select className={`${styles.labelSelect} ${styles.labelSelectCoef}`} aria-label={`Coeficiente de ${concepto}`} value={coeficienteId} onChange={(e) => setCoeficienteId(e.target.value)}>
         <option value="">Sin coef.</option>
         {coefs.map((c) => (<option key={c.id} value={c.id}>{c.code}</option>))}
       </select>
       <AsyncButton
         type="button"
-        className={styles.actionBtn}
+        className={styles.labelSaveBtn}
         pendingLabel="Guardando…"
         onClick={() =>
           run(async () => {

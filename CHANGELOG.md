@@ -2,6 +2,33 @@
 
 ## [Unreleased]
 
+### Changed
+- **Arrastre de impagas dentro de los rubros + "Omitir" + menú Acciones (2026-09-28, sin migración).**
+  Spec `docs/superpowers/specs/2026-09-28-arrastre-en-rubros-y-omitir-design.md`. La boleta que llegó y
+  no se pudo pagar ("Mes siguiente") ahora aparece en el mes destino **dentro de su rubro**, en la
+  columna de su coeficiente, con el distintivo `de septiembre`, y suma en el total del rubro y del mes
+  (se retira el bloque "Vienen del mes anterior", pantalla y PDF). En el mes de origen la fila pasada
+  (`CARRIED_OVER`) dice `pasó a octubre`, se atenúa, no tiene acciones, no suma ni sale en el PDF —
+  antes se veía como una boleta del mes. El traslado se ofrece desde el mes destino
+  (`carry-over/pending` trae también las marcadas del mes anterior ya cerrado; barra "Pasar ahora"):
+  antes sólo lo veía quien volvía al mes de origen. "Saltear periodo" pasa a **Omitir** y "Agregar al
+  periodo" a **Incluir**; Omitir y Desactivar se agrupan en un menú `Acciones ▾` (siguen pidiendo
+  confirmación). La arrastrada sin etiqueta propia hereda la de su gasto fijo de origen y se puede
+  editar desde el destino. 1195 tests, typecheck/lint/build OK.
+- **Hoja de obligaciones: ajustes de vista tras el primer smoke (2026-09-27, sin migración).**
+  Cada rubro es un bloque con fondo gris propio (un `tbody` por sección) y los rubros vacíos no se
+  dibujan. TÉCNICO O GESTOR y TEL. CONTACTO salen de la pantalla (siguen en el PDF) y se retira la
+  compactación D14. Las boletas adicionales dejan el rótulo `↳ 2ª boleta`: se muestran pegadas a su
+  fila con el mismo nombre, su nro. de factura y su monto, con rubro y coeficiente propios editables
+  (una adicional con otro rubro pasa a esa sección). La columna FACTURA/NRO CLIENTE muestra el nro. de
+  la factura en los proveedores (antes sólo el nro. de cliente de los servicios; el overview ahora
+  trae `boletaNumber`). Totales en cero quedan en blanco. Arreglos: encabezados de coeficiente
+  alineados a la derecha (una regla de `th` los pisaba), la celda de acciones deja de ser `flex`
+  (rompía la línea de la fila) y el botón de etiqueta dice `sin coef.` en ámbar cuando falta el
+  coeficiente. Saltear periodo y Desactivar ahora piden confirmación con una explicación breve
+  (`ConfirmActionDialog`), para que un click errado junto al editor de etiqueta no cambie el estado del
+  gasto. 1164 tests, typecheck/lint/build OK.
+
 ### Added
 - **Rubros y coeficientes, parte 2: hoja de obligaciones agrupada (2026-09-27, sin migración).**
   La hoja ahora agrupa por rubro (`groupByRubro`, fuente única para pantalla y PDF, reemplaza

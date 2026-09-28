@@ -71,35 +71,13 @@
 .sheetTable { width: 100%; border-collapse: collapse; font-size: 13px; table-layout: fixed; }
 /* Anchos fijos compartidos por todas las tablas de la hoja: así FACTURA, las
    columnas de coeficiente y ALIAS caen en la misma vertical en la tabla de
-   rubros, en "Sin rubro" y en "Vienen del mes anterior". PROVEEDOR/SERVICIO
-   absorbe el resto. */
+   rubros y en "Sin rubro" (las arrastradas ya van dentro de su rubro).
+   PROVEEDOR/SERVICIO absorbe el resto. */
 .colPreview { width: 34px; }
-.colFacturas { width: 110px; }
+.colFacturas { width: 128px; }
 .colConcepto { width: auto; }
 .colCoef { width: 104px; }
 .colAlias { width: 150px; }
-.colTecnico { width: 56px; }
-.colTel { width: 56px; }
-/* Con ≥4 columnas de coeficiente (D14) TÉCNICO/TEL se esconden en pantalla —
-   PROVEEDOR/SERVICIO necesita el lugar en una notebook de 1366px— pero siguen
-   apareciendo al imprimir (se completan a mano en el papel). No se usa
-   `display: none`: rompería el colSpan de las filas de total/encabezado que
-   abarcan estas columnas. Se colapsan a ancho cero en su lugar.
-   `@media screen`: sin esto la especificidad de `[data-compact="true"] .contactCell`
-   le gana a las reglas de `@media print` (mismo origen, y el selector con atributo
-   pesa más), y el papel queda sin línea divisoria (`border-bottom-color: transparent`)
-   ni tamaño de letra en TÉCNICO/TEL. */
-@media screen {
-  .sheetCard[data-compact="true"] .colTecnico,
-  .sheetCard[data-compact="true"] .colTel { width: 0; }
-  .sheetCard[data-compact="true"] .contactCell {
-    padding: 0;
-    overflow: hidden;
-    font-size: 0;
-    border-bottom-color: transparent;
-    white-space: nowrap;
-  }
-}
 /* Entra la combinación más larga (arrastradas: Mes siguiente · Devolver · Monto vencido). */
 .colActions { width: 370px; }
 .facturasCell { white-space: nowrap; font-variant-numeric: tabular-nums; }
@@ -119,6 +97,9 @@
 }
 .previewBtn:hover { opacity: 1; border-color: rgba(127, 127, 127, 0.4); }
 .actionsHeader { width: 1%; }
+/* La celda queda como celda de tabla (borde y fondo alineados con la fila); el
+   flex de los botones va en el `div.rowActions` de adentro. */
+.actionsCell { white-space: nowrap; }
 .rowActions { display: flex; flex-wrap: nowrap; gap: 6px; justify-content: flex-end; white-space: nowrap; }
 
 /* El atenuado y el tachado son de los DATOS, no de las acciones: los botones de
@@ -126,9 +107,9 @@
    justamente los que la sacan de ese estado). Por eso se aplica a `td` y se
    revierte en la celda de acciones. */
 .rowSkipped td { opacity: 0.55; text-decoration: line-through; }
-.rowSkipped td.rowActions { opacity: 1; text-decoration: none; }
+.rowSkipped td.actionsCell { opacity: 1; text-decoration: none; }
 .rowInactive td { opacity: 0.5; font-style: italic; }
-.rowInactive td.rowActions { opacity: 1; font-style: normal; }
+.rowInactive td.actionsCell { opacity: 1; font-style: normal; }
 
 /* Acciones de fila: botones rectangulares con área de toque propia. En mobile un
    link de texto al lado de otro es imposible de acertar — el borde delimita
@@ -143,18 +124,30 @@
 .actionBtn:hover:not(:disabled) { background: rgba(37, 99, 235, 0.1); border-color: #2563eb; }
 .actionBtn:disabled { opacity: 0.6; cursor: default; }
 
-/* Bloque de impagas de meses anteriores, al pie de la hoja del edificio. */
-.carriedBlock { margin-top: 18px; border-top: 1px dashed rgba(127, 127, 127, 0.45); padding-top: 10px; }
-.carriedTitle {
-  font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em;
-  opacity: 0.75; margin: 0 0 6px;
+/* Menú «Acciones ▾» de la fila (Omitir, Desactivar): se despliega abajo, alineado a la derecha. */
+.actionsMenu { position: relative; display: inline-block; }
+.actionsMenuList {
+  position: absolute; right: 0; top: calc(100% + 4px); z-index: 20;
+  display: flex; flex-direction: column; min-width: 150px; padding: 4px 0;
+  background: var(--background); border: 1px solid rgba(127, 127, 127, 0.4); border-radius: 6px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.15);
 }
+.actionsMenuItem {
+  display: flex; align-items: center; width: 100%; min-height: 30px; padding: 0 12px;
+  text-align: left; font-size: 12px; white-space: nowrap; cursor: pointer;
+  background: transparent; border: none; color: inherit;
+}
+.actionsMenuItem:hover { background: rgba(37, 99, 235, 0.1); }
+/* Desactivar saca el gasto de la hoja: color de advertencia suave. */
+.actionsMenuItemDanger { composes: actionsMenuItem; color: #dc2626; }
+
+/* Impaga arrastrada del mes anterior, dentro de su sección de rubro. */
 .rowCarried td { background: rgba(217, 119, 6, 0.06); }
 
-/* Adicional: otra boleta del mismo proveedor, colgada de su fila. */
-.rowExtra td { background: rgba(127, 127, 127, 0.05); }
-.rowExtra td:nth-child(3) { padding-left: 22px; }
-.extraLabel { opacity: 0.8; }
+/* Adicional: otra boleta del mismo gasto fijo. Se ve como una fila más, con el
+   mismo nombre, pegada a la suya: sin sangría ni rótulo "2ª boleta"; sólo se
+   achica el aire de arriba para que se lea como parte del mismo gasto. */
+.rowExtra td { padding-top: 1px; }
 
 /* Boleta eventual: proveedor que no es gasto fijo del edificio, con el
    distintivo "eventual" (entra en su rubro, D6). */
@@ -209,6 +202,9 @@
 }
 .modalTitle { margin: 0; font-size: 17px; }
 .modalSubtitle { margin: 0; font-size: 13px; opacity: 0.7; }
+/* Texto explicativo del diálogo de confirmación de Omitir / Desactivar. */
+.confirmBody { font-size: 13px; line-height: 1.5; }
+.confirmBody p { margin: 0 0 8px; }
 .modalActions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 8px; }
 
 .targetList { overflow-y: auto; flex: 1; }
@@ -219,11 +215,31 @@
 
 /* ── Secciones por rubro y columnas de coeficiente (spec 2026-09-24, Parte 2) ── */
 .coefGroupRow th { padding-bottom: 0; border-bottom: none; }
-.coefGroupHeader { text-align: center; font-size: 11px; letter-spacing: 0.08em; opacity: 0.7; }
-.amountHeader { text-align: right; }
+/* `.sheetTable th` alinea a la izquierda y pesa más que una clase sola: sin el
+   `th` delante, los códigos y COEFICIENTE quedaban corridos de sus montos. */
+.sheetTable th.coefGroupHeader { text-align: center; font-size: 11px; letter-spacing: 0.08em; opacity: 0.7; }
+.sheetTable th.amountHeader { text-align: right; }
 .amountCell { text-align: right; white-space: nowrap; }
-.sectionRow td { font-weight: 700; padding-top: 12px; border-bottom: 1px solid rgba(127, 127, 127, 0.35); }
-.sectionTotal td { font-weight: 600; font-size: 12px; border-bottom: 2px solid rgba(127, 127, 127, 0.25); }
+
+/* Bloque de rubro: un `tbody` por sección, con fondo gris propio y una franja
+   del color de la página arriba (el borde superior del título) que lo separa
+   del bloque anterior. Título más oscuro, filas claras, total intermedio. */
+.rubroBlock td { background: rgba(127, 127, 127, 0.06); }
+.rubroBlock .sectionRow td {
+  font-weight: 700; font-size: 13px; letter-spacing: 0.02em; padding: 8px;
+  background: rgba(127, 127, 127, 0.2);
+  border-top: 14px solid var(--background);
+  border-bottom: 1px solid rgba(127, 127, 127, 0.35);
+}
+.rubroBlock .sectionTotal td {
+  font-weight: 700; font-size: 12px; padding-top: 6px; padding-bottom: 6px;
+  background: rgba(127, 127, 127, 0.13);
+  border-top: 1px solid rgba(127, 127, 127, 0.35);
+  border-bottom: none;
+}
+/* Tintes propios de fila, por encima del gris del bloque. */
+.rubroBlock .rowOther td { background: rgba(37, 99, 235, 0.07); }
+.rubroBlock .rowCarried td { background: rgba(217, 119, 6, 0.08); }
 .grandTotal td { font-weight: 800; padding-top: 10px; border-top: 2px solid rgba(127, 127, 127, 0.5); }
 .eventualBadge {
   margin-left: 6px; padding: 1px 6px; border-radius: 999px;
@@ -236,13 +252,34 @@
   cursor: pointer; padding: 4px 0;
 }
 .labelBtn {
-  font-size: 12px; padding: 2px 8px; border: 1px solid rgba(127, 127, 127, 0.45);
+  min-height: 30px; font-size: 12px; padding: 0 10px; border: 1px solid rgba(127, 127, 127, 0.45);
   border-radius: 6px; background: transparent; color: inherit; cursor: pointer; white-space: nowrap;
 }
-.labelEditor { display: inline-flex; gap: 4px; align-items: center; }
-.labelEditor select { font-size: 12px; max-width: 150px; }
+/* Al gasto le falta el coeficiente y el edificio los usa: el monto cae en la primera columna. */
+.labelBtnMissing { border-color: rgba(217, 119, 6, 0.7); color: #d97706; }
+.labelEditor { display: inline-flex; gap: 6px; align-items: center; }
+/* Mismo alto, borde y radio que los botones de la fila; fondo y letra del tema
+   (el select nativo sin estilo salía blanco sobre la hoja oscura). */
+.labelSelect {
+  min-height: 30px; padding: 0 8px; border-radius: 6px; font-size: 12px;
+  border: 1px solid rgba(127, 127, 127, 0.4);
+  background: var(--background); color: inherit; cursor: pointer;
+  width: 220px;
+}
+.labelSelect:focus { outline: none; border-color: #2563eb; }
+.labelSelect option { background: var(--background); color: var(--foreground); }
+.labelSelectCoef { width: 96px; }
+/* Guardar es la acción principal del editor: azul, como el primario de los modales. */
+.labelSaveBtn {
+  composes: actionBtn;
+  background: #2563eb; border-color: #2563eb; color: #fff;
+}
+.labelSaveBtn:hover:not(:disabled) { background: #1d4ed8; border-color: #1d4ed8; }
 /* Con el editor abierto la fila de acciones no tiene que desbordar: envuelve. */
 .rowActions:has(.labelEditor) { flex-wrap: wrap; }
+/* La arrastrada lleva 4 controles (etiqueta, Mes siguiente, Devolver, Monto vencido):
+   con "sin rubro · sin coef." no entran en 370px, así que envuelven en vez de desbordar. */
+.rowCarried .rowActions { flex-wrap: wrap; }
 
 /* ── Impresión ───────────────────────────────────────────────────────────
    Lo que sale por la impresora es la misma vista sin el cromo de la app: sin
@@ -258,6 +295,7 @@
   .bankTitle,
   .addBtn,
   .rowActions,
+  .actionsCell,
   .actionsHeader { display: none !important; }
 
   /* Una hoja por edificio. La última no fuerza salto, para no dejar una página
@@ -298,6 +336,11 @@
   .eventualBadge { background: none; padding: 0; }
   /* Rubros vacíos: el checklist es de pantalla, el papel los omite (D3). */
   .sectionEmpty { display: none; }
+  /* El gris de los bloques es de pantalla: en papel, sin fondo y sin la franja. */
+  .rubroBlock td,
+  .rubroBlock .sectionRow td,
+  .rubroBlock .sectionTotal td { background: none; }
+  .rubroBlock .sectionRow td { border-top: none; }
   /* Si TODOS los rubros están vacíos, sin esto quedaría imprimiendo sólo el
      encabezado de la tabla (todas sus filas son `.sectionEmpty`): sin
      contenido, no tiene sentido ocupar espacio en el papel. Misma clase para
@@ -315,8 +358,7 @@
 }
 
 /* ── Mobile ──────────────────────────────────────────────────────────────
-   La tabla (FACTURA + PROVEEDOR + una por coeficiente + ALIAS + TÉCNICO + TEL
-   + ACCIONES) no entra en un teléfono: la card scrollea en horizontal y las
+   La tabla (FACTURA + PROVEEDOR + una por coeficiente + ALIAS + ACCIONES) no entra en un teléfono: la card scrollea en horizontal y las
    acciones crecen a 40px de alto para ser clickeables. */
 @media (max-width: 640px) {
   .page { padding: 12px; }

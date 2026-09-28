@@ -4,6 +4,89 @@ Registro de decisiones tomadas ante problemas reales encontrados en producción.
 
 ---
 
+## 2026-09-28 — Arrastre de impagas dentro de los rubros (revierte D10) + "Omitir"
+
+**Problema.** El administrador pidió que un gasto que llegó y no se pagó por falta de fondos se pague
+en el mes siguiente sumado a los del mes y que el origen muestre que pasó. Existía ("Mes siguiente",
+2026-08-12/20), pero un análisis encontró tres fallas: **(A)** el traslado no se ofrecía después del
+cierre — la vista abre en el mes nuevo y `carry-over/pending` sólo buscaba marcadas de ese mes;
+**(B)** en el origen la fila `CARRIED_OVER` se veía como una boleta del mes: sumaba en el total, salía
+en el PDF y ofrecía "Mes siguiente" otra vez (las adicionales/eventuales sí se marcaban); **(C)** en el
+destino la arrastrada iba en un bloque aparte, fuera de los rubros y del total del mes. Además
+"Saltear periodo" se leía como "pasar al mes que viene".
+
+**Decisiones.**
+- **La arrastrada va en su rubro** (`Invoice.rubroId/coeficienteId`, que heredó del gasto fijo en
+  origen), con `de septiembre`, y **suma** en rubro y mes: el gasto se registra en el mes en que se
+  paga (regla del 2026-08-12). Revierte D10 de la parte 2. `SectionItem` suma `kind: "carried"`.
+- **Origen marcado y fuera de la cuenta**: `CARRIED_OVER` no es imprimible ni suma; distintivo
+  `pasó a octubre` desde `invoiceCarriedOutTo` del overview. Sin esto septiembre y octubre sumaban la
+  misma boleta.
+- **Traslado desde el destino**: `pending` trae el mes pedido y el anterior, sólo períodos `CLOSED`
+  (los únicos con destino existente). **No arranca solo**: se mantiene lo del 2026-08-20 (el owner
+  aprieta y mira la barra).
+- **Omitir / Incluir** en vez de Saltear / Agregar al periodo (coincide con "Omitida" de Consorcios).
+  Omitir y Desactivar en un menú **Acciones**: estaban al lado del editor de rubro/coeficiente y se
+  clickeaban por error; siguen con confirmación.
+- Distintivos sólo con el mes (decisión del owner).
+
+**Descartado.** Arrastrar una obligación **sin** boleta: no hay qué pagar; al cerrar pasa a "No
+recibida" y la boleta atrasada entra sola al mes en que llega. Disparar el traslado dentro del request
+del cierre (límite de 100 s del túnel, descartado el 2026-08-20).
+
+**Impacto.** `overview/route.ts`, `carry-over/pending/route.ts`, `sheetModel.ts`, `sheetPdf.ts`,
+`SheetCard.tsx`, `ActionsMenu.tsx` (nuevo), `page.tsx`, `page.module.css`. Tests: 1195.
+
+**Revisión final (subagente) — corregido:** las boletas vinculadas antes del 2026-09-27 no tienen
+etiqueta propia; la arrastrada cae al rubro/coeficiente de su gasto fijo de origen
+(`inv.rubroId ?? obligation.fixedExpense.rubroId`) y tiene editor de etiqueta en el destino. El PDF
+filtra secciones con `isItemPrintable` (ahora en `sheetModel`, compartida con la pantalla): antes una
+madre omitida cuya única adicional tenía otro rubro dejaba un rubro vacío en el papel.
+
+**Límites conocidos (no corregidos):**
+- `pending` mira el mes pedido y el anterior: una marcada de hace dos meses que nadie trasladó sólo
+  aparece navegando a su mes o al siguiente. Y si se mira un mes viejo cuyo siguiente ya cerró, la
+  ofrece igual y el traslado responde 409 "El período siguiente está cerrado".
+- Arrastre encadenado (sep → oct → nov): `carriedFromPeriodId` queda en septiembre, así que octubre
+  no muestra "pasó a noviembre" y su total cambia en retrospectiva. Viene del diseño del 2026-08-12.
+- Mobile (≤640px): la tarjeta scrollea en horizontal y el menú Acciones de la última fila puede
+  quedar recortado.
+- El respaldo de etiqueta del overview no tiene test (no hay patrón de tests de routes con Prisma).
+
+---
+
+## 2026-09-27 — Hoja de obligaciones: ajustes tras el primer smoke
+
+**Problema.** Con datos reales (ARENALES 2154) la hoja no se leía: los rubros no se distinguían entre
+sí, los vacíos ocupaban lugar con totales `0,00`, TÉCNICO/TEL se partían en 3 líneas, los códigos de
+coeficiente quedaban a la izquierda de sus montos y la línea de las filas se cortaba y escalonaba a la
+derecha. Además, la segunda boleta de un proveedor salía como `↳ 2ª boleta`, sin nombre ni factura.
+
+**Decisiones.**
+- **Un `tbody` por rubro** con fondo gris y una franja del color de la página arriba del título
+  (`border-top` con `var(--background)`, que en `border-collapse` hace de separador). En papel, sin
+  fondos. Los rubros **vacíos no se dibujan** en pantalla (revierte el "checklist" de D3: el owner
+  prefiere ver sólo lo cargado).
+- **TÉCNICO/TEL fuera de la pantalla**, se mantienen en el PDF (se completan a mano en el papel).
+  Con eso sobra la compactación D14 y se retira.
+- **Adicional = otra fila con el mismo nombre**, no una subfila numerada. Lo que la distingue es su
+  **nro. de factura** (por eso el overview ahora trae `boletaNumber` y la columna FACTURA lo muestra en
+  proveedores) y su monto. Tiene **etiqueta propia** con herencia de la madre (`extraLabels`); si su
+  rubro difiere, `groupByRubro` la emite como `kind: "extra"` en esa sección — así la regla "el monto
+  va en la sección y columna de SU etiqueta" vale para toda boleta sin excepciones.
+- **Causas de los desalineos:** `.sheetTable th { text-align: left }` pesa más que `.amountHeader`
+  (se ancla como `th.amountHeader`); y la celda de acciones era un `td` con `display: flex`, que deja
+  de comportarse como celda de tabla. El flex pasa a un `div.rowActions` dentro de `td.actionsCell`.
+
+**Descartado.** Mantener la adicional siempre bajo su madre aunque tenga otro rubro: el total del
+rubro de la madre sumaría un gasto que la liquidación imputa a otro rubro.
+
+**Impacto.** `sheetModel.ts` (`ExtraRow`, `extraLabels`, `SectionItem.extra`, `CLIENT_NUMBER_MAX` 14),
+`sheetPdf.ts` (`extraLine`), `SheetCard.tsx`, `LabelEditor.tsx`, `page.module.css`, overview route
+(`boletaNumber`). Tests: 1162.
+
+---
+
 ## 2026-09-27 — Rubros y coeficientes, parte 2: la hoja de obligaciones agrupada
 
 **Problema.** La parte 1 (24/09) cargó rubro y coeficiente en gasto fijo y boleta, pero la hoja de

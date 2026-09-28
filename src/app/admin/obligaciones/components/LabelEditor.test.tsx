@@ -17,12 +17,17 @@ function setup(value: Labels = { rubroId: "r3", coeficienteId: "cA" }, onSave = 
 describe("LabelEditor", () => {
   it("cargado muestra número de rubro y código de coeficiente", () => {
     setup();
-    expect(screen.getByRole("button", { name: /rubro y coeficiente de edesur/i })).toHaveTextContent("3 · A");
+    expect(screen.getByRole("button", { name: /rubro y coeficiente de edesur/i })).toHaveTextContent("R-3 · C-A");
   });
 
-  it("vacío muestra 'Rubro · Coef'", () => {
+  it("con rubro y sin coeficiente muestra 'R-3 · sin coef.'", () => {
+    setup({ rubroId: "r3", coeficienteId: null });
+    expect(screen.getByRole("button", { name: /rubro y coeficiente de edesur/i })).toHaveTextContent("R-3 · sin coef.");
+  });
+
+  it("vacío muestra 'sin rubro · sin coef.'", () => {
     setup({ rubroId: null, coeficienteId: null });
-    expect(screen.getByRole("button", { name: /rubro y coeficiente de edesur/i })).toHaveTextContent("Rubro · Coef");
+    expect(screen.getByRole("button", { name: /rubro y coeficiente de edesur/i })).toHaveTextContent("sin rubro · sin coef.");
   });
 
   it("al editar ofrece sólo lo del edificio y guarda lo elegido", async () => {

@@ -96,7 +96,10 @@ export async function GET(request: NextRequest) {
           invoice: {
             select: {
               id: true, amount: true, sourceFileUrl: true, carryOverRequestedAt: true, carriedFromPeriodId: true,
-              rubroId: true, coeficienteId: true,
+              rubroId: true, coeficienteId: true, boletaNumber: true,
+              // Período donde vive HOY la boleta: si la obligación quedó CARRIED_OVER,
+              // es el mes al que pasó ("pasó a octubre" en el origen).
+              periodRef: { select: { year: true, month: true } },
             },
           },
         },
@@ -123,6 +126,15 @@ export async function GET(request: NextRequest) {
           sourceFileUrl: true,
           carryOverRequestedAt: true,
           docKind: true,
+          boletaNumber: true,
+          // La arrastrada va en su sección de rubro y en la columna de su coeficiente.
+          rubroId: true,
+          coeficienteId: true,
+          // Respaldo para las vinculadas antes del 2026-09-27, que no tienen etiqueta
+          // propia: la principal arrastrada conserva su obligación de origen, y el
+          // gasto fijo de esa obligación sí la tiene. Mismo respaldo que usa la fila
+          // en el mes de origen (`invoiceRubroId ?? fx.rubroId`).
+          obligation: { select: { fixedExpense: { select: { rubroId: true, coeficienteId: true } } } },
           providerRef: { select: { canonicalName: true, paymentAlias: true } },
           lspServiceRef: { select: { clientNumber: true, providerName: true, description: true } },
           carriedFrom: { select: { year: true, month: true } },
@@ -137,7 +149,7 @@ export async function GET(request: NextRequest) {
   const looseSelect = {
     id: true, consortiumId: true, periodId: true, providerId: true, lspServiceId: true,
     docKind: true, amount: true, sourceFileUrl: true, carryOverRequestedAt: true, createdAt: true,
-    rubroId: true, coeficienteId: true,
+    rubroId: true, coeficienteId: true, boletaNumber: true,
     provider: true,
     providerRef: { select: { canonicalName: true, paymentAlias: true, matchNames: true } },
     lspServiceRef: { select: { clientNumber: true } },
@@ -168,7 +180,8 @@ export async function GET(request: NextRequest) {
     docKind: inv.docKind,
     concepto: inv.providerRef?.canonicalName ?? inv.provider ?? "—",
     matchNames: inv.providerRef?.matchNames ?? null,
-    facturas: inv.lspServiceRef?.clientNumber ?? null,
+    // Nro. de cliente en un servicio; nro. de la factura en el resto.
+    facturas: inv.lspServiceRef?.clientNumber ?? inv.boletaNumber ?? null,
     aliasCbu: inv.providerRef?.paymentAlias ?? null,
     // Decimal de Prisma serializa como string: la UI espera número.
     amount: inv.amount != null ? Number(inv.amount) : null,
@@ -220,7 +233,7 @@ export async function GET(request: NextRequest) {
                 ? `${inv.lspServiceRef.providerName}${inv.lspServiceRef.description ? ` — ${inv.lspServiceRef.description}` : ""}`
                 : inv.providerRef?.canonicalName ?? inv.provider ?? "—") +
               (inv.docKind === "RETENCION" ? " — Retención" : ""),
-            facturas: inv.lspServiceRef?.clientNumber ?? null,
+            facturas: inv.lspServiceRef?.clientNumber ?? inv.boletaNumber ?? null,
             aliasCbu: inv.providerRef?.paymentAlias ?? null,
             originalAmount: inv.amount != null ? Number(inv.amount) : null,
             lateAmount: inv.lateAmount != null ? Number(inv.lateAmount) : null,
@@ -234,6 +247,8 @@ export async function GET(request: NextRequest) {
              */
             carryOverRequested: Boolean(inv.carryOverRequestedAt),
             invoiceUrl: inv.sourceFileUrl ?? null,
+            rubroId: inv.rubroId ?? inv.obligation?.fixedExpense.rubroId ?? null,
+            coeficienteId: inv.coeficienteId ?? inv.obligation?.fixedExpense.coeficienteId ?? null,
           })),
         looseInvoices: [
           ...loose.filter((inv) => inv.consortiumId === c.id).map((inv) => toLoose(inv, null)),
@@ -268,6 +283,13 @@ export async function GET(request: NextRequest) {
                   /** Etiqueta propia de la boleta; manda sobre la del gasto fijo (decisión D4). */
                   invoiceRubroId: ob.invoice?.rubroId ?? null,
                   invoiceCoeficienteId: ob.invoice?.coeficienteId ?? null,
+                  /** Nro. de la factura vinculada: columna FACTURA/NRO CLIENTE si no es un servicio. */
+                  invoiceBoletaNumber: ob.invoice?.boletaNumber ?? null,
+                  /** La boleta pasó al mes siguiente: a qué mes ("octubre 2026"). */
+                  invoiceCarriedOutTo:
+                    ob.status === "CARRIED_OVER" && ob.invoice?.periodRef
+                      ? periodLabel(ob.invoice.periodRef.year, ob.invoice.periodRef.month)
+                      : null,
                 }
               : null,
           };

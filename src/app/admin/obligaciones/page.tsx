@@ -81,7 +81,7 @@ export default function ObligacionesPage() {
           ) : (
             <>
               <span>
-                Quedaron <strong>{carryRun.pendingCount}</strong> boleta(s) marcadas sin pasar al mes siguiente.
+                Hay <strong>{carryRun.pendingCount}</strong> boleta(s) marcadas para pasar al mes siguiente.
               </span>
               <AsyncButton
                 type="button"
@@ -89,7 +89,7 @@ export default function ObligacionesPage() {
                 pendingLabel="Pasando…"
                 onClick={() => carryRun.run(month)}
               >
-                Continuar
+                Pasar ahora
               </AsyncButton>
             </>
           )}
