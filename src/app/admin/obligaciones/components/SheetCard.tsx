@@ -217,18 +217,20 @@ export function SheetCard({
     </>
   );
 
-  /** Marcar / desmarcar una boleta para pasar al mes siguiente. NO la mueve. */
-  const carryBtn = (invoiceId: string, requested: boolean) => (
-    <AsyncButton
-      type="button"
-      className={requested ? styles.actionBtnMarked : styles.actionBtn}
-      pendingLabel={requested ? "Quitando…" : "Marcando…"}
-      onClick={() => onToggleCarryOver(invoiceId, !requested)}
-      title={requested ? "Marcada para pasar al mes siguiente (click para quitar)" : "Llegó y no se pudo pagar: pasa al mes siguiente al cerrar el período"}
-    >
-      {requested ? "Mes siguiente ✓" : "Mes siguiente"}
-    </AsyncButton>
-  );
+  /**
+   * Item del menú para marcar / desmarcar una boleta que llegó y no se pudo
+   * pagar: pasa al mes siguiente al cerrar el período. NO la mueve ahora.
+   * Devuelve la promesa: el menú muestra el spinner mientras corre.
+   */
+  const carryItem = (invoiceId: string, requested: boolean): ActionsMenuItem => ({
+    label: requested ? "Quitar de mes siguiente" : "Pasar al mes siguiente",
+    pendingLabel: requested ? "Quitando…" : "Marcando…",
+    onSelect: () => onToggleCarryOver(invoiceId, !requested),
+  });
+
+  /** Como la marca ya no se ve en un botón, la muestra la celda del concepto. */
+  const carryMark = (requested: boolean) =>
+    requested ? <span className={styles.carryMarkBadge}>→ mes siguiente</span> : null;
 
   /**
    * Celda de acciones. El flex va en un `div` de adentro: un `td` con
@@ -271,6 +273,7 @@ export function SheetCard({
           {row.concepto}
           {row.fantasia && <strong className={styles.fantasia}>{row.fantasia}</strong>}
           {extra.carriedOutTo && <span className={styles.carriedBadge}>pasó a {monthOnly(extra.carriedOutTo)}</span>}
+          {!extra.carriedOutTo && carryMark(extra.carryOverRequested)}
         </td>
         {amountCells(extra.monto, labels.coeficienteId)}
         <td>{row.aliasCbu.map((a) => (<div key={a}>{a}</div>))}</td>
@@ -278,7 +281,7 @@ export function SheetCard({
           !extra.carriedOutTo && (
             <>
               {labelEditor({ invoiceId: extra.invoiceId }, labels.rubroId, labels.coeficienteId, row.concepto)}
-              {carryBtn(extra.invoiceId, extra.carryOverRequested)}
+              <ActionsMenu concepto={row.concepto} items={[carryItem(extra.invoiceId, extra.carryOverRequested)]} />
             </>
           )
         )}
@@ -286,8 +289,12 @@ export function SheetCard({
     );
   };
 
-  /** Items del menú «Acciones ▾» de una fila activa: Omitir sólo si la obligación sigue pendiente. */
+  /**
+   * Items del menú «Acciones ▾» de una fila activa: pasar al mes siguiente si
+   * tiene boleta, Omitir sólo si la obligación sigue pendiente, y Desactivar.
+   */
   const rowMenuItems = (row: SheetRow): ActionsMenuItem[] => [
+    ...(row.invoiceId ? [carryItem(row.invoiceId, row.carryOverRequested)] : []),
     ...(row.obligationId && row.status === "PENDING"
       ? [{ label: "Omitir", onSelect: () => setConfirm({ action: "skip", row }) }]
       : []),
@@ -310,6 +317,7 @@ export function SheetCard({
             {isCarriedOut(row) && row.carriedOutTo && (
               <span className={styles.carriedBadge}>pasó a {monthOnly(row.carriedOutTo)}</span>
             )}
+            {row.active && !isCarriedOut(row) && row.invoiceId && carryMark(row.carryOverRequested)}
           </td>
           {amountCells(row.monto, row.coeficienteId, showsPendingMark(row))}
           <td>{row.aliasCbu.map((a) => (<div key={a}>{a}</div>))}</td>
@@ -327,11 +335,9 @@ export function SheetCard({
                 Incluir
               </AsyncButton>
             ) : (
-              <>
-                {row.invoiceId && carryBtn(row.invoiceId, row.carryOverRequested)}
-                {/* Los items abren la confirmación (estado local): el spinner va en el diálogo. */}
-                <ActionsMenu concepto={row.concepto} items={rowMenuItems(row)} />
-              </>
+              // Omitir y Desactivar abren la confirmación (el spinner va en el
+              // diálogo); «Pasar al mes siguiente» muestra el spinner en el menú.
+              <ActionsMenu concepto={row.concepto} items={rowMenuItems(row)} />
             )}
           </>)}
         </tr>
@@ -353,6 +359,7 @@ export function SheetCard({
         <span className={styles.eventualBadge}>eventual</span>
         {row.fantasia && <strong className={styles.fantasia}>{row.fantasia}</strong>}
         {row.carriedOutTo && <span className={styles.carriedBadge}>pasó a {monthOnly(row.carriedOutTo)}</span>}
+        {!row.carriedOutTo && carryMark(row.carryOverRequested)}
       </td>
       {amountCells(row.monto, row.coeficienteId)}
       <td>{row.aliasCbu.map((a) => (<div key={a}>{a}</div>))}</td>
@@ -360,7 +367,7 @@ export function SheetCard({
         !row.carriedOutTo && (
           <>
             {labelEditor({ invoiceId: row.invoiceId }, row.rubroId, row.coeficienteId, row.concepto)}
-            {carryBtn(row.invoiceId, row.carryOverRequested)}
+            <ActionsMenu concepto={row.concepto} items={[carryItem(row.invoiceId, row.carryOverRequested)]} />
           </>
         )
       )}
@@ -370,8 +377,9 @@ export function SheetCard({
   /**
    * Impaga arrastrada del mes anterior: va en su sección de rubro, en la columna
    * de su coeficiente, con "de septiembre". Conserva lo que tenía el viejo bloque
-   * "Vienen del mes anterior": 1° pago · 2° pago, Mes siguiente (arrastre
-   * encadenado), Devolver y Monto vencido.
+   * "Vienen del mes anterior": 1° pago · 2° pago, pasar al mes siguiente
+   * (arrastre encadenado) y Devolver —los dos en «Acciones ▾»— y Monto vencido,
+   * suelto porque abre un input en la misma celda.
    */
   const renderCarried = (row: CarriedRow) => (
     <tr key={row.invoiceId} className={styles.rowCarried}>
@@ -380,6 +388,7 @@ export function SheetCard({
       <td>
         {row.concepto}
         {row.fromLabel && <span className={styles.carriedBadge}>de {monthOnly(row.fromLabel)}</span>}
+        {carryMark(row.carryOverRequested)}
         {row.lateAmount != null && row.originalAmount != null && (
           <span className={styles.carriedAmounts}>
             1° pago {money.format(row.originalAmount)} · 2° pago {money.format(row.lateAmount)}
@@ -390,16 +399,17 @@ export function SheetCard({
       <td>{row.aliasCbu.map((a) => (<div key={a}>{a}</div>))}</td>
       {actionsCell(<>
         {labelEditor({ invoiceId: row.invoiceId }, row.rubroId, row.coeficienteId, row.concepto)}
-        {carryBtn(row.invoiceId, row.carryOverRequested)}
-        <AsyncButton
-          type="button"
-          className={styles.actionBtn}
-          pendingLabel="Devolviendo…"
-          onClick={() => onUndoCarryOver(row.invoiceId)}
-          title={`Devolver a ${row.fromLabel ?? "su mes"}`}
-        >
-          Devolver
-        </AsyncButton>
+        <ActionsMenu
+          concepto={row.concepto}
+          items={[
+            carryItem(row.invoiceId, row.carryOverRequested),
+            {
+              label: `Devolver a ${row.fromLabel ?? "su mes"}`,
+              pendingLabel: "Devolviendo…",
+              onSelect: () => onUndoCarryOver(row.invoiceId),
+            },
+          ]}
+        />
         {lateFor === row.invoiceId ? (
           <>
             <input
@@ -627,7 +637,7 @@ export function SheetCard({
             Este mes no corresponde este gasto en {sheet.consortiumName}: la fila queda tachada y no sale en el PDF
             del banco. El mes que viene vuelve a aparecer. Se deshace con «Incluir».
           </p>
-          <p>Si la boleta llegó y no se pudo pagar, no la omitas: usá «Mes siguiente».</p>
+          <p>Si la boleta llegó y no se pudo pagar, no la omitas: usá «Pasar al mes siguiente» (en Acciones).</p>
         </ConfirmActionDialog>
       )}
       {confirm?.action === "deactivate" && (

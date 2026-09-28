@@ -48,6 +48,14 @@ deploy. Spec `docs/superpowers/specs/2026-09-28-arrastre-en-rubros-y-omitir-desi
 - [x] Revisión final: arrastrada sin etiqueta propia usa la del gasto fijo de origen + editor en el
       destino; PDF sin rubros vacíos (`isItemPrintable` compartida); menú con teclado (flechas,
       Escape devuelve el foco). Límites conocidos en `docs/decisiones.md` (2026-09-28).
+- [x] (post-deploy b03ff85) "Mes siguiente" entra al menú Acciones como **Pasar al mes siguiente** /
+      **Quitar de mes siguiente**, en todas las filas (principal, adicional, eventual, arrastrada; en
+      ésta también **Devolver a <mes>**). La marca se ve como distintivo `→ mes siguiente` (sólo
+      pantalla). Mientras corre una acción async del menú, `Acciones ▾` muestra spinner y se
+      deshabilita. Botón de etiqueta: `R-3 · C-A`.
+- [x] Guardados en paralelo (varias etiquetas a la vez): cada uno recarga la vista y las respuestas
+      podían llegar desordenadas, dejando en pantalla datos previos al último guardado. Ahora sólo se
+      aplica la última recarga pedida (`loadSeq` en `useObligationsOverview`), con test.
 - [ ] Mirar en pantalla que la fila arrastrada (editor + Mes siguiente + Devolver + Monto vencido)
       entre en la columna de acciones de 370px.
 

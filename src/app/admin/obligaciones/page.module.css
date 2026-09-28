@@ -78,7 +78,7 @@
 .colConcepto { width: auto; }
 .colCoef { width: 104px; }
 .colAlias { width: 150px; }
-/* Entra la combinación más larga (arrastradas: Mes siguiente · Devolver · Monto vencido). */
+/* Entra la combinación más larga (arrastradas: etiqueta · Acciones ▾ · Monto vencido). */
 .colActions { width: 370px; }
 .facturasCell { white-space: nowrap; font-variant-numeric: tabular-nums; }
 .sheetTable td { overflow-wrap: anywhere; }
@@ -168,6 +168,11 @@
   font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em;
   border: 1px solid rgba(217, 119, 6, 0.5); color: #b45309; white-space: nowrap;
 }
+/* Boleta marcada para pasar al mes siguiente (la acción está en «Acciones ▾»). */
+.carryMarkBadge {
+  composes: carriedBadge;
+  border-color: rgba(60, 130, 255, 0.6); color: #2563eb;
+}
 .carriedAmounts { display: block; font-size: 11px; opacity: 0.7; margin-top: 2px; }
 /* Nombre de fantasía del proveedor, debajo de la razón social. */
 .fantasia { display: block; font-size: 11px; font-weight: 700; margin-top: 1px; }
@@ -237,6 +242,19 @@
   border-top: 1px solid rgba(127, 127, 127, 0.35);
   border-bottom: none;
 }
+/* Título y rótulo del total centrados (pedido del owner, 2026-09-28). La 2ª
+   celda es el título (colSpan sobre toda la tabla) y el rótulo "TOTAL RUBRO n"
+   (colSpan sobre FACTURA + PROVEEDOR): los montos siguen en su columna. */
+.rubroBlock .sectionRow td:nth-child(2),
+.rubroBlock .sectionTotal td:nth-child(2) { text-align: center; }
+/* El colSpan del título excluye vista previa (34px) y acciones (370px), así que
+   su centro cae 168px a la izquierda del centro del bloque. Se compensa con
+   336px de padding a la izquierda (el doble): anchos fijos del colgroup, así que
+   la cuenta es exacta. Sólo en pantalla: al imprimir esas dos columnas no están. */
+@media screen {
+  .rubroBlock .sectionRow td:nth-child(2) { padding-left: 336px; }
+}
+.rubroBlock .sectionTotal td { font-size: 13px; }
 /* Tintes propios de fila, por encima del gris del bloque. */
 .rubroBlock .rowOther td { background: rgba(37, 99, 235, 0.07); }
 .rubroBlock .rowCarried td { background: rgba(217, 119, 6, 0.08); }
@@ -277,7 +295,7 @@
 .labelSaveBtn:hover:not(:disabled) { background: #1d4ed8; border-color: #1d4ed8; }
 /* Con el editor abierto la fila de acciones no tiene que desbordar: envuelve. */
 .rowActions:has(.labelEditor) { flex-wrap: wrap; }
-/* La arrastrada lleva 4 controles (etiqueta, Mes siguiente, Devolver, Monto vencido):
+/* La arrastrada lleva etiqueta, Acciones ▾ y Monto vencido (con su input al cargarlo):
    con "sin rubro · sin coef." no entran en 370px, así que envuelven en vez de desbordar. */
 .rowCarried .rowActions { flex-wrap: wrap; }
 
@@ -296,7 +314,9 @@
   .addBtn,
   .rowActions,
   .actionsCell,
-  .actionsHeader { display: none !important; }
+  .actionsHeader,
+  /* La marca es una intención de la pantalla, no un dato de la rendición. */
+  .carryMarkBadge { display: none !important; }
 
   /* Una hoja por edificio. La última no fuerza salto, para no dejar una página
      en blanco al final. */
@@ -387,13 +407,6 @@
 }
 .monthNavBtn:hover:not(:disabled) { background: rgba(255,255,255,0.08); }
 .monthNavBtn:disabled { opacity: 0.4; cursor: not-allowed; }
-
-/* Botón de una boleta ya marcada para pasar al mes siguiente. */
-.actionBtnMarked {
-  composes: actionBtn;
-  border-color: rgba(60,130,255,0.6);
-  color: rgb(120,170,255);
-}
 
 @media print {
   .monthNav button { display: none; }

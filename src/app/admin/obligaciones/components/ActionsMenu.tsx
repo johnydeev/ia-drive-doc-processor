@@ -2,10 +2,17 @@
 
 import { useEffect, useId, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import styles from "../page.module.css";
+import { useAsyncAction } from "@/lib/useAsyncAction";
 
 export type ActionsMenuItem = {
   label: string;
-  onSelect: () => void;
+  /**
+   * Si devuelve una promesa (una mutación, ej. «Pasar al mes siguiente»), el
+   * botón del menú queda con spinner y deshabilitado hasta que resuelve.
+   */
+  onSelect: () => void | Promise<void>;
+  /** Qué muestra el botón mientras corre la acción. Por defecto "Procesando…". */
+  pendingLabel?: string;
   /** Acción que saca algo de la hoja (Desactivar): va en color de advertencia. */
   danger?: boolean;
 };
@@ -21,14 +28,26 @@ function menuItems(menu: HTMLElement | null): HTMLButtonElement[] {
   return Array.from(menu?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]') ?? []);
 }
 
+/** Una promesa (o cualquier "thenable") que hay que esperar. */
+function isPromise(value: unknown): value is Promise<void> {
+  return typeof (value as Promise<void> | undefined)?.then === "function";
+}
+
 /**
- * Menú «Acciones ▾» de una fila: agrupa las acciones que cambian el estado del
- * gasto (Omitir, Desactivar) para que no queden sueltas al lado del editor de
- * etiqueta. Cada item sólo abre un diálogo de confirmación (estado local), así
- * que no lleva spinner: el spinner va en el diálogo.
+ * Menú «Acciones ▾» de una fila: agrupa todas sus acciones (Pasar al mes
+ * siguiente, Devolver, Omitir, Desactivar) para que no queden sueltas al lado
+ * del editor de etiqueta.
+ *
+ * Hay dos clases de item. Los que abren un diálogo de confirmación (Omitir,
+ * Desactivar) son sincrónicos: el spinner va en el diálogo. Los que disparan la
+ * mutación directo devuelven su promesa: el menú se cierra y el botón
+ * «Acciones ▾» queda deshabilitado, con spinner y el `pendingLabel` del item,
+ * hasta que resuelve (`useAsyncAction` corta el doble disparo).
  */
 export function ActionsMenu({ items, concepto }: Props) {
   const [open, setOpen] = useState(false);
+  const { pending, run } = useAsyncAction();
+  const [pendingLabel, setPendingLabel] = useState("Procesando…");
   const rootRef = useRef<HTMLDivElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -83,9 +102,12 @@ export function ActionsMenu({ items, concepto }: Props) {
         aria-expanded={open}
         aria-controls={open ? menuId : undefined}
         aria-label={`Acciones de ${concepto}`}
+        aria-busy={pending}
+        disabled={pending}
         onClick={() => setOpen((v) => !v)}
       >
-        Acciones ▾
+        {pending && <span className="asyncSpinner" aria-hidden="true" />}
+        {pending ? pendingLabel : "Acciones ▾"}
       </button>
       {open && (
         <div
@@ -105,7 +127,13 @@ export function ActionsMenu({ items, concepto }: Props) {
               className={item.danger ? styles.actionsMenuItemDanger : styles.actionsMenuItem}
               onClick={() => {
                 setOpen(false);
-                item.onSelect();
+                if (pending) return;
+                // Se llama primero y recién se espera si devolvió promesa: un item
+                // sincrónico (abre un diálogo) no hace parpadear el spinner.
+                const result = item.onSelect();
+                if (!isPromise(result)) return;
+                setPendingLabel(item.pendingLabel ?? "Procesando…");
+                void run(() => result);
               }}
             >
               {item.label}

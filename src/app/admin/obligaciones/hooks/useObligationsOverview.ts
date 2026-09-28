@@ -24,11 +24,20 @@ export function useObligationsOverview() {
   /** Mes que se está viendo. `null` = el que decida el servidor (el mayoritario). */
   const [month, setMonth] = useState<YearMonth | null>(null);
 
+  // Varias mutaciones en paralelo (guardar la etiqueta de 3 filas a la vez)
+  // disparan varias recargas; sus respuestas pueden llegar en otro orden. Sólo
+  // se aplica la ÚLTIMA pedida: es la única que arrancó después de todas las
+  // escrituras anteriores. Sin esto, una respuesta vieja que llega tarde pisaba
+  // la pantalla con datos de antes del último guardado.
+  const loadSeq = useRef(0);
+
   const loadOverview = useCallback(async () => {
+    const seq = ++loadSeq.current;
     try {
       const query = month ? `?month=${month.month}&year=${month.year}` : "";
       const res = await guardedFetch(`/api/client/obligations/overview${query}`, { cache: "no-store" });
       const data = await res.json();
+      if (seq !== loadSeq.current) return; // llegó otra más nueva: ésta se descarta
       if (!res.ok || !data.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
       const payload = data as OverviewPayload;
       setPayload(payload);
@@ -50,6 +59,7 @@ export function useObligationsOverview() {
       }
       setError(null);
     } catch (err) {
+      if (seq !== loadSeq.current) return;
       setError(err instanceof Error ? err.message : "No se pudo cargar la vista");
       setSheets([]);
     }

@@ -152,11 +152,11 @@ describe("SheetCard", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 
-  // Omitir es para "este mes no corresponde"; la boleta impaga va por Mes siguiente.
-  it("el diálogo de omitir deriva la boleta impaga a «Mes siguiente»", async () => {
+  // Omitir es para "este mes no corresponde"; la boleta impaga va por «Pasar al mes siguiente».
+  it("el diálogo de omitir deriva la boleta impaga a «Pasar al mes siguiente»", async () => {
     renderCard();
     await elegirAccion("SEGURO LA CAJA", "Omitir");
-    expect(screen.getByRole("dialog")).toHaveTextContent(/usá «Mes siguiente»/);
+    expect(screen.getByRole("dialog")).toHaveTextContent(/usá «Pasar al mes siguiente» \(en Acciones\)/);
   });
 
   it("desactivar pregunta, explica que no se borra nada, y Cancelar no ejecuta", async () => {
@@ -204,17 +204,23 @@ describe("SheetCard", () => {
     expect(filas[filas.length - 2]).toBe(salteada);
   });
 
-  it("una fila con boleta recibida no ofrece omitir: el menú sólo trae Desactivar", async () => {
+  it("una fila con boleta recibida no ofrece omitir: el menú trae pasar al mes siguiente y Desactivar", async () => {
     renderCard();
-    expect(await itemsDelMenu("EDESUR")).toEqual(["Desactivar"]);
+    expect(await itemsDelMenu("EDESUR")).toEqual(["Pasar al mes siguiente", "Desactivar"]);
   });
 
-  it("en la celda de acciones, «Acciones ▾» va al final, después de Mes siguiente", () => {
+  it("una fila pendiente sin boleta no ofrece pasarla: el menú trae Omitir y Desactivar", async () => {
+    renderCard();
+    expect(await itemsDelMenu("SEGURO LA CAJA")).toEqual(["Omitir", "Desactivar"]);
+  });
+
+  it("en la celda de acciones, «Acciones ▾» va al final y no queda ningún botón suelto de mes siguiente", () => {
     renderCard();
     const recibida = screen.getByText("EDESUR").closest("tr")!;
-    const botones = within(recibida).getAllByRole("button").map((b) => b.getAttribute("aria-label") ?? b.textContent);
-    expect(botones).toContain("Mes siguiente");
+    const acciones = within(recibida).getByRole("button", { name: "Acciones de EDESUR" }).closest("td")!;
+    const botones = within(acciones).getAllByRole("button").map((b) => b.getAttribute("aria-label") ?? b.textContent);
     expect(botones[botones.length - 1]).toBe("Acciones de EDESUR");
+    expect(screen.queryByRole("button", { name: /mes siguiente/i })).toBeNull();
   });
 
   it("el botón + dispara onAdd con el consorcio", async () => {
@@ -414,34 +420,50 @@ describe("SheetCard", () => {
     expect(total[2].textContent).toBe("");
   });
 
-  it("una boleta del mes se puede marcar para pasar al mes siguiente", async () => {
-    const user = userEvent.setup();
+  it("una boleta del mes se puede marcar para pasar al mes siguiente desde Acciones", async () => {
     const props = renderCard();
 
-    // Sólo la fila que YA tiene boleta ofrece la acción.
-    await user.click(screen.getByRole("button", { name: "Mes siguiente" }));
+    await elegirAccion("EDESUR", "Pasar al mes siguiente");
 
     expect(props.onToggleCarryOver).toHaveBeenCalledWith("inv1", true);
   });
 
-  it("una fila sin boleta no ofrece pasarla", () => {
+  it("sin marcar, la fila no lleva el distintivo «→ mes siguiente»", () => {
     renderCard();
-
-    // EDESUR tiene boleta; SEGURO LA CAJA no.
-    expect(screen.getAllByRole("button", { name: "Mes siguiente" })).toHaveLength(1);
+    expect(screen.queryByText("→ mes siguiente")).toBeNull();
   });
 
-  it("una boleta ya marcada ofrece quitar la marca", async () => {
-    const user = userEvent.setup();
+  it("una boleta ya marcada lo muestra en el concepto y el menú ofrece quitar la marca", async () => {
     const marked = {
       ...sheet,
       rows: [{ ...sheet.rows[0], carryOverRequested: true }],
     };
     const props = renderCard({ sheet: marked });
 
-    await user.click(screen.getByRole("button", { name: /mes siguiente ✓/i }));
+    const fila = screen.getByText("EDESUR").closest("tr")!;
+    expect(within(fila).getByText("→ mes siguiente").closest("td")).toHaveTextContent("EDESUR");
+    expect(await itemsDelMenu("EDESUR")).toEqual(["Quitar de mes siguiente", "Desactivar"]);
+    await userEvent.click(screen.getByRole("menuitem", { name: "Quitar de mes siguiente" }));
 
     expect(props.onToggleCarryOver).toHaveBeenCalledWith("inv1", false);
+  });
+
+  it("mientras se marca, el botón «Acciones» queda deshabilitado con «Marcando…»", async () => {
+    let resolver!: () => void;
+    const props = renderCard({
+      onToggleCarryOver: vi.fn(() => new Promise<void>((r) => { resolver = r; })),
+    });
+
+    await elegirAccion("EDESUR", "Pasar al mes siguiente");
+    const boton = screen.getByRole("button", { name: "Acciones de EDESUR" });
+    expect(boton).toBeDisabled();
+    expect(boton).toHaveAttribute("aria-busy", "true");
+    expect(boton).toHaveTextContent("Marcando…");
+    expect(props.onToggleCarryOver).toHaveBeenCalledTimes(1);
+
+    await act(async () => resolver());
+    expect(boton).toBeEnabled();
+    expect(boton).toHaveTextContent("Acciones ▾");
   });
 
   it("permite cargar el monto vencido de una que vino del mes anterior", async () => {
@@ -472,19 +494,28 @@ describe("SheetCard", () => {
     const user = userEvent.setup();
     const props = renderCard({ sheet: { ...sheet, carried: [arrastrada()] } });
 
-    const fila = screen.getByText("ASCENSORES POTENZA").closest("tr")!;
-    await user.click(within(fila).getByRole("button", { name: "Mes siguiente" }));
+    expect(await itemsDelMenu("ASCENSORES POTENZA")).toEqual(["Pasar al mes siguiente", "Devolver a junio 2026"]);
+    await user.click(screen.getByRole("menuitem", { name: "Pasar al mes siguiente" }));
 
     expect(props.onToggleCarryOver).toHaveBeenCalledWith("inv9", true);
   });
 
-  it("una arrastrada se puede devolver a su mes de origen", async () => {
-    const user = userEvent.setup();
+  it("una arrastrada se puede devolver a su mes de origen desde Acciones", async () => {
     const props = renderCard({ sheet: { ...sheet, carried: [arrastrada()] } });
 
-    await user.click(screen.getByRole("button", { name: "Devolver" }));
+    await elegirAccion("ASCENSORES POTENZA", "Devolver a junio 2026");
 
     expect(props.onUndoCarryOver).toHaveBeenCalledWith("inv9");
+    // Monto vencido sigue suelto: abre un input en la misma celda.
+    const fila = screen.getByText("ASCENSORES POTENZA").closest("tr")!;
+    expect(within(fila).getByRole("button", { name: "Monto vencido" })).toBeInTheDocument();
+  });
+
+  it("una arrastrada ya marcada lleva el distintivo y ofrece quitar la marca", async () => {
+    renderCard({ sheet: { ...sheet, carried: [arrastrada({ carryOverRequested: true })] } });
+    const fila = screen.getByText("ASCENSORES POTENZA").closest("tr")!;
+    expect(within(fila).getByText("→ mes siguiente")).toBeInTheDocument();
+    expect(await itemsDelMenu("ASCENSORES POTENZA")).toEqual(["Quitar de mes siguiente", "Devolver a junio 2026"]);
   });
 
   it("una arrastrada ofrece el editor de etiqueta y guarda sobre su boleta", async () => {
@@ -522,9 +553,11 @@ describe("adicionales y otras boletas del mes", () => {
     expect(fila.previousElementSibling).toBe(screen.getAllByText("EDESUR")[0].closest("tr"));
     expect(within(fila).getByText(/54\.000/)).toBeInTheDocument();
     expect(within(fila).getByText("edesur.pago")).toBeInTheDocument();
-    expect(within(fila).queryByRole("button", { name: /acciones de/i })).toBeNull();
     expect(within(fila).queryByRole("button", { name: /desactivar/i })).toBeNull();
-    await userEvent.click(within(fila).getByRole("button", { name: /mes siguiente/i }));
+    // Su menú sólo trae pasar al mes siguiente: Desactivar es del gasto fijo, no de la boleta.
+    await userEvent.click(within(fila).getByRole("button", { name: "Acciones de EDESUR" }));
+    expect(within(fila).getAllByRole("menuitem").map((i) => i.textContent)).toEqual(["Pasar al mes siguiente"]);
+    await userEvent.click(within(fila).getByRole("menuitem", { name: "Pasar al mes siguiente" }));
     expect(props.onToggleCarryOver).toHaveBeenCalledWith("inv2", true);
   });
 
@@ -561,7 +594,13 @@ describe("adicionales y otras boletas del mes", () => {
     renderCard({ sheet: { ...sheet, rows: [{ ...sheet.rows[0], extras: [extra({ carriedOutTo: "agosto 2026" })] }] } });
     const fila = filaExtra();
     expect(within(fila).getByText("pasó a agosto")).toBeInTheDocument();
-    expect(within(fila).queryByRole("button", { name: /mes siguiente/i })).toBeNull();
+    expect(within(fila).queryByRole("button", { name: /acciones de/i })).toBeNull();
+  });
+
+  it("una adicional marcada lleva el distintivo «→ mes siguiente» en su fila, no en la madre", () => {
+    renderCard({ sheet: { ...sheet, rows: [{ ...sheet.rows[0], extras: [extra({ carryOverRequested: true })] }] } });
+    expect(within(filaExtra()).getByText("→ mes siguiente")).toBeInTheDocument();
+    expect(screen.getAllByText("→ mes siguiente")).toHaveLength(1);
   });
 
   it("una boleta eventual entra en su rubro con el distintivo 'eventual' y se puede pasar", async () => {
@@ -572,7 +611,7 @@ describe("adicionales y otras boletas del mes", () => {
     expect(within(fila).getByText(/32\.000/)).toBeInTheDocument();
     expect(within(fila).getByText("juan.plomero")).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: /otras boletas del mes/i })).toBeNull();
-    await userEvent.click(within(fila).getByRole("button", { name: /mes siguiente/i }));
+    await elegirAccion("PLOMERO JUAN", "Pasar al mes siguiente");
     expect(props.onToggleCarryOver).toHaveBeenCalledWith("o1", true);
   });
 

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ActionsMenu } from "./ActionsMenu";
 
@@ -110,5 +110,61 @@ describe("ActionsMenu", () => {
     expect(omitir).not.toHaveBeenCalled();
     expect(screen.queryByRole("menu")).toBeNull();
     expect(boton).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("un item sincrónico no deja el botón ocupado", async () => {
+    const { boton } = renderMenu();
+    await userEvent.click(boton);
+    await userEvent.click(screen.getByRole("menuitem", { name: "Omitir" }));
+    expect(boton).toBeEnabled();
+    expect(boton).toHaveAttribute("aria-busy", "false");
+    expect(boton).toHaveTextContent("Acciones ▾");
+  });
+
+  it("un item async deja el botón deshabilitado con spinner y su pendingLabel hasta que resuelve", async () => {
+    let resolver!: () => void;
+    const pasar = vi.fn(() => new Promise<void>((r) => { resolver = r; }));
+    render(
+      <ActionsMenu
+        concepto="EDESUR"
+        items={[{ label: "Pasar al mes siguiente", pendingLabel: "Marcando…", onSelect: pasar }]}
+      />,
+    );
+    const boton = screen.getByRole("button", { name: "Acciones de EDESUR" });
+    await userEvent.click(boton);
+    await userEvent.click(screen.getByRole("menuitem", { name: "Pasar al mes siguiente" }));
+
+    expect(screen.queryByRole("menu")).toBeNull();
+    expect(boton).toBeDisabled();
+    expect(boton).toHaveAttribute("aria-busy", "true");
+    expect(boton).toHaveTextContent("Marcando…");
+    expect(boton.querySelector(".asyncSpinner")).not.toBeNull();
+
+    // Deshabilitado, no se puede volver a abrir: una segunda elección no dispara.
+    await userEvent.click(boton);
+    expect(screen.queryByRole("menu")).toBeNull();
+    expect(pasar).toHaveBeenCalledTimes(1);
+
+    await act(async () => resolver());
+    expect(boton).toBeEnabled();
+    expect(boton).toHaveAttribute("aria-busy", "false");
+    expect(boton).toHaveTextContent("Acciones ▾");
+    expect(boton.querySelector(".asyncSpinner")).toBeNull();
+  });
+
+  it("sin pendingLabel, un item async muestra «Procesando…»", async () => {
+    let resolver!: () => void;
+    render(
+      <ActionsMenu
+        concepto="EDESUR"
+        items={[{ label: "Devolver", onSelect: () => new Promise<void>((r) => { resolver = r; }) }]}
+      />,
+    );
+    const boton = screen.getByRole("button", { name: "Acciones de EDESUR" });
+    await userEvent.click(boton);
+    await userEvent.click(screen.getByRole("menuitem", { name: "Devolver" }));
+    expect(boton).toHaveTextContent("Procesando…");
+    await act(async () => resolver());
+    expect(boton).toHaveTextContent("Acciones ▾");
   });
 });

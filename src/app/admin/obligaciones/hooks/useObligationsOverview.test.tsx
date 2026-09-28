@@ -45,6 +45,36 @@ beforeEach(() => {
 });
 
 describe("useObligationsOverview", () => {
+  // Guardar la etiqueta de varias filas a la vez dispara varias recargas: si la
+  // respuesta vieja llega DESPUÉS de la nueva, no tiene que pisarla.
+  it("con recargas en paralelo, aplica sólo la última pedida aunque llegue antes", async () => {
+    const { result } = renderHook(() => useObligationsOverview());
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+    let releaseOld: () => void = () => {};
+    const oldGate = new Promise<void>((res) => { releaseOld = res; });
+    const viejo = { ...payload, consortiums: [{ ...payload.consortiums[0], consortiumName: "VIEJO" }] };
+    const nuevo = { ...payload, consortiums: [{ ...payload.consortiums[0], consortiumName: "NUEVO" }] };
+    let call = 0;
+    guardedFetch.mockImplementation(async (url: string) => {
+      if (url.includes("/obligations/overview")) {
+        call += 1;
+        if (call === 1) { await oldGate; return jsonOk(viejo); }
+        return jsonOk(nuevo);
+      }
+      return jsonOk({ ok: true });
+    });
+
+    await act(async () => {
+      const primera = result.current.setLabels({ fixedExpenseId: "fx1" }, { rubroId: null, coeficienteId: null });
+      await result.current.setLabels({ fixedExpenseId: "fx1" }, { rubroId: null, coeficienteId: null });
+      releaseOld();
+      await primera;
+    });
+
+    expect(result.current.sheets[0].consortiumName).toBe("NUEVO");
+  });
+
   it("sincroniza antes de cargar el overview", async () => {
     const { result } = renderHook(() => useObligationsOverview());
     await waitFor(() => expect(result.current.isLoading).toBe(false));
