@@ -4,6 +4,36 @@ Registro de decisiones tomadas ante problemas reales encontrados en producción.
 
 ---
 
+## 2026-09-28 — Todo en "Acciones", y la carrera de recargas en paralelo
+
+**Problema 1.** Con "Omitir"/"Desactivar" ya en el menú, "Mes siguiente" seguía como botón suelto en
+cada fila con boleta: la celda de acciones cambiaba de forma según la fila. El owner pidió que todo
+lo que es acción viva en el menú.
+**Decisión.** "Mes siguiente" pasa al menú como **Pasar al mes siguiente** / **Quitar de mes
+siguiente** (y **Devolver a <mes>** en las arrastradas). Como el "✓" del botón desaparece, la marca
+se muestra como distintivo `→ mes siguiente` en el concepto (sólo pantalla: es intención, no dato de
+rendición). `ActionsMenu` acepta items async: el botón `Acciones ▾` queda con spinner y
+deshabilitado mientras corren (convención del owner: toda acción async con spinner). Afuera quedan
+el editor de etiqueta, "Monto vencido" (abre un input inline) y las acciones que deshacen
+(Incluir / Activar).
+
+**Problema 2.** Guardar la etiqueta de varias filas a la vez: cada guardado recarga el overview y las
+respuestas pueden llegar desordenadas; una recarga vieja que llegaba última pisaba la pantalla con
+datos previos al último guardado (la base quedaba bien; la pantalla, no).
+**Decisión.** `loadSeq` en `useObligationsOverview`: sólo se aplica la última recarga pedida (la
+única que arrancó después de todas las escrituras). Test que falla sin el cambio.
+**Descartado.** Encolar los guardados (serializarlos): más lento y no hace falta, cada PATCH es
+independiente.
+
+**Además:** título del rubro centrado en su bloque. Su celda excluye vista previa (34px) y acciones
+(370px), así que se compensa con `padding-left: 336px` sólo en pantalla (anchos fijos del colgroup:
+la cuenta es exacta). Botón de etiqueta `R-3 · C-A`.
+
+**Impacto.** `ActionsMenu.tsx`, `SheetCard.tsx`, `LabelEditor.tsx`, `useObligationsOverview.ts`,
+`page.module.css` (+ tests). 1204 tests.
+
+---
+
 ## 2026-09-28 — Arrastre de impagas dentro de los rubros (revierte D10) + "Omitir"
 
 **Problema.** El administrador pidió que un gasto que llegó y no se pagó por falta de fondos se pague

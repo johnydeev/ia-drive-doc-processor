@@ -8,7 +8,10 @@
   queda visible con el distintivo `→ mes siguiente`. Un item async deja `Acciones ▾` con spinner y
   deshabilitado mientras corre. El botón de etiqueta dice `R-3 · C-A`. Fix: con varios guardados en
   paralelo, una recarga vieja que llegaba tarde pisaba la pantalla; ahora se aplica sólo la última
-  pedida. 1204 tests.
+  pedida. Títulos de rubro centrados en su bloque y total del rubro más grande. 1204 tests.
+- **Cliente de prueba preparado, sin ejecutar (2026-09-29).** `scripts/cliente-prueba/` (01 elegir
+  edificios, 02 copiar 3 edificios de MorinigoAdm a un cliente vacío —sólo inserta, transacción con
+  chequeos—, 03 verificar). Pendiente, no prioritario; pasos en `docs/progreso.md`.
 - **Arrastre de impagas dentro de los rubros + "Omitir" + menú Acciones (2026-09-28, sin migración).**
   Spec `docs/superpowers/specs/2026-09-28-arrastre-en-rubros-y-omitir-design.md`. La boleta que llegó y
   no se pudo pagar ("Mes siguiente") ahora aparece en el mes destino **dentro de su rubro**, en la

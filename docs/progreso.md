@@ -1,6 +1,6 @@
 # Progreso del proyecto — drive-doc-processor
 
-Actualizado al 28/09/2026 (sesión 73 — rubros y coeficientes, parte 2 + arrastre dentro de los rubros).
+Actualizado al 29/09/2026 (sesión 73 — rubros y coeficientes, parte 2 + arrastre dentro de los rubros + menú Acciones; cliente de prueba preparado, pendiente).
 Sesión 72 (24/09): rubros y coeficientes, parte 1: modelo, carga y pipeline.
 Sesión 71 (23/09): "Empleado" en la columna FACTURA/NRO CLIENTE de la hoja de obligaciones.
 Sesión 70 (19/09): router + prompt TELECENTRO con la primera factura real, GUALEGUAYCHU.
@@ -29,6 +29,32 @@ VEP, y el LSD abierto en una boleta por empleado.
 > **VEP** (sesión 62) dicen "implementado": las primeras entraron en `ae31c15` y `e3551a7`, el VEP en
 > `add4e11`. Lo que sigue abierto en todas ellas es el **smoke en producción**, no el commit.
 
+## 🧪 PENDIENTE — Cliente de prueba (copia de 3 edificios de MorinigoAdm) (2026-09-29)
+
+**Estado:** preparado, sin ejecutar. **No es prioridad** (decisión del owner, 2026-09-29). Sirve
+para probar en real el circuito completo del arrastre ("Pasar al mes siguiente" → cierre →
+"Pasar ahora") sin tocar a MorinigoAdm. Sigue siendo la base de producción (aislado por cliente);
+el entorno separado de verdad es `docs/superpowers/plans/2026-09-26-separar-entornos-dev-prod.md`.
+
+Scripts en `scripts/cliente-prueba/` (los corre el owner en el SQL Editor de Supabase, después de
+`npm run db:backup`; reemplazar `EMAIL_DE_MORINIGOADM`, `EMAIL_DEL_CLIENTE_DE_PRUEBA` y los 2
+edificios): `01-elegir-edificios.sql` (lectura), `02-copiar-al-cliente-de-prueba.sql` (sólo
+inserta en el cliente de prueba, transacción con chequeos), `03-verificar.sql` (lectura).
+
+Pasos:
+- [ ] Drive del owner (Gmail): carpeta "Pruebas" con Pendientes / Escaneados / Sin Asignar /
+      Revisión / Duplicados / Rendiciones + planilla "Datos", compartidas con la cuenta de servicio.
+- [ ] Proyecto de Google Cloud propio + API key de Gemini (la cuota es por proyecto: no gastar la
+      de producción).
+- [ ] Crear el cliente en el panel de admin, activar Consorcios, cargar carpetas/planilla/SA/clave;
+      dejarlo inactivo hasta copiar.
+- [ ] 01 → elegir ARENALES 2154 + uno con A/B/C/EXTRA + uno con varios servicios.
+- [ ] Backup → 02 → 03 (orig = copia).
+- [ ] Activar, subir PDFs reales, probar el arrastre completo.
+
+Límite: con Gmail no hay Unidad Compartida → la subida manual de comprobantes/recibos
+probablemente falle (la cuenta de servicio no puede crear archivos en "Mi unidad").
+
 ## 🔁 Arrastre de impagas dentro de los rubros + "Omitir" + menú Acciones (2026-09-28)
 
 **Estado:** implementado con subagentes, sin migración. **Falta el smoke del owner** después del
@@ -56,6 +82,13 @@ deploy. Spec `docs/superpowers/specs/2026-09-28-arrastre-en-rubros-y-omitir-desi
 - [x] Guardados en paralelo (varias etiquetas a la vez): cada uno recarga la vista y las respuestas
       podían llegar desordenadas, dejando en pantalla datos previos al último guardado. Ahora sólo se
       aplica la última recarga pedida (`loadSeq` en `useObligationsOverview`), con test.
+- [x] Título de cada rubro centrado en su bloque (compensado por las columnas de vista previa y
+      acciones, sólo en pantalla) y total del rubro a 13px con el rótulo centrado. El PDF sigue
+      alineado a la izquierda (el owner decide si lo quiere igual).
+- [x] Deploys verificados: `b03ff85` y `15442db` (lint/typecheck, build, deploy en verde; 5
+      contenedores arriba con la imagen nueva).
+- [ ] **Smoke real del arrastre** (marcar → cierre → "Pasar ahora"): el owner no lo prueba en
+      producción; queda para el cliente de prueba (ver sección de arriba).
 - [ ] Mirar en pantalla que la fila arrastrada (editor + Mes siguiente + Devolver + Monto vencido)
       entre en la columna de acciones de 370px.
 

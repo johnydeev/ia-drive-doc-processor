@@ -87,8 +87,9 @@ src/
 │       │                      #   edificio, "Sin rubro" colapsable, bloque de desactivados aparte;
 │       │                      #   `sheetModel.groupByRubro`, 2026-09-27, fuente única con el PDF)
 │       │                      # + editor de rubro/coeficiente por fila (LabelEditor, PATCH /api/client/labels)
-│       │                      # + arrastradas ("Mes siguiente") dentro de su rubro con `de <mes>`; el origen
-│       │                      #   las marca `pasó a <mes>` sin sumar (2026-09-28). Omitir/Desactivar en menú Acciones
+│       │                      # + arrastradas ("Pasar al mes siguiente") dentro de su rubro con `de <mes>`; el
+│       │                      #   origen las marca `pasó a <mes>` sin sumar (2026-09-28). Menú `Acciones ▾`
+│       │                      #   (ActionsMenu): Pasar al mes siguiente / Omitir / Desactivar / Devolver
 │       │                      # + subfilas de boletas adicionales y distintivo `eventual` en las sueltas
 │       │                      # + Descargar PDF (jsPDF, import dinámico) e Imprimir (@media print)
 │       │                      # + vista previa del PDF por fila (src/components/PdfPreviewModal.tsx)
@@ -678,6 +679,9 @@ ficticio **"Edificio de Prueba"** en la cartera de MorinigoAdm.
       **Sigue pendiente**: `scripts/seed-rubros.ts` (la carga de los ~725 gastos fijos se hizo con
       scripts descartables, no con éste); los 45 gastos fijos sin rubro y 70 "sin evidencia"; si
       `tipoGasto = EXTRAORDINARIO` debería caer solo en la columna `EXTRA`.
+- [ ] **Cliente de prueba** (copia de 3 edificios de MorinigoAdm, Drive y clave de Gemini propios)
+      para probar el arrastre completo sin tocar al cliente real. Scripts listos en
+      `scripts/cliente-prueba/`; no prioritario (2026-09-29). Ver `docs/progreso.md`.
 - [ ] **UI de gestión de LspServices desde el panel** (hoy solo via archivo ALTA). **Subió de
       prioridad el 2026-08-18**: la tabla estuvo VACÍA hasta que se cargó el ALTA, y como el
       fast-path por número de cliente es terminal, mandó a Sin Asignar toda boleta de servicio del
